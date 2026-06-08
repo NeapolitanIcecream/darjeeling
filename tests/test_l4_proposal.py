@@ -23,9 +23,32 @@ class FakeProposalCompletions:
         )
 
 
+class EmptyThenValidProposalCompletions(FakeProposalCompletions):
+    def __init__(self, content: dict) -> None:
+        super().__init__(content)
+        self.empty_left = 1
+
+    def create(self, **kwargs):
+        if self.empty_left:
+            self.empty_left -= 1
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                model=kwargs["model"],
+                choices=[SimpleNamespace(message=SimpleNamespace(content=""))],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=0, total_tokens=1),
+            )
+        return super().create(**kwargs)
+
+
 class FakeProposalClient:
     def __init__(self, content: dict) -> None:
         self.completions = FakeProposalCompletions(content)
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
+class EmptyThenValidProposalClient(FakeProposalClient):
+    def __init__(self, content: dict) -> None:
+        self.completions = EmptyThenValidProposalCompletions(content)
         self.chat = SimpleNamespace(completions=self.completions)
 
 
@@ -76,6 +99,35 @@ def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> 
     rendered_messages = json.dumps(call["messages"], sort_keys=True)
     assert "gold_frame" not in rendered_messages
     assert "gold-seven" not in rendered_messages
+
+
+def test_l4_proposal_adapter_retries_empty_completion_content() -> None:
+    output_schema = {
+        "type": "object",
+        "required": ["family", "accept_threshold"],
+        "properties": {
+            "family": {"type": "string"},
+            "accept_threshold": {"type": "number"},
+        },
+    }
+    settings = load_settings().model_copy(
+        update={
+            "openai_max_retries": 1,
+            "openai_retry_base_delay_s": 0.0,
+        }
+    )
+    fake_client = EmptyThenValidProposalClient({"family": "token_sgd", "accept_threshold": 0.93})
+    adapter = L4ProposalAdapter(settings, client=fake_client)
+
+    result = adapter.propose(
+        role="l2",
+        task_schema=TaskSchema(intent_names=["alarm_set"], slot_names=[]),
+        traces=[],
+        output_schema=output_schema,
+    )
+
+    assert result.proposal == {"family": "token_sgd", "accept_threshold": 0.93}
+    assert len(fake_client.completions.calls) == 2
 
 
 def test_parse_proposal_rejects_invalid_json_or_missing_required_field() -> None:

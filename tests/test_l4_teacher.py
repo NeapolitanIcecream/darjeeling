@@ -47,6 +47,23 @@ class FlakyCompletions(FakeCompletions):
         return super().create(**kwargs)
 
 
+class EmptyThenValidCompletions(FakeCompletions):
+    def __init__(self) -> None:
+        super().__init__()
+        self.empty_left = 1
+
+    def create(self, **kwargs):
+        if self.empty_left:
+            self.empty_left -= 1
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                model=kwargs["model"],
+                choices=[SimpleNamespace(message=SimpleNamespace(content=""))],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=0, total_tokens=1),
+            )
+        return super().create(**kwargs)
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.completions = FakeCompletions()
@@ -56,6 +73,12 @@ class FakeClient:
 class FlakyClient(FakeClient):
     def __init__(self) -> None:
         self.completions = FlakyCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
+class EmptyThenValidClient(FakeClient):
+    def __init__(self) -> None:
+        self.completions = EmptyThenValidCompletions()
         self.chat = SimpleNamespace(completions=self.completions)
 
 
@@ -125,6 +148,31 @@ def test_live_teacher_retries_transient_completion_failure(tmp_path: Path) -> No
     assert result.frame.intent == "music_play"
     assert fake_client.completions.failures_left == 0
     assert len(fake_client.completions.calls) == 1
+
+
+def test_live_teacher_retries_empty_completion_content(tmp_path: Path) -> None:
+    settings = load_settings().model_copy(
+        update={
+            "openai_max_retries": 1,
+            "openai_retry_base_delay_s": 0.0,
+        }
+    )
+    fake_client = EmptyThenValidClient()
+    layer = CachedTeacherLayer(
+        TeacherCache.load(tmp_path / "teacher_cache.jsonl"),
+        allow_live=True,
+        use_cache=True,
+        settings=settings,
+        task_schema=TaskSchema(intent_names=["music_play"], slot_names=[]),
+        teacher=CloudLLMTeacher(settings, client=fake_client),
+    )
+
+    result = layer.try_answer("play some jazz")
+
+    assert result.accepted
+    assert result.frame is not None
+    assert result.frame.intent == "music_play"
+    assert len(fake_client.completions.calls) == 2
 
 
 def test_cache_hit_does_not_call_live_teacher(tmp_path: Path) -> None:

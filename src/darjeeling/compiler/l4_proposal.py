@@ -8,6 +8,7 @@ from darjeeling.compiler.l4_context import build_proposal_context
 from darjeeling.layers.l4_cloud_llm import (
     MissingTeacherError,
     TaskSchema,
+    TeacherParseError,
     _extract_chat_content,
     _extract_usage,
     create_chat_completion_with_retry,
@@ -70,18 +71,22 @@ class L4ProposalAdapter:
             metrics=metrics,
             max_dynamic_traces=max_dynamic_traces,
         )
-        response = create_chat_completion_with_retry(
-            self.client(),
-            self.settings,
-            model=self.settings.openai_model,
-            messages=context.messages,
-            response_format={"type": "json_object"},
-            max_completion_tokens=self.settings.proposal_max_tokens,
-            prompt_cache_key=context.prompt_cache_key,
-            prompt_cache_retention=context.prompt_cache_retention,
-        )
-        raw_response = _extract_chat_content(response)
-        proposal = parse_proposal(raw_response, output_schema)
+        try:
+            response = create_chat_completion_with_retry(
+                self.client(),
+                self.settings,
+                response_check=_extract_chat_content,
+                model=self.settings.openai_model,
+                messages=context.messages,
+                response_format={"type": "json_object"},
+                max_completion_tokens=self.settings.proposal_max_tokens,
+                prompt_cache_key=context.prompt_cache_key,
+                prompt_cache_retention=context.prompt_cache_retention,
+            )
+            raw_response = _extract_chat_content(response)
+            proposal = parse_proposal(raw_response, output_schema)
+        except TeacherParseError as exc:
+            raise ProposalParseError(str(exc)) from exc
         return L4ProposalCallResult(
             role=role,
             proposal=proposal,

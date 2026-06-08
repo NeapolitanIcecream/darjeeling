@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -93,6 +94,7 @@ class CloudLLMTeacher:
         response = create_chat_completion_with_retry(
             self.client(),
             self.settings,
+            response_check=_extract_chat_content,
             model=self.settings.openai_model,
             messages=context.messages,
             response_format={"type": "json_object"},
@@ -255,12 +257,21 @@ class CachedTeacherLayer:
             raise MissingTeacherError(f"teacher cache miss for utterance: {utterance!r}")
 
 
-def create_chat_completion_with_retry(client: Any, settings: Settings, **kwargs: Any) -> Any:
+def create_chat_completion_with_retry(
+    client: Any,
+    settings: Settings,
+    *,
+    response_check: Callable[[Any], Any] | None = None,
+    **kwargs: Any,
+) -> Any:
     attempts = max(1, settings.openai_max_retries + 1)
     last_exc: Exception | None = None
     for attempt in range(attempts):
         try:
-            return client.chat.completions.create(**kwargs)
+            response = client.chat.completions.create(**kwargs)
+            if response_check is not None:
+                response_check(response)
+            return response
         except Exception as exc:
             last_exc = exc
             if attempt >= attempts - 1:
