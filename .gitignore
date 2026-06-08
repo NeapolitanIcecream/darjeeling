@@ -206,6 +206,10 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Darjeeling generated data and runs
+data/processed/
+runs/
+
 # PyPI configuration file
 .pypirc
 

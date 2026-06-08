@@ -1,0 +1,115 @@
+# artifacts 模块
+
+模块：`darjeeling.artifacts`
+
+## 职责
+
+- 管理 candidate 和 promoted artifact。
+- 保证原子写入。
+- 记录 lineage。
+- 支持 report 读取历史。
+
+## 目录
+
+```text
+runs/<id>/artifacts/
+  manifest.current.json
+  generations/
+    gen_000/
+      manifest.json
+      hard_buffer.jsonl
+      candidate_metrics.csv
+      promotion.json
+      l0_cache.json
+      l1/
+        source/
+        target/
+        binary/
+        l1_metrics.json
+      l2/
+        l2_config.json
+        l2_student.joblib
+        l2_guard.joblib
+      guard/
+        guard_candidate.json
+      l3/
+        l3_prompt.json
+        l3_prompt.replay.json
+        l3_prompt.candidate.json
+      router_config.json
+```
+
+## Manifest
+
+```json
+{
+  "artifact_set_id": "gen_001_abcd",
+  "generation": 1,
+  "parent_artifact_set_id": "gen_000_...",
+  "created_at": "...",
+  "schema_versions": {},
+  "artifact_paths": {},
+  "candidate_metrics": {},
+  "per_layer_deltas": {},
+  "promoted_with_layer_regression": false,
+  "regressed_layers": [],
+  "promoted": true,
+  "promotion_reason": "objective improved within gates"
+}
+```
+
+## Atomic promotion
+
+1. 写入 generation 目录。
+2. 完成 build/test/replay metrics。
+3. 写 `manifest.json`。
+4. 用 atomic replace 更新 `manifest.current.json`。
+
+## L1 native artifact
+
+## Hard buffer artifact
+
+`hard_buffer.jsonl` 使用 `hard-buffer-v1` schema。每条 hard case 必须包含 `visibility`：
+
+- `train_visible`: 可进入 L1 coding-agent context、L2/guard training 相关上下文和 replay pressure。
+- `replay_only`: 只能进入 promotion replay evaluator，不能进入任何 candidate-generation prompt/context。
+
+该字段用于避免 holdout/regression-derived hard cases 被反向塞进 prompt，同时保留 replay pressure。
+
+## L1 native artifact
+
+L1 artifact 必须保存：
+
+- Rust source snapshot。
+- Cargo.lock。
+- build profile。
+- binary 或可重建说明。
+- native benchmark 结果。
+- replay metrics。
+- Codex CLI transcript/diff/provenance。
+
+这让后续 report 能解释“哪个 native program 被提升，以及为什么”。
+
+L1 coding-agent artifact 中的 `provenance.json` 使用 `l1-agent-provenance-v1` schema，保存 mode、return code、路径、Codex event type summary、外层命令摘要和 diff stats。Raw transcript 不被 provenance 替代，仍应作为单独 artifact 保留。
+
+`reports/l1_benchmark.json` 是 report-time 观测产物：它可以复用 generation 内的 native benchmark，也可以在 report 阶段对当前 promoted/default L1 crate 重新跑一次 worker benchmark。若要做跨 generation benchmark 曲线，应把每代 benchmark 结果同时归档到 generation artifact 中。
+
+当 L1 coding-agent 成功产出 candidate crate 时，compiler 会在 generation 目录写 `l1/l1_benchmark.json` 并在 manifest 中记录 `artifact_paths["l1_benchmark"]`。这是跨 generation L1 worker benchmark 表格的数据源。
+
+`reports/l3_benchmark.json` 是显式 preflight 观测产物，由 `edge-mvp l3 bench --out ...` 写入。它记录本地 SLM 单配置 benchmark 的 status/error、backend、actual device、load/generation latency、parse/repair、would-accept 和 throughput。Report 只读取该文件，不自动加载本地模型。
+
+## L3 mode artifact
+
+Artifact manifest 必须记录 L3 mode：
+
+```text
+disabled | shadow | guarded
+```
+
+若 L3 disabled 或 shadow，report 中不能把 L3 计为主路由覆盖贡献。
+
+若 manifest 包含 `artifact_paths["l3_prompt"]`，runtime 必须加载该 `L3PromptArtifact` 作为 L3 prompt；若缺失，则使用 settings/default prompt。
+
+`artifact_paths["l3_prompt_candidate"]` 只表示 L4 direct API 生成的候选 prompt artifact，不能被 runtime 自动加载。Compiler 只有在 L3 prompt candidate 能被 regenerated replay 或 shadow replay 评估后，才应把它提升为 runtime `l3_prompt`。
+
+`artifact_paths["l3_prompt_replay"]` 保存 `l3-prompt-replay-v1` promotion 证据。该 artifact 由显式 `edge-mvp l3 replay-prompt` 生成，并由 `edge-mvp l3 promote-prompt` 校验后归档到 generation 目录。Replay artifact 必须包含 `prompt_version` 和 prompt canonical JSON 的 `prompt_sha256`，promotion 时必须与待提升的 `L3PromptArtifact` 匹配。Promotion manifest 必须把 replay 聚合指标写入 `candidate_metrics`，但不应把 replay request 明细塞进后续 L4 candidate-generation context。

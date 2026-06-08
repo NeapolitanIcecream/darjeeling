@@ -1,0 +1,57 @@
+[project]
+name = "darjeeling"
+version = "0.1.0"
+description = "Profile-guided edge intelligence runtime MVP."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "openai>=1.0.0",
+  "pydantic>=2.0.0",
+  "pydantic-settings>=2.0.0",
+  "pyyaml>=6.0.0",
+  "typer>=0.12.0",
+  "rich>=13.0.0",
+  "datasets>=2.20.0,<4.0.0",
+  "numpy>=1.26.0",
+  "pandas>=2.2.0",
+  "pyarrow>=15.0.0",
+  "scikit-learn>=1.5.0",
+  "joblib>=1.4.0",
+  "sentence-transformers>=3.0.0",
+  "faiss-cpu>=1.8.0",
+  "torch>=2.3.0",
+  "transformers>=4.45.0",
+  "accelerate>=0.33.0",
+  "json-repair>=0.30.0",
+  "jinja2>=3.1.0",
+  "matplotlib>=3.9.0",
+  "plotly>=5.22.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.6.0",
+]
+
+[project.scripts]
+edge-mvp = "darjeeling.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/darjeeling"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

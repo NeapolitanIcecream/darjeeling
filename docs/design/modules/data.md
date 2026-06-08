@@ -1,0 +1,45 @@
+# data 模块
+
+模块根：`darjeeling.data`
+
+## `data.massive`
+
+职责：
+
+- 使用 `datasets.load_dataset("AmazonScience/massive", locale, trust_remote_code=True)` 下载 MASSIVE。
+- 依赖约束固定为 `datasets>=2.20.0,<4.0.0`，因为 `AmazonScience/massive` 当前是脚本型 dataset repo；`datasets` 4/5 系列不再支持该 script loading 路径。
+- `trust_remote_code=True` 是 CLI 非交互初始化的一部分，避免 `prepare` 在脚本型 dataset 安全提示处阻塞。
+- 将 train/dev/test 处理为稳定的本地 parquet/jsonl。
+- 生成 `DataRecord`，包含 utterance、annotated utterance、normalized template、gold frame。
+
+约束：
+
+- `gold_frame` 只用于 eval/report。
+- Runtime/compiler/L1 agent 只接收 request id、utterance 和 teacher-visible trace。
+- `prepare` 阶段可以构造 template 和 gold frame，但这些字段不能进入 compiler context。
+
+## `data.frames`
+
+职责：
+
+- MASSIVE annotation parser。
+- frame equality 和 slot normalization。
+- teacher slot 到 token span 的 best-effort alignment。
+
+Slot alignment：
+
+- L2 slot training 需要 BIO tag，但 teacher frame 只有 slot string。
+- 用 normalized substring matching 将 teacher slot value 对齐到 utterance token span。
+- 同一 slot value 多次出现时选择最短、最左、未占用 span。
+- 无法对齐的 slot 记录 `alignment_failure`。
+- 不使用 MASSIVE gold annotation 补齐 teacher slot alignment。
+
+## `data.streams`
+
+职责：
+
+- 从真实 utterance 构造 replay stream。
+- 支持 `uniform`、`zipf-mild`、`zipf-heavy`。
+- 将抽样结果写入 `runs/<id>/stream.json`。
+
+Zipf stream 可以使用 offline group key 形成 workload locality，但 group key 不进入 runtime/compiler 输入。
