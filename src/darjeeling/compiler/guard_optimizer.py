@@ -14,10 +14,10 @@ GUARD_PROPOSAL_SCHEMA: dict[str, Any] = {
         "max_wrong_accept_rate",
     ],
     "properties": {
-        "threshold_grid_start": {"type": "number"},
-        "threshold_grid_stop": {"type": "number"},
-        "threshold_grid_steps": {"type": "integer"},
-        "max_wrong_accept_rate": {"type": "number"},
+        "threshold_grid_start": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "threshold_grid_stop": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "threshold_grid_steps": {"type": "integer", "minimum": 1, "maximum": 64},
+        "max_wrong_accept_rate": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         "rationale": {"type": "string"},
     },
 }

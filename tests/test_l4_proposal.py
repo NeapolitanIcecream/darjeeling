@@ -41,6 +41,21 @@ class EmptyThenValidProposalCompletions(FakeProposalCompletions):
         return super().create(**kwargs)
 
 
+class SequenceProposalCompletions:
+    def __init__(self, contents: list[dict]) -> None:
+        self.contents = list(contents)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        content = self.contents.pop(0)
+        return SimpleNamespace(
+            model=kwargs["model"],
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(content)))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+
 class FakeProposalClient:
     def __init__(self, content: dict) -> None:
         self.completions = FakeProposalCompletions(content)
@@ -50,6 +65,12 @@ class FakeProposalClient:
 class EmptyThenValidProposalClient(FakeProposalClient):
     def __init__(self, content: dict) -> None:
         self.completions = EmptyThenValidProposalCompletions(content)
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
+class SequenceProposalClient(FakeProposalClient):
+    def __init__(self, contents: list[dict]) -> None:
+        self.completions = SequenceProposalCompletions(contents)
         self.chat = SimpleNamespace(completions=self.completions)
 
 
@@ -169,6 +190,39 @@ def test_l4_proposal_adapter_retries_empty_completion_content() -> None:
     assert len(fake_client.completions.calls) == 2
 
 
+def test_l4_proposal_adapter_retries_schema_invalid_completion_content() -> None:
+    output_schema = {
+        "type": "object",
+        "required": ["slot_model_family"],
+        "properties": {
+            "slot_model_family": {"type": "string", "enum": ["token_sgd", "none"]},
+        },
+    }
+    settings = load_settings().model_copy(
+        update={
+            "openai_max_retries": 1,
+            "openai_retry_base_delay_s": 0.0,
+        }
+    )
+    fake_client = SequenceProposalClient(
+        [
+            {"slot_model_family": "linear_crf"},
+            {"slot_model_family": "token_sgd"},
+        ]
+    )
+    adapter = L4ProposalAdapter(settings, client=fake_client)
+
+    result = adapter.propose(
+        role="l2",
+        task_schema=TaskSchema(intent_names=["alarm_set"], slot_names=[]),
+        traces=[],
+        output_schema=output_schema,
+    )
+
+    assert result.proposal == {"slot_model_family": "token_sgd"}
+    assert len(fake_client.completions.calls) == 2
+
+
 def test_l4_proposal_adapter_reports_retry_exhaustion_as_proposal_error() -> None:
     schema = {"type": "object", "required": ["family"]}
     settings = load_settings().model_copy(
@@ -199,3 +253,41 @@ def test_parse_proposal_rejects_invalid_json_or_missing_required_field() -> None
 
     with pytest.raises(ProposalParseError):
         parse_proposal("{}", schema)
+
+
+def test_parse_proposal_enforces_basic_schema_constraints() -> None:
+    schema = {
+        "type": "object",
+        "required": ["family", "threshold", "prompt", "items"],
+        "properties": {
+            "family": {"type": "string", "enum": ["token_sgd", "none"]},
+            "threshold": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "prompt": {"type": "string", "minLength": 1, "maxLength": 8},
+            "items": {"type": "array", "minItems": 1, "maxItems": 2},
+        },
+    }
+
+    assert (
+        parse_proposal(
+            json.dumps(
+                {
+                    "family": "token_sgd",
+                    "threshold": 0.8,
+                    "prompt": "prompt",
+                    "items": [1],
+                }
+            ),
+            schema,
+        )["family"]
+        == "token_sgd"
+    )
+
+    invalid_payloads = [
+        {"family": "crf", "threshold": 0.8, "prompt": "prompt", "items": [1]},
+        {"family": "token_sgd", "threshold": 1.1, "prompt": "prompt", "items": [1]},
+        {"family": "token_sgd", "threshold": 0.8, "prompt": "", "items": [1]},
+        {"family": "token_sgd", "threshold": 0.8, "prompt": "prompt", "items": []},
+    ]
+    for payload in invalid_payloads:
+        with pytest.raises(ProposalParseError):
+            parse_proposal(json.dumps(payload), schema)

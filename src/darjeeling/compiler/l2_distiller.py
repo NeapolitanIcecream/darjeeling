@@ -18,17 +18,21 @@ L2_CONFIG_PROPOSAL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["slot_model_family"],
     "properties": {
-        "slot_model_family": {"type": "string"},
-        "min_examples": {"type": "integer"},
-        "max_features": {"type": "integer"},
-        "max_iter": {"type": "integer"},
+        "slot_model_family": {"type": "string", "enum": ["token_sgd", "none"]},
+        "min_examples": {"type": "integer", "minimum": 2},
+        "max_features": {"type": "integer", "minimum": 100},
+        "max_iter": {"type": "integer", "minimum": 10},
         "word_ngram_range": {
             "type": "array",
             "items": {"type": "integer"},
+            "minItems": 2,
+            "maxItems": 2,
         },
         "char_ngram_range": {
             "type": "array",
             "items": {"type": "integer"},
+            "minItems": 2,
+            "maxItems": 2,
         },
     },
 }

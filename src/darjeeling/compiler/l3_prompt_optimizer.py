@@ -18,11 +18,12 @@ L3_PROMPT_PROPOSAL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["system_prompt"],
     "properties": {
-        "system_prompt": {"type": "string"},
-        "confidence_threshold": {"type": ["number", "null"]},
+        "system_prompt": {"type": "string", "minLength": 1},
+        "confidence_threshold": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
         "few_shot_trace_ids": {
             "type": "array",
             "items": {"type": "string"},
+            "maxItems": 8,
         },
     },
 }

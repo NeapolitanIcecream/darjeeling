@@ -73,11 +73,17 @@ class L4ProposalAdapter:
             metrics=metrics,
             max_dynamic_traces=max_dynamic_traces,
         )
+
+        def check_proposal_response(response: Any) -> str:
+            content = _extract_chat_content(response)
+            parse_proposal(content, output_schema)
+            return content
+
         try:
             response = create_chat_completion_with_retry(
                 self.client(),
                 self.settings,
-                response_check=_extract_chat_content,
+                response_check=check_proposal_response,
                 model=self.settings.openai_model,
                 messages=context.messages,
                 response_format={"type": "json_object"},
@@ -127,6 +133,27 @@ def _validate_basic_json_schema(
     if expected_type is not None and not _matches_json_type(payload, expected_type):
         raise ProposalParseError(f"{path} expected type {expected_type!r}")
 
+    enum = schema.get("enum")
+    if isinstance(enum, list) and payload not in enum:
+        allowed = ", ".join(repr(item) for item in enum)
+        raise ProposalParseError(f"{path} must be one of: {allowed}")
+
+    if isinstance(payload, int | float) and not isinstance(payload, bool):
+        minimum = schema.get("minimum")
+        if isinstance(minimum, int | float) and payload < minimum:
+            raise ProposalParseError(f"{path} must be >= {minimum}")
+        maximum = schema.get("maximum")
+        if isinstance(maximum, int | float) and payload > maximum:
+            raise ProposalParseError(f"{path} must be <= {maximum}")
+
+    if isinstance(payload, str):
+        min_length = schema.get("minLength")
+        if isinstance(min_length, int) and len(payload) < min_length:
+            raise ProposalParseError(f"{path} length must be >= {min_length}")
+        max_length = schema.get("maxLength")
+        if isinstance(max_length, int) and len(payload) > max_length:
+            raise ProposalParseError(f"{path} length must be <= {max_length}")
+
     if expected_type == "object" or isinstance(payload, dict):
         if not isinstance(payload, dict):
             raise ProposalParseError(f"{path} expected object")
@@ -141,6 +168,12 @@ def _validate_basic_json_schema(
     if expected_type == "array" or isinstance(payload, list):
         if not isinstance(payload, list):
             raise ProposalParseError(f"{path} expected array")
+        min_items = schema.get("minItems")
+        if isinstance(min_items, int) and len(payload) < min_items:
+            raise ProposalParseError(f"{path} must contain at least {min_items} items")
+        max_items = schema.get("maxItems")
+        if isinstance(max_items, int) and len(payload) > max_items:
+            raise ProposalParseError(f"{path} must contain at most {max_items} items")
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for index, item in enumerate(payload):
