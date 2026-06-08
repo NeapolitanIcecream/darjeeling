@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_base_url: str | None = Field(default=None, validation_alias="OPENAI_BASE_URL")
     openai_model: str = Field(default="gpt-4.1-mini", validation_alias="OPENAI_MODEL")
+    openai_max_retries: int = Field(default=3, validation_alias="OPENAI_MAX_RETRIES")
+    openai_retry_base_delay_s: float = Field(
+        default=1.0,
+        validation_alias="OPENAI_RETRY_BASE_DELAY_S",
+    )
+    openai_retry_max_delay_s: float = Field(
+        default=8.0,
+        validation_alias="OPENAI_RETRY_MAX_DELAY_S",
+    )
     teacher_prompt_version: str = Field(
         default="teacher-v1",
         validation_alias="TEACHER_PROMPT_VERSION",

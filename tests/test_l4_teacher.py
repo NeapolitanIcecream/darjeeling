@@ -35,9 +35,27 @@ class FakeCompletions:
         )
 
 
+class FlakyCompletions(FakeCompletions):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures_left = 1
+
+    def create(self, **kwargs):
+        if self.failures_left:
+            self.failures_left -= 1
+            raise RuntimeError("temporary network failure")
+        return super().create(**kwargs)
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.completions = FakeCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
+class FlakyClient(FakeClient):
+    def __init__(self) -> None:
+        self.completions = FlakyCompletions()
         self.chat = SimpleNamespace(completions=self.completions)
 
 
@@ -80,6 +98,33 @@ def test_live_teacher_call_appends_cache(tmp_path: Path) -> None:
     assert payload["usage"]["total_tokens"] == 18
     assert payload["context_hash"]
     assert payload["prompt_cache_key"].startswith("darjeeling:teacher-v1:")
+
+
+def test_live_teacher_retries_transient_completion_failure(tmp_path: Path) -> None:
+    settings = load_settings().model_copy(
+        update={
+            "openai_max_retries": 1,
+            "openai_retry_base_delay_s": 0.0,
+        }
+    )
+    fake_client = FlakyClient()
+    cache = TeacherCache.load(tmp_path / "teacher_cache.jsonl")
+    layer = CachedTeacherLayer(
+        cache,
+        allow_live=True,
+        use_cache=True,
+        settings=settings,
+        task_schema=TaskSchema(intent_names=["music_play"], slot_names=[]),
+        teacher=CloudLLMTeacher(settings, client=fake_client),
+    )
+
+    result = layer.try_answer("play some jazz")
+
+    assert result.accepted
+    assert result.frame is not None
+    assert result.frame.intent == "music_play"
+    assert fake_client.completions.failures_left == 0
+    assert len(fake_client.completions.calls) == 1
 
 
 def test_cache_hit_does_not_call_live_teacher(tmp_path: Path) -> None:

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Annotated
 
@@ -802,6 +806,78 @@ def experiment_compare(
     )
 
 
+@experiments_app.command("suite")
+def experiment_suite(
+    run_root: Annotated[
+        Path,
+        typer.Option(help="Root directory for the experiment suite."),
+    ] = Path("runs/suite"),
+    experiment: Annotated[
+        list[str] | None,
+        typer.Option("--experiment", help="Experiment name to include. Repeatable."),
+    ] = None,
+    max_requests: Annotated[int, typer.Option(min=1)] = 300,
+    compile_every: Annotated[int, typer.Option(min=1)] = 100,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
+    ] = Path("data/processed/massive_en_us"),
+    parallel: Annotated[int, typer.Option(min=1, help="Maximum concurrent experiments.")] = 2,
+    compare: Annotated[bool, typer.Option(help="Generate comparison report after success.")] = True,
+) -> None:
+    """Run an experiment suite with subprocess-level parallelism."""
+
+    selected = list(experiment or DEFAULT_EXPERIMENT_SUITE)
+    run_root.mkdir(parents=True, exist_ok=True)
+    suite_payload = {
+        "schema_version": "experiment-suite-v1",
+        "experiments": selected,
+        "max_requests": max_requests,
+        "compile_every": compile_every,
+        "teacher": teacher,
+        "data_dir": str(data_dir),
+        "parallel": parallel,
+    }
+    (run_root / "suite.json").write_text(
+        json.dumps(suite_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    commands = _experiment_suite_commands(
+        selected,
+        run_root=run_root,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+    results = _run_experiment_suite_commands(commands, parallel=parallel)
+    failed = [result for result in results if result["return_code"] != 0]
+    if failed:
+        for result in failed:
+            error_console.print(
+                f"[red]{result['experiment']} failed; log={result['log_path']}[/red]"
+            )
+        raise typer.Exit(code=2)
+
+    comparison_path = ""
+    if compare:
+        run_dirs = _discover_run_dirs(run_root)
+        if run_dirs:
+            comparison = generate_experiment_comparison_report(
+                run_dirs,
+                run_root / "comparison",
+            )
+            comparison_path = str(comparison.comparison_csv_path)
+    console.print(
+        f"suite ran {len(results)} experiments under {run_root}; comparison={comparison_path}"
+    )
+
+
 @experiments_app.command("preflight")
 def experiment_preflight(
     run_dir: Annotated[
@@ -1014,6 +1090,88 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
     return deduped
 
 
+DEFAULT_EXPERIMENT_SUITE = (
+    "main-evolution",
+    "direct-l4-optimization",
+    "l2-family",
+    "no-guard",
+    "no-l2",
+    "hard-buffer",
+    "workload-locality",
+)
+
+
+def _experiment_suite_commands(
+    experiments: list[str],
+    *,
+    run_root: Path,
+    max_requests: int,
+    compile_every: int,
+    teacher: str,
+    data_dir: Path,
+) -> list[dict]:
+    commands: list[dict] = []
+    for experiment_name in experiments:
+        experiment_spec(experiment_name)
+        command = [sys.executable, "-m", "darjeeling.cli"]
+        if _settings_path is not None:
+            command.extend(["--settings", str(_settings_path)])
+        command.extend(
+            [
+                "experiment",
+                experiment_name,
+                "--run-dir",
+                str(run_root / experiment_name),
+                "--max-requests",
+                str(max_requests),
+                "--compile-every",
+                str(compile_every),
+                "--teacher",
+                teacher,
+                "--data-dir",
+                str(data_dir),
+            ]
+        )
+        commands.append(
+            {
+                "experiment": experiment_name,
+                "command": command,
+                "run_dir": run_root / experiment_name,
+                "log_path": run_root / experiment_name / "suite.log",
+            }
+        )
+    return commands
+
+
+def _run_experiment_suite_commands(commands: list[dict], *, parallel: int) -> list[dict]:
+    with ThreadPoolExecutor(max_workers=parallel) as executor:
+        futures = [executor.submit(_run_experiment_suite_command, command) for command in commands]
+        return [future.result() for future in as_completed(futures)]
+
+
+def _run_experiment_suite_command(command_spec: dict) -> dict:
+    run_dir = Path(command_spec["run_dir"])
+    log_path = Path(command_spec["log_path"])
+    run_dir.mkdir(parents=True, exist_ok=True)
+    command = [str(part) for part in command_spec["command"]]
+    completed = subprocess.run(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        check=False,
+    )
+    log_path.write_text(completed.stdout or "", encoding="utf-8")
+    return {
+        "experiment": command_spec["experiment"],
+        "command": command,
+        "run_dir": str(run_dir),
+        "log_path": str(log_path),
+        "return_code": completed.returncode,
+    }
+
+
 def _run_single_experiment(
     experiment_name: str,
     *,
@@ -1116,3 +1274,7 @@ def _execute_experiment_run(
         f"experiment {spec.name} ran {summary.requests} requests; "
         f"reports={report_result.report_dir}; layers={summary.layer_counts}"
     )
+
+
+if __name__ == "__main__":
+    app()

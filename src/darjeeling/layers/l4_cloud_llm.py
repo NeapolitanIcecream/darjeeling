@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -89,7 +90,9 @@ class CloudLLMTeacher:
             task_schema=task_schema,
             settings=self.settings,
         )
-        response = self.client().chat.completions.create(
+        response = create_chat_completion_with_retry(
+            self.client(),
+            self.settings,
             model=self.settings.openai_model,
             messages=context.messages,
             response_format={"type": "json_object"},
@@ -250,6 +253,30 @@ class CachedTeacherLayer:
                 )
 
             raise MissingTeacherError(f"teacher cache miss for utterance: {utterance!r}")
+
+
+def create_chat_completion_with_retry(client: Any, settings: Settings, **kwargs: Any) -> Any:
+    attempts = max(1, settings.openai_max_retries + 1)
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= attempts - 1:
+                raise
+            delay = _openai_retry_delay(settings, attempt)
+            if delay > 0:
+                time.sleep(delay)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("OpenAI retry loop exited without a response")
+
+
+def _openai_retry_delay(settings: Settings, attempt: int) -> float:
+    base = max(0.0, settings.openai_retry_base_delay_s)
+    cap = max(0.0, settings.openai_retry_max_delay_s)
+    return min(cap, base * (2**attempt))
 
 
 def build_teacher_system_prompt(task_schema: TaskSchema, settings: Settings) -> str:

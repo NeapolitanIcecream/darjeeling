@@ -10,6 +10,7 @@ from darjeeling.layers.l4_cloud_llm import (
     TaskSchema,
     _extract_chat_content,
     _extract_usage,
+    create_chat_completion_with_retry,
 )
 from darjeeling.schemas import TeacherTrace
 from darjeeling.settings import Settings
@@ -69,7 +70,9 @@ class L4ProposalAdapter:
             metrics=metrics,
             max_dynamic_traces=max_dynamic_traces,
         )
-        response = self.client().chat.completions.create(
+        response = create_chat_completion_with_retry(
+            self.client(),
+            self.settings,
             model=self.settings.openai_model,
             messages=context.messages,
             response_format={"type": "json_object"},
