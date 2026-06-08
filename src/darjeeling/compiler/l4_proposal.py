@@ -86,8 +86,12 @@ class L4ProposalAdapter:
             )
             raw_response = _extract_chat_content(response)
             proposal = parse_proposal(raw_response, output_schema)
+        except ProposalParseError:
+            raise
         except TeacherParseError as exc:
             raise ProposalParseError(str(exc)) from exc
+        except Exception as exc:
+            raise ProposalParseError(f"L4 proposal call failed: {exc}") from exc
         return L4ProposalCallResult(
             role=role,
             proposal=proposal,

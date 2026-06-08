@@ -52,6 +52,21 @@ class EmptyThenValidProposalClient(FakeProposalClient):
         self.chat = SimpleNamespace(completions=self.completions)
 
 
+class AlwaysFailingProposalCompletions:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        raise RuntimeError("upstream timeout")
+
+
+class AlwaysFailingProposalClient:
+    def __init__(self) -> None:
+        self.completions = AlwaysFailingProposalCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
 def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> None:
     trace = TraceRecord(
         request_id="r1",
@@ -128,6 +143,28 @@ def test_l4_proposal_adapter_retries_empty_completion_content() -> None:
     )
 
     assert result.proposal == {"family": "token_sgd", "accept_threshold": 0.93}
+    assert len(fake_client.completions.calls) == 2
+
+
+def test_l4_proposal_adapter_reports_retry_exhaustion_as_proposal_error() -> None:
+    schema = {"type": "object", "required": ["family"]}
+    settings = load_settings().model_copy(
+        update={
+            "openai_max_retries": 1,
+            "openai_retry_base_delay_s": 0.0,
+        }
+    )
+    fake_client = AlwaysFailingProposalClient()
+    adapter = L4ProposalAdapter(settings, client=fake_client)
+
+    with pytest.raises(ProposalParseError, match="L4 proposal call failed"):
+        adapter.propose(
+            role="l2",
+            task_schema=TaskSchema(intent_names=["alarm_set"], slot_names=[]),
+            traces=[],
+            output_schema=schema,
+        )
+
     assert len(fake_client.completions.calls) == 2
 
 
