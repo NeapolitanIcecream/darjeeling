@@ -292,22 +292,24 @@ def _run_codex_cli_job(
     report_path: Path,
     command_results: list[dict[str, Any]],
 ) -> int:
-    command = [
-        config.codex_command,
-        "exec",
-        "--cd",
-        str(workspace_crate_dir),
-        "--sandbox",
-        config.sandbox,
-        "-a",
-        config.approval_policy,
-        "--json",
-        "-o",
-        str(report_path),
-        "-",
-    ]
+    command = [config.codex_command]
     if config.codex_model:
-        command[2:2] = ["--model", config.codex_model]
+        command.extend(["--model", config.codex_model])
+    command.extend(
+        [
+            "--sandbox",
+            config.sandbox,
+            "-a",
+            config.approval_policy,
+            "exec",
+            "--cd",
+            str(workspace_crate_dir),
+            "--json",
+            "-o",
+            str(report_path),
+            "-",
+        ]
+    )
     prompt = prompt_path.read_text(encoding="utf-8")
     result = _run_command(
         command,

@@ -138,6 +138,7 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
             source_crate_dir=Path("native/l1_programbank"),
             job_dir=tmp_path / "job",
             codex_command=str(fake_codex),
+            codex_model="test-model",
             run_validation=False,
         ),
         teacher_train=[_teacher_trace()],
@@ -159,4 +160,13 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
         for line in result.commands_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert commands[0]["command"][:2] == [str(fake_codex), "exec"]
+    assert commands[0]["command"][:8] == [
+        str(fake_codex),
+        "--model",
+        "test-model",
+        "--sandbox",
+        "workspace-write",
+        "-a",
+        "never",
+        "exec",
+    ]

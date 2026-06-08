@@ -47,7 +47,7 @@ Promoted artifact 中保存完整 source snapshot、binary 或 build instruction
 - 写入 `contexts/teacher_train.jsonl`、`hard_cases.jsonl`、`current_metrics.json`、`objective.json`、`constraints.md` 和 `commands.md`。
 - context 输入类型使用 `TeacherTrace`，并扫描 forbidden gold/eval/future 字段。
 - 支持 `dry-run` 模式，通过 fixture patch 修改 candidate workspace，用于测试 artifact packaging 和 state machine。
-- 支持 `codex-cli` 模式，调用 `codex exec --cd <workspace> --json -o agent_report.md -`，并记录 raw transcript、commands、diff、report 和 `provenance.json`。
+- 支持 `codex-cli` 模式，调用 `codex --model <model> --sandbox <mode> -a <policy> exec --cd <workspace> --json -o agent_report.md -`，并记录 raw transcript、commands、diff、report 和 `provenance.json`。
 - `provenance.json` 使用 `l1-agent-provenance-v1` schema，汇总 Codex JSONL event type、外层命令 return code/stdout/stderr tail、diff 文件数和增删行数。
 - 可选运行 `cargo test` 作为 agent job validation。
 - compiler generation 已在 `L1_AGENT_MODE` 非 disabled 时调用该 harness。
