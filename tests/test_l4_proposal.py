@@ -95,6 +95,7 @@ def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> 
     call = fake_client.completions.calls[0]
     assert call["response_format"] == {"type": "json_object"}
     assert call["max_completion_tokens"] == settings.proposal_max_tokens
+    assert call["timeout"] == settings.openai_timeout_s
     assert call["prompt_cache_key"].startswith("darjeeling:l2-proposal-v1:")
     rendered_messages = json.dumps(call["messages"], sort_keys=True)
     assert "gold_frame" not in rendered_messages

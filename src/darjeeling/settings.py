@@ -28,6 +28,7 @@ class Settings(BaseSettings):
         default=8.0,
         validation_alias="OPENAI_RETRY_MAX_DELAY_S",
     )
+    openai_timeout_s: float = Field(default=60.0, validation_alias="OPENAI_TIMEOUT_S")
     teacher_prompt_version: str = Field(
         default="teacher-v1",
         validation_alias="TEACHER_PROMPT_VERSION",

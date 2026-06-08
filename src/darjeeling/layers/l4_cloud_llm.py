@@ -101,6 +101,7 @@ class CloudLLMTeacher:
             max_completion_tokens=self.settings.teacher_max_tokens,
             prompt_cache_key=context.prompt_cache_key,
             prompt_cache_retention=context.prompt_cache_retention,
+            timeout=self.settings.openai_timeout_s,
         )
         raw_response = _extract_chat_content(response)
         return TeacherCallResult(

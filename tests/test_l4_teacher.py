@@ -112,6 +112,7 @@ def test_live_teacher_call_appends_cache(tmp_path: Path) -> None:
     assert result.cost_usd == pytest.approx((11 * 0.40 + 7 * 1.60) / 1_000_000)
     assert fake_client.completions.calls[0]["response_format"] == {"type": "json_object"}
     assert fake_client.completions.calls[0]["prompt_cache_key"].startswith("darjeeling:")
+    assert fake_client.completions.calls[0]["timeout"] == settings.openai_timeout_s
 
     cache_lines = (tmp_path / "teacher_cache.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(cache_lines) == 1
