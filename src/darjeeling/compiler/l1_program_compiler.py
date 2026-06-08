@@ -303,10 +303,10 @@ def _run_codex_cli_job(
             config.approval_policy,
             "exec",
             "--cd",
-            str(workspace_crate_dir),
+            str(workspace_crate_dir.resolve()),
             "--json",
             "-o",
-            str(report_path),
+            str(report_path.resolve()),
             "-",
         ]
     )

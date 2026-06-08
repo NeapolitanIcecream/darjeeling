@@ -113,7 +113,9 @@ def test_l1_coding_agent_adapter_respects_disabled_mode(tmp_path: Path) -> None:
 
 def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
     fake_codex = tmp_path / "fake_codex.py"
     fake_codex.write_text(
         "\n".join(
@@ -131,12 +133,13 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
 
     result = run_l1_coding_agent_job(
         config=L1CodingAgentJobConfig(
             mode="codex-cli",
-            source_crate_dir=Path("native/l1_programbank"),
-            job_dir=tmp_path / "job",
+            source_crate_dir=repo_root / "native/l1_programbank",
+            job_dir=Path("job"),
             codex_command=str(fake_codex),
             codex_model="test-model",
             run_validation=False,
@@ -160,7 +163,8 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
         for line in result.commands_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert commands[0]["command"][:8] == [
+    command = commands[0]["command"]
+    assert command[:8] == [
         str(fake_codex),
         "--model",
         "test-model",
@@ -170,3 +174,5 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
         "never",
         "exec",
     ]
+    assert Path(command[command.index("--cd") + 1]).is_absolute()
+    assert Path(command[command.index("-o") + 1]).is_absolute()
