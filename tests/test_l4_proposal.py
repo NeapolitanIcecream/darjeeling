@@ -1,4 +1,5 @@
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -115,6 +116,28 @@ def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> 
     rendered_messages = json.dumps(call["messages"], sort_keys=True)
     assert "gold_frame" not in rendered_messages
     assert "gold-seven" not in rendered_messages
+
+
+def test_l4_proposal_client_sets_sdk_timeout_and_disables_sdk_retries(monkeypatch) -> None:
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    settings = load_settings().model_copy(
+        update={
+            "openai_api_key": "test-key",
+            "openai_timeout_s": 12.0,
+        }
+    )
+
+    L4ProposalAdapter(settings).client()
+
+    assert captured["api_key"] == "test-key"
+    assert captured["timeout"] == 12.0
+    assert captured["max_retries"] == 0
 
 
 def test_l4_proposal_adapter_retries_empty_completion_content() -> None:

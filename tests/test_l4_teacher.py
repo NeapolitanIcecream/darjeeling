@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -87,6 +88,28 @@ def test_parse_teacher_frame_requires_frame_json() -> None:
 
     assert frame.intent == "alarm_set"
     assert frame.slots == {"time": "seven"}
+
+
+def test_live_teacher_client_sets_sdk_timeout_and_disables_sdk_retries(monkeypatch) -> None:
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    settings = load_settings().model_copy(
+        update={
+            "openai_api_key": "test-key",
+            "openai_timeout_s": 12.0,
+        }
+    )
+
+    CloudLLMTeacher(settings).client()
+
+    assert captured["api_key"] == "test-key"
+    assert captured["timeout"] == 12.0
+    assert captured["max_retries"] == 0
 
 
 def test_live_teacher_call_appends_cache(tmp_path: Path) -> None:

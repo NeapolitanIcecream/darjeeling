@@ -48,6 +48,8 @@ class L4ProposalAdapter:
         return OpenAI(
             api_key=self.settings.openai_api_key,
             base_url=self.settings.openai_base_url or None,
+            timeout=self.settings.openai_timeout_s,
+            max_retries=0,
         )
 
     def propose(
