@@ -57,10 +57,13 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 1. 读取实验 spec。
 2. 应用 spec 的 settings override，例如 `L2_ENABLED=false` 或 `L2_GUARD_MODE=always_accept`。
-3. 写 `experiment.json`。
-4. 写 `settings.json`。
-5. 调用 `run_replay`。
-6. 调用 `generate_run_report`，产出 `summary.md`、`metrics.csv`、`artifacts.csv` 和 `curves.html`。
+3. 清理该 experiment run dir 中上一轮 `artifacts`、`reports`、`traces.jsonl`、`settings.json` 和 `experiment.json`，但保留 `teacher_cache.jsonl`。
+4. 写 `experiment.json`。
+5. 写 `settings.json`。
+6. 调用 `run_replay`。
+7. 调用 `generate_run_report`，产出 `summary.md`、`metrics.csv`、`artifacts.csv` 和 `curves.html`。
+
+这个默认重置用于避免旧 `manifest.current.json` 中的 L0 exact cache 污染新实验。需要有状态增量演化时使用普通 `edge-mvp run`，不要复用 `experiment` 子命令作为 resume 入口。
 
 当前实验入口：
 

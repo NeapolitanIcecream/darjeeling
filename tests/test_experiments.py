@@ -68,10 +68,19 @@ def test_execute_experiment_run_writes_metadata_and_report(
     monkeypatch,
 ) -> None:
     calls = {}
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "artifacts" / "manifest.current.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "summary.md").write_text("old report\n", encoding="utf-8")
+    (tmp_path / "traces.jsonl").write_text("old trace\n", encoding="utf-8")
+    (tmp_path / "settings.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "teacher_cache.jsonl").write_text("cached teacher\n", encoding="utf-8")
 
     def fake_execute_replay_run(**kwargs):
         calls["settings"] = kwargs["settings"]
         calls["stream"] = kwargs["stream"]
+        calls["old_artifacts_present"] = (tmp_path / "artifacts").exists()
+        calls["teacher_cache_present"] = (tmp_path / "teacher_cache.jsonl").exists()
         return SimpleNamespace(
             requests=3,
             traces_path=tmp_path / "traces.jsonl",
@@ -100,6 +109,8 @@ def test_execute_experiment_run_writes_metadata_and_report(
     assert metadata["settings_overrides"] == {"l2_enabled": False}
     assert calls["settings"].l2_enabled is False
     assert calls["stream"] == "zipf-heavy"
+    assert calls["old_artifacts_present"] is False
+    assert calls["teacher_cache_present"] is True
     assert calls["report_run_dir"] == tmp_path
 
 

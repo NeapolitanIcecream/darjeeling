@@ -1269,6 +1269,7 @@ def _execute_experiment_run(
 ) -> None:
     settings = apply_experiment_settings(_load_cli_settings(), spec)
     run_dir.mkdir(parents=True, exist_ok=True)
+    _reset_experiment_run_state(run_dir)
     (run_dir / "experiment.json").write_text(
         json.dumps(
             experiment_metadata(
@@ -1303,6 +1304,19 @@ def _execute_experiment_run(
         f"experiment {spec.name} ran {summary.requests} requests; "
         f"reports={report_result.report_dir}; layers={summary.layer_counts}"
     )
+
+
+def _reset_experiment_run_state(run_dir: Path) -> None:
+    """Keep teacher cache but remove prior runtime artifacts from this experiment dir."""
+
+    for directory_name in ["artifacts", "reports"]:
+        directory = run_dir / directory_name
+        if directory.exists():
+            shutil.rmtree(directory)
+    for file_name in ["traces.jsonl", "settings.json", "experiment.json"]:
+        path = run_dir / file_name
+        if path.exists():
+            path.unlink()
 
 
 if __name__ == "__main__":
