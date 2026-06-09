@@ -63,6 +63,14 @@ class L2Prediction(BaseModel):
     nearest_similarity: float = 0.0
     predicted_intent_similarity: float = 0.0
     intent_support_margin: float = 0.0
+    predicted_slot_count: float = 0.0
+    predicted_has_slots: float = 0.0
+    predicted_intent_frame_accuracy: float = 0.0
+    predicted_intent_intent_accuracy: float = 0.0
+    predicted_intent_support: float = 0.0
+    predicted_intent_slotless_rate: float = 0.0
+    predicted_signature_frame_accuracy: float = 0.0
+    predicted_signature_support: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -70,6 +78,18 @@ class IntentSupportFeatures:
     nearest_similarity: float = 0.0
     predicted_intent_similarity: float = 0.0
     intent_support_margin: float = 0.0
+
+
+@dataclass(frozen=True)
+class IntentCalibrationFeatures:
+    predicted_slot_count: float = 0.0
+    predicted_has_slots: float = 0.0
+    predicted_intent_frame_accuracy: float = 0.0
+    predicted_intent_intent_accuracy: float = 0.0
+    predicted_intent_support: float = 0.0
+    predicted_intent_slotless_rate: float = 0.0
+    predicted_signature_frame_accuracy: float = 0.0
+    predicted_signature_support: float = 0.0
 
 
 class IntentPrototypeIndex:
@@ -133,6 +153,135 @@ class IntentPrototypeIndex:
         )
 
 
+class IntentCalibrationIndex:
+    def __init__(
+        self,
+        *,
+        predicted_intent_frame_accuracy: dict[str, float],
+        predicted_intent_intent_accuracy: dict[str, float],
+        predicted_intent_support: dict[str, float],
+        predicted_intent_slotless_rate: dict[str, float],
+        predicted_signature_frame_accuracy: dict[tuple[str, tuple[str, ...]], float],
+        predicted_signature_support: dict[tuple[str, tuple[str, ...]], float],
+    ) -> None:
+        self.predicted_intent_frame_accuracy = predicted_intent_frame_accuracy
+        self.predicted_intent_intent_accuracy = predicted_intent_intent_accuracy
+        self.predicted_intent_support = predicted_intent_support
+        self.predicted_intent_slotless_rate = predicted_intent_slotless_rate
+        self.predicted_signature_frame_accuracy = predicted_signature_frame_accuracy
+        self.predicted_signature_support = predicted_signature_support
+
+    @classmethod
+    def from_examples(
+        cls,
+        intent_pipeline: Pipeline,
+        slot_tagger: TokenSlotTagger | None,
+        examples: list[L2TrainingExample],
+        *,
+        slots_by_intent: dict[str, tuple[str, ...]] | None = None,
+        slot_patterns_by_intent: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]]
+        | None = None,
+    ) -> IntentCalibrationIndex:
+        slots_by_intent = slots_by_intent or {}
+        slot_patterns_by_intent = slot_patterns_by_intent or {}
+        intent_stats: dict[str, dict[str, int]] = {}
+        signature_stats: dict[tuple[str, tuple[str, ...]], dict[str, int]] = {}
+        for example in examples:
+            intent_result = predict_intent(intent_pipeline, example.utterance)
+            slot_prediction = (
+                slot_tagger.predict(example.utterance)
+                if slot_tagger is not None
+                else SlotPrediction(slots={})
+            )
+            predicted_intent = str(intent_result["intent"])
+            slots = _postprocess_slots(
+                predicted_intent,
+                example.utterance,
+                slot_prediction.slots,
+                slots_by_intent,
+                slot_patterns_by_intent,
+            )
+            predicted_frame = Frame(intent=predicted_intent, slots=slots)
+            intent_bucket = intent_stats.setdefault(
+                predicted_intent,
+                {"total": 0, "frame_correct": 0, "intent_correct": 0, "slotless": 0},
+            )
+            intent_bucket["total"] += 1
+            intent_bucket["frame_correct"] += int(predicted_frame == example.teacher_frame)
+            intent_bucket["intent_correct"] += int(
+                predicted_intent == example.teacher_frame.intent
+            )
+            intent_bucket["slotless"] += int(not slots)
+
+            signature = _slot_signature(slots)
+            signature_bucket = signature_stats.setdefault(
+                (predicted_intent, signature),
+                {"total": 0, "frame_correct": 0},
+            )
+            signature_bucket["total"] += 1
+            signature_bucket["frame_correct"] += int(predicted_frame == example.teacher_frame)
+
+        total_examples = max(1, len(examples))
+        return cls(
+            predicted_intent_frame_accuracy={
+                intent: stats["frame_correct"] / stats["total"]
+                for intent, stats in intent_stats.items()
+            },
+            predicted_intent_intent_accuracy={
+                intent: stats["intent_correct"] / stats["total"]
+                for intent, stats in intent_stats.items()
+            },
+            predicted_intent_support={
+                intent: stats["total"] / total_examples
+                for intent, stats in intent_stats.items()
+            },
+            predicted_intent_slotless_rate={
+                intent: stats["slotless"] / stats["total"]
+                for intent, stats in intent_stats.items()
+            },
+            predicted_signature_frame_accuracy={
+                key: stats["frame_correct"] / stats["total"]
+                for key, stats in signature_stats.items()
+            },
+            predicted_signature_support={
+                key: stats["total"] / total_examples
+                for key, stats in signature_stats.items()
+            },
+        )
+
+    def score(self, predicted_intent: str, slots: dict[str, str]) -> IntentCalibrationFeatures:
+        signature = _slot_signature(slots)
+        signature_key = (predicted_intent, signature)
+        return IntentCalibrationFeatures(
+            predicted_slot_count=float(len(slots)),
+            predicted_has_slots=float(bool(slots)),
+            predicted_intent_frame_accuracy=self.predicted_intent_frame_accuracy.get(
+                predicted_intent,
+                0.0,
+            ),
+            predicted_intent_intent_accuracy=self.predicted_intent_intent_accuracy.get(
+                predicted_intent,
+                0.0,
+            ),
+            predicted_intent_support=self.predicted_intent_support.get(
+                predicted_intent,
+                0.0,
+            ),
+            predicted_intent_slotless_rate=self.predicted_intent_slotless_rate.get(
+                predicted_intent,
+                0.0,
+            ),
+            predicted_signature_frame_accuracy=self.predicted_signature_frame_accuracy.get(
+                signature_key,
+                0.0,
+            ),
+            predicted_signature_support=self.predicted_signature_support.get(
+                signature_key,
+                0.0,
+            ),
+        )
+
+
 class ConstantGuard:
     def __init__(self, probability: float) -> None:
         self.probability = float(probability)
@@ -192,6 +341,7 @@ class L2StudentBundle:
         slot_patterns_by_intent: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]]
         | None = None,
         intent_support_index: IntentPrototypeIndex | None = None,
+        intent_calibration_index: IntentCalibrationIndex | None = None,
     ) -> None:
         self.intent_pipeline = intent_pipeline
         self.slot_tagger = slot_tagger
@@ -200,6 +350,7 @@ class L2StudentBundle:
         self.slots_by_intent = slots_by_intent or {}
         self.slot_patterns_by_intent = slot_patterns_by_intent or {}
         self.intent_support_index = intent_support_index
+        self.intent_calibration_index = intent_calibration_index
 
     def predict(self, utterance: str) -> L2Prediction:
         intent_result = predict_intent(self.intent_pipeline, utterance)
@@ -209,15 +360,10 @@ class L2StudentBundle:
             else SlotPrediction(slots={})
         )
         predicted_intent = str(intent_result["intent"])
-        slots = filter_slots_for_intent(
-            predicted_intent,
-            slot_prediction.slots,
-            getattr(self, "slots_by_intent", {}),
-        )
-        slots = apply_slot_patterns(
+        slots = _postprocess_slots(
             predicted_intent,
             utterance,
-            slots,
+            slot_prediction.slots,
             getattr(self, "slots_by_intent", {}),
             getattr(self, "slot_patterns_by_intent", {}),
         )
@@ -226,6 +372,11 @@ class L2StudentBundle:
             self.intent_pipeline,
             utterance,
             predicted_intent,
+        )
+        calibration = _score_intent_calibration(
+            getattr(self, "intent_calibration_index", None),
+            predicted_intent,
+            slots,
         )
         features = guard_features(
             intent_result["top_probability"],
@@ -236,6 +387,14 @@ class L2StudentBundle:
             support.nearest_similarity,
             support.predicted_intent_similarity,
             support.intent_support_margin,
+            calibration.predicted_slot_count,
+            calibration.predicted_has_slots,
+            calibration.predicted_intent_frame_accuracy,
+            calibration.predicted_intent_intent_accuracy,
+            calibration.predicted_intent_support,
+            calibration.predicted_intent_slotless_rate,
+            calibration.predicted_signature_frame_accuracy,
+            calibration.predicted_signature_support,
         )
         features = _match_guard_feature_width(features, self.guard_model)
         guard_probability = float(self.guard_model.predict_proba(features)[0][1])
@@ -250,6 +409,14 @@ class L2StudentBundle:
             nearest_similarity=support.nearest_similarity,
             predicted_intent_similarity=support.predicted_intent_similarity,
             intent_support_margin=support.intent_support_margin,
+            predicted_slot_count=calibration.predicted_slot_count,
+            predicted_has_slots=calibration.predicted_has_slots,
+            predicted_intent_frame_accuracy=calibration.predicted_intent_frame_accuracy,
+            predicted_intent_intent_accuracy=calibration.predicted_intent_intent_accuracy,
+            predicted_intent_support=calibration.predicted_intent_support,
+            predicted_intent_slotless_rate=calibration.predicted_intent_slotless_rate,
+            predicted_signature_frame_accuracy=calibration.predicted_signature_frame_accuracy,
+            predicted_signature_support=calibration.predicted_signature_support,
         )
 
     def save(self, path: Path) -> None:
@@ -291,6 +458,22 @@ class L2StudentLayer:
                     "nearest_similarity": prediction.nearest_similarity,
                     "predicted_intent_similarity": prediction.predicted_intent_similarity,
                     "intent_support_margin": prediction.intent_support_margin,
+                    "predicted_slot_count": prediction.predicted_slot_count,
+                    "predicted_has_slots": prediction.predicted_has_slots,
+                    "predicted_intent_frame_accuracy": (
+                        prediction.predicted_intent_frame_accuracy
+                    ),
+                    "predicted_intent_intent_accuracy": (
+                        prediction.predicted_intent_intent_accuracy
+                    ),
+                    "predicted_intent_support": prediction.predicted_intent_support,
+                    "predicted_intent_slotless_rate": (
+                        prediction.predicted_intent_slotless_rate
+                    ),
+                    "predicted_signature_frame_accuracy": (
+                        prediction.predicted_signature_frame_accuracy
+                    ),
+                    "predicted_signature_support": prediction.predicted_signature_support,
                     "accept_threshold": self.bundle.config.accept_threshold,
                     "runtime_enabled": runtime_enabled,
                     "intent_model": self.bundle.config.intent_model_family,
@@ -339,6 +522,13 @@ def train_l2_student(
         calibration_intent_pipeline,
         train_examples,
     )
+    calibration_intent_reliability = IntentCalibrationIndex.from_examples(
+        calibration_intent_pipeline,
+        calibration_slot_tagger,
+        guard_examples,
+        slots_by_intent=calibration_slots_by_intent,
+        slot_patterns_by_intent=calibration_slot_patterns,
+    )
     guard_model = train_guard(
         calibration_intent_pipeline,
         calibration_slot_tagger,
@@ -347,6 +537,7 @@ def train_l2_student(
         slots_by_intent=calibration_slots_by_intent,
         slot_patterns_by_intent=calibration_slot_patterns,
         intent_support_index=calibration_intent_support,
+        intent_calibration_index=calibration_intent_reliability,
     )
     runtime_intent_pipeline = train_intent_pipeline(examples, config)
     runtime_slot_tagger = train_slot_tagger(examples, config)
@@ -361,6 +552,7 @@ def train_l2_student(
             runtime_intent_pipeline,
             examples,
         ),
+        intent_calibration_index=calibration_intent_reliability,
     )
 
 
@@ -445,6 +637,7 @@ def train_guard(
     slot_patterns_by_intent: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]]
     | None = None,
     intent_support_index: IntentPrototypeIndex | None = None,
+    intent_calibration_index: IntentCalibrationIndex | None = None,
 ) -> LogisticRegression | ConstantGuard:
     slots_by_intent = slots_by_intent or {}
     slot_patterns_by_intent = slot_patterns_by_intent or {}
@@ -458,15 +651,10 @@ def train_guard(
             else SlotPrediction(slots={})
         )
         predicted_intent = str(intent_result["intent"])
-        slots = filter_slots_for_intent(
-            predicted_intent,
-            slot_prediction.slots,
-            slots_by_intent,
-        )
-        slots = apply_slot_patterns(
+        slots = _postprocess_slots(
             predicted_intent,
             example.utterance,
-            slots,
+            slot_prediction.slots,
             slots_by_intent,
             slot_patterns_by_intent,
         )
@@ -476,6 +664,11 @@ def train_guard(
             intent_pipeline,
             example.utterance,
             predicted_intent,
+        )
+        calibration = _score_intent_calibration(
+            intent_calibration_index,
+            predicted_intent,
+            slots,
         )
         feature_rows.append(
             [
@@ -487,6 +680,14 @@ def train_guard(
                 support.nearest_similarity,
                 support.predicted_intent_similarity,
                 support.intent_support_margin,
+                calibration.predicted_slot_count,
+                calibration.predicted_has_slots,
+                calibration.predicted_intent_frame_accuracy,
+                calibration.predicted_intent_intent_accuracy,
+                calibration.predicted_intent_support,
+                calibration.predicted_intent_slotless_rate,
+                calibration.predicted_signature_frame_accuracy,
+                calibration.predicted_signature_support,
             ]
         )
         correct_labels.append(int(predicted_frame == example.teacher_frame))
@@ -509,6 +710,14 @@ def guard_features(
     nearest_similarity: float = 0.0,
     predicted_intent_similarity: float = 0.0,
     intent_support_margin: float = 0.0,
+    predicted_slot_count: float = 0.0,
+    predicted_has_slots: float = 0.0,
+    predicted_intent_frame_accuracy: float = 0.0,
+    predicted_intent_intent_accuracy: float = 0.0,
+    predicted_intent_support: float = 0.0,
+    predicted_intent_slotless_rate: float = 0.0,
+    predicted_signature_frame_accuracy: float = 0.0,
+    predicted_signature_support: float = 0.0,
 ) -> np.ndarray:
     return np.asarray(
         [
@@ -521,6 +730,14 @@ def guard_features(
                 nearest_similarity,
                 predicted_intent_similarity,
                 intent_support_margin,
+                predicted_slot_count,
+                predicted_has_slots,
+                predicted_intent_frame_accuracy,
+                predicted_intent_intent_accuracy,
+                predicted_intent_support,
+                predicted_intent_slotless_rate,
+                predicted_signature_frame_accuracy,
+                predicted_signature_support,
             ]
         ],
         dtype=float,
@@ -536,6 +753,19 @@ def _score_intent_support(
     if support_index is None:
         return IntentSupportFeatures()
     return support_index.score(intent_pipeline, utterance, predicted_intent)
+
+
+def _score_intent_calibration(
+    calibration_index: IntentCalibrationIndex | None,
+    predicted_intent: str,
+    slots: dict[str, str],
+) -> IntentCalibrationFeatures:
+    if calibration_index is None:
+        return IntentCalibrationFeatures(
+            predicted_slot_count=float(len(slots)),
+            predicted_has_slots=float(bool(slots)),
+        )
+    return calibration_index.score(predicted_intent, slots)
 
 
 def _match_guard_feature_width(features: np.ndarray, guard_model: Any) -> np.ndarray:
@@ -574,6 +804,27 @@ def filter_slots_for_intent(
         return slots
     allowed = set(slots_by_intent.get(intent, ()))
     return {slot_name: value for slot_name, value in slots.items() if slot_name in allowed}
+
+
+def _postprocess_slots(
+    intent: str,
+    utterance: str,
+    slots: dict[str, str],
+    slots_by_intent: dict[str, tuple[str, ...]],
+    slot_patterns_by_intent: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]],
+) -> dict[str, str]:
+    filtered = filter_slots_for_intent(intent, slots, slots_by_intent)
+    return apply_slot_patterns(
+        intent,
+        utterance,
+        filtered,
+        slots_by_intent,
+        slot_patterns_by_intent,
+    )
+
+
+def _slot_signature(slots: dict[str, str]) -> tuple[str, ...]:
+    return tuple(sorted(slots))
 
 
 def slot_patterns_by_intent_from_examples(

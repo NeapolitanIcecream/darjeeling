@@ -4,6 +4,7 @@ import numpy as np
 
 from darjeeling.layers.l2_student import (
     ConstantGuard,
+    IntentCalibrationIndex,
     L2StudentBundle,
     L2StudentConfig,
     L2StudentLayer,
@@ -212,6 +213,53 @@ def test_l2_guard_training_labels_postprocessed_frames() -> None:
     assert guard.probability == 1.0
 
 
+def test_intent_calibration_index_scores_predicted_intent_reliability() -> None:
+    class FakeIntentPipeline:
+        classes_ = ["calendar_query", "play_music"]
+
+        def predict_proba(self, utterances):
+            rows = []
+            for utterance in utterances:
+                if "calendar" in utterance:
+                    rows.append([0.9, 0.1])
+                else:
+                    rows.append([0.1, 0.9])
+            return np.asarray(rows)
+
+    examples = [
+        L2TrainingExample(
+            utterance="calendar please",
+            teacher_frame=Frame(intent="calendar_query"),
+        ),
+        L2TrainingExample(
+            utterance="calendar list",
+            teacher_frame=Frame(intent="calendar_query"),
+        ),
+        L2TrainingExample(
+            utterance="play jazz",
+            teacher_frame=Frame(intent="play_music", slots={"music_descriptor": "jazz"}),
+        ),
+        L2TrainingExample(
+            utterance="play queen",
+            teacher_frame=Frame(intent="play_music", slots={"artist_name": "queen"}),
+        ),
+    ]
+
+    calibration = IntentCalibrationIndex.from_examples(
+        FakeIntentPipeline(),
+        slot_tagger=None,
+        examples=examples,
+        slots_by_intent=slots_by_intent_from_examples(examples),
+    )
+    calendar_score = calibration.score("calendar_query", {})
+    music_score = calibration.score("play_music", {})
+
+    assert calendar_score.predicted_intent_frame_accuracy == 1.0
+    assert music_score.predicted_intent_frame_accuracy == 0.0
+    assert music_score.predicted_intent_intent_accuracy == 1.0
+    assert music_score.predicted_signature_frame_accuracy == 0.0
+
+
 def test_l2_student_layer_uses_guard_threshold() -> None:
     bundle = train_l2_student(
         _examples(),
@@ -240,6 +288,8 @@ def test_l2_student_layer_reports_intent_support_metadata() -> None:
     assert result.metadata["nearest_similarity"] > 0.0
     assert result.metadata["predicted_intent_similarity"] > 0.0
     assert -1.0 <= result.metadata["intent_support_margin"] <= 1.0
+    assert "predicted_intent_frame_accuracy" in result.metadata
+    assert "predicted_signature_frame_accuracy" in result.metadata
 
 
 def test_l2_bundle_keeps_legacy_five_feature_guard_compatible() -> None:

@@ -49,6 +49,20 @@ L2 artifact 同时保存 intent prototype index：用同一套 TF-IDF feature sp
 
 这些值进入 guard feature 和 trace metadata。它们不 hardcode 数据集规则，但让 guard 能识别“分类器很自信、但最近邻其实更支持别的 intent”的高风险错误。为兼容旧 artifact，guard feature 的前 5 维保持原顺序；旧 5 维 guard model 加载后会自动截断新增特征。
 
+L2 artifact 还保存 intent calibration index：用 guard split 上的预测结果估计
+`predicted intent` 和 `predicted slot signature` 的经验可靠性。Runtime 预测时把以下值输入
+guard 并写入 trace metadata：
+
+- predicted slot count / has-slots flag。
+- predicted intent 的 frame exact accuracy。
+- predicted intent 的 intent-only accuracy。
+- predicted intent 在 calibration split 中的 support。
+- predicted intent 下 slotless prediction 的比例。
+- predicted `(intent, slot-name signature)` 的 frame exact accuracy。
+- predicted `(intent, slot-name signature)` 的 support。
+
+这不是直接 hardcode 某个 intent 可以接收，而是让 learned guard 能把 L2 收缩到历史上可靠的子域。最终是否接收仍由 deterministic threshold search 和外层 promotion replay 决定。
+
 Slot 输出还经过两层 schema-aware 后处理：
 
 - 按 predicted intent 的 teacher-visible slot 白名单过滤，避免给该 intent 未见过的 slot。
@@ -89,7 +103,13 @@ Guard features：
 - nearest teacher trace similarity（已实现）
 - predicted intent nearest similarity（已实现）
 - predicted-vs-other intent support margin（已实现）
-- predicted intent recent error rate
+- predicted slot count / has-slots flag（已实现）
+- predicted intent frame exact accuracy（已实现）
+- predicted intent intent-only accuracy（已实现）
+- predicted intent support（已实现）
+- predicted intent slotless rate（已实现）
+- predicted slot signature frame exact accuracy（已实现）
+- predicted slot signature support（已实现）
 - slot alignment failure signals
 - utterance length bucket
 
