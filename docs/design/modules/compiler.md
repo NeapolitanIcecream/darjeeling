@@ -151,6 +151,15 @@ Optuna tuning 不能读取 `teacher_promotion_holdout`、gold eval 或 future st
 -   0.001 * artifact_complexity
 ```
 
+`artifact_complexity` 不是原始源码行数或原始数据行数，而是每类 artifact
+定义的复杂度单位：
+
+- L0 exact cache 贡献 `sqrt(cache_entries)`。它是简单查表的数据 artifact，
+  维护风险随规模增长但不应按每条 cache line 线性惩罚，否则会拒绝低风险的
+  L4 call elimination。
+- L1 Rust programbank 存在时贡献 1 个 artifact unit。
+- L2 student bundle 存在时贡献 1 个 artifact unit。
+
 权重可配置，并写入 run report。
 
 ## Promotion gate

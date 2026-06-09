@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import sqrt
 from pathlib import Path
 from statistics import quantiles
 
@@ -59,7 +60,7 @@ class OfflineArtifactSet:
     @property
     def artifact_complexity(self) -> float:
         return float(
-            len(self.l0_cache)
+            sqrt(len(self.l0_cache))
             + (1 if self.l1_crate_dir is not None else 0)
             + (1 if self.l2_bundle is not None else 0)
         )

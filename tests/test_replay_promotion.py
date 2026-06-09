@@ -82,6 +82,49 @@ def test_artifact_set_promotion_records_layer_regression_without_blocking() -> N
     assert decision.regressed_layers == ["L1"]
 
 
+def test_large_exact_l0_cache_can_promote_when_it_reduces_l4_without_regression() -> None:
+    traces = [
+        TeacherTrace(
+            request_id=f"r{i}",
+            utterance=f"cached request {i}",
+            teacher_frame=Frame(intent="cached", slots={"i": str(i)}),
+            chosen_layer="L4",
+            final_frame=Frame(intent="cached", slots={"i": str(i)}),
+            layer_results=[],
+            timestamp="2026-06-08T00:00:00Z",
+        )
+        for i in range(300)
+    ]
+    l0_cache = {
+        f"cached request {i}": Frame(intent="cached", slots={"i": str(i)})
+        for i in range(125)
+    }
+    l0_cache.update(
+        {
+            f"extra cached request {i}": Frame(intent="cached_extra", slots={"i": str(i)})
+            for i in range(2_282)
+        }
+    )
+
+    current = evaluate_offline_artifact_set(traces, OfflineArtifactSet(l0_cache={}))
+    candidate = evaluate_offline_artifact_set(
+        traces,
+        OfflineArtifactSet(l0_cache=l0_cache),
+    )
+    decision = decide_artifact_set_promotion(
+        current.objective,
+        candidate.objective,
+        per_layer_deltas={},
+    )
+
+    assert candidate.objective.artifact_complexity < 50.0
+    assert (
+        candidate.objective.cost_usd_per_100_requests
+        < current.objective.cost_usd_per_100_requests
+    )
+    assert decision.promoted
+
+
 def test_offline_replay_counts_recorded_l3_accepts_and_wrong_accepts() -> None:
     traces = [
         TeacherTrace(

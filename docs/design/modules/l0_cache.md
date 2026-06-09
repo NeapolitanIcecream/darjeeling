@@ -40,6 +40,10 @@ normalized utterance exists in exact cache
 
 Exact cache 不使用 gold label。Cache line 必须可追溯到真实 L4 teacher response。
 
+Promotion objective 中 exact cache 的 artifact complexity 按 `sqrt(cache_entries)`
+计入。原因是 exact cache 是可追溯的数据表，维护风险随规模增长但低于线性；
+promotion 仍由独立 replay gate 检查 e2e exact match 与 wrong accept rate。
+
 ## Semantic cache
 
 第二阶段启用。
