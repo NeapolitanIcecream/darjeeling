@@ -185,7 +185,7 @@ L2 coding-agent path：
 - `data/slot_error_summary.json` 从 teacher-visible train/hard cases 中汇总 L2 wrong accept，尤其标出 intent 正确但 slot 缺失、多余或值错误的样本。该 summary 用于把下一轮 L2 evolve 的焦点放在 frame exactness，而不是只扩大 coverage。
 - 调参由 Optuna 或本地 deterministic tuner 负责；L4 coding agent 负责真正需要 generalized intelligence 的代码、特征、模型 family、calibration、accept policy、验证协议和 search-space 设计。
 - Agent patch adoption 以 replay/promotion success 为准；提高 raw L2 coverage 但引入 frame exactness regression 的 patch 必须撤回。
-- Dataset-specific intent/slot lexical patch 默认不纳入主线，除非 replay-backed hard case 证明必要，且实现方式可泛化。
+- Dataset-specific intent/slot lexical patch 不能进入 Darjeeling core；但在 isolated target workspace 的 `target/` 内，target-specific lexical/state-machine/feature code 是合法候选，只要它来自 visible target data，不读取 private holdout，并由 target holdout/promotion 指标决定是否采用。
 - 当前 compiler 只记录 agent patch artifact，不在同一 Python 进程中热加载 patch：`candidate_metrics["l2_agent_patch_runtime_applied"] = false`。真实采用 patch 必须由外层开发循环应用、提交 Git、重启实验。
 
 Inner L2 target-evolution path：
@@ -211,7 +211,7 @@ Inner L2 target-evolution path：
 - Evaluator 还记录最多 8 条按 guard probability 排序的 `near_miss_examples`，即 core guard 拒绝但接近阈值的 predictions，并标记 `would_be_correct`。这些 examples 在 agent-visible `round_state.json` 中只来自 inner validation，用于指导 coverage 改进；selection/promotion 的 near-miss 只属于 outer summary，不写回 workspace。
 - L4 coding agent round 应优先用于 `target/` 中的结构性改动：新特征、模型 family、校准方法、postprocess、abstain 机制和 search-space 设计。超参搜索本身交给 `tools/search_config.py` 或 `--mode local-search`，避免把 GPT-5.5 token 用在手工猜参数上。
 - 每个 job 先评估 unmodified baseline，再评估后续 target rounds。Inner improvement 的排序把 wrong accepts 放在 coverage 之前：提高 raw coverage 但引入 frame exactness regression 不算进步。
-- 默认预算策略是 `inner_patience_rounds=2` 和 `stop_on_selection_gate=true`。连续两轮没有 inner validation improvement 会提前停止；candidate selection gate 通过也会停止。
+- 默认预算策略是 `rounds=12`、`inner_patience_rounds=4`、`local_search_trials=96` 和 `stop_on_selection_gate=false`。连续四轮没有 inner validation improvement 会提前停止；candidate selection gate 通过默认不会停止 inner loop，因为 private selection 只是 outer model-selection 信号，不应限制 target-code exploration。做 smoke 或节省 live LLM cost 时可以显式打开 `--stop-on-selection-gate`。
 - Candidate selection gate 要求 visible inner validation gate 和 private selection holdout gate 同时通过；raw private selection 通过但 visible inner 失败时只能作为诊断信号，不能成为 selected candidate。
 - Summary 同时记录 diagnostic `best_round`、`best_selection_round`、`selection_decision` 和 adoption-oriented `best_adoptable_round` / `adoption_decision`。即使某轮 inner validation 变好，只要 candidate selection/promotion holdout 不过 gate，就不能被视为可采用 target candidate。
 - target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/inner validation 数据推导，不能依赖 MASSIVE 或外部 dataset 知识。是否采用由 holdout/promotion 指标决定，而不是由 dataset-independent core 规则决定。

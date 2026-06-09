@@ -15,6 +15,9 @@ from rich.console import Console
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.compiler.l2_distiller import l2_config_from_settings
 from darjeeling.compiler.l2_target_evolution import (
+    DEFAULT_TARGET_EVOLVE_ROUNDS,
+    DEFAULT_TARGET_INNER_PATIENCE_ROUNDS,
+    DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
     L2TargetEvolutionConfig,
     L2TargetEvolutionMode,
     run_l2_target_evolution,
@@ -650,7 +653,10 @@ def l2_tune(
 def l2_target_evolve(
     traces: Annotated[Path, typer.Option(help="Trace JSONL file with teacher_frame labels.")],
     out_dir: Annotated[Path, typer.Option(help="Output directory for target evolution artifacts.")],
-    rounds: Annotated[int, typer.Option(min=1, help="Inner evolution rounds.")] = 3,
+    rounds: Annotated[
+        int,
+        typer.Option(min=1, help="Maximum inner target-evolution rounds."),
+    ] = DEFAULT_TARGET_EVOLVE_ROUNDS,
     mode: Annotated[
         str,
         typer.Option(help="Evolution mode: dry-run, local-search, or codex-cli."),
@@ -669,11 +675,16 @@ def l2_target_evolve(
             min=0,
             help="Stop after this many non-improving inner-validation rounds; 0 disables.",
         ),
-    ] = 2,
+    ] = DEFAULT_TARGET_INNER_PATIENCE_ROUNDS,
     stop_on_selection_gate: Annotated[
         bool,
-        typer.Option(help="Stop early when the private selection holdout gate passes."),
-    ] = True,
+        typer.Option(
+            help=(
+                "Opt in to stopping when the private selection holdout gate passes; "
+                "default keeps spending the requested inner budget."
+            ),
+        ),
+    ] = False,
     timeout_s: Annotated[
         float | None,
         typer.Option(min=0.1, help="Optional per-agent-round timeout override in seconds."),
@@ -681,7 +692,7 @@ def l2_target_evolve(
     local_search_trials: Annotated[
         int,
         typer.Option(min=1, help="Optuna trials per local-search target round."),
-    ] = 48,
+    ] = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
     local_search_space: Annotated[
         str,
         typer.Option(help="Local search space: compact or wide."),

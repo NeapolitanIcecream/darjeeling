@@ -3,6 +3,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+import darjeeling.compiler.l2_target_evolution as l2_target_evolution
 from darjeeling.cli import app
 from darjeeling.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
@@ -103,6 +104,22 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         for line in path.read_text(encoding="utf-8").splitlines()
     ]
     assert all(row["request_id"] not in round_state_text for row in private_rows)
+    objective = json.loads((workspace / "data" / "objective.json").read_text())
+    program_text = (workspace / "program.md").read_text(encoding="utf-8")
+    assert "candidate_selection_gate" in round_state
+    assert "visible inner validation gate" in round_state["candidate_selection_gate"]
+    assert "early_stop_policy" in round_state
+    assert "does not stop the inner loop" in round_state["early_stop_policy"]
+    assert "candidate_selection" in objective["gates"]
+    assert any(
+        "near_miss_examples" in strategy
+        for strategy in objective["allowed_strategies"]
+    )
+    assert "Private selection" in program_text
+    assert "alone is not success" in program_text
+    assert "outer selection signal" in program_text
+    assert "inner-loop early-stop signal" in program_text
+    assert "near_miss_examples" in program_text
 
 
 def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Path) -> None:
@@ -164,6 +181,66 @@ def test_l2_target_evolution_stops_after_inner_patience(tmp_path: Path) -> None:
     assert summary["rounds"][0]["inner_improved"] is False
     assert summary["rounds"][0]["passes_private_selection_gate"] is False
     assert summary["rounds"][0]["passes_private_promotion_gate"] is False
+
+
+def test_l2_target_evolution_does_not_stop_on_selection_gate_by_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def metric(split: str) -> dict:
+        return {
+            "split": split,
+            "label": split,
+            "train_size": 1,
+            "validation_size": 1,
+            "evaluated": 1,
+            "accepted": 1,
+            "correct_accepts": 1,
+            "wrong_accepts": 0,
+            "vetoed_accepts": 0,
+            "coverage": 1.0,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+            "passes_gate": True,
+            "config": {},
+            "wrong_examples": [],
+            "veto_examples": [],
+            "near_miss_examples": [],
+        }
+
+    def fake_evaluate_candidate(**kwargs) -> dict:
+        label = kwargs["label"]
+        return {
+            "label": label,
+            "inner_validation": metric("inner_validation"),
+            "selection_holdout": metric("selection_holdout"),
+            "promotion_holdout": metric("promotion_holdout"),
+        }
+
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "_evaluate_target_candidate",
+        fake_evaluate_candidate,
+    )
+
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=3,
+            mode="dry-run",
+            inner_patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    assert summary["rounds_completed"] == 3
+    assert summary["stop_reason"] == "round_budget_exhausted"
+    assert summary["budget_policy"]["stop_on_selection_gate"] is False
+    assert all(
+        round_result["passes_candidate_selection_gate"]
+        for round_result in summary["rounds"]
+    )
 
 
 def test_l2_target_evolution_local_search_uses_visible_workspace_only(
@@ -346,8 +423,8 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
     assert summary["rounds_completed"] == 2
-    assert summary["budget_policy"]["inner_patience_rounds"] == 2
-    assert summary["budget_policy"]["stop_on_selection_gate"] is True
+    assert summary["budget_policy"]["inner_patience_rounds"] == 4
+    assert summary["budget_policy"]["stop_on_selection_gate"] is False
     assert summary["data_split"]["train"] > 0
 
 

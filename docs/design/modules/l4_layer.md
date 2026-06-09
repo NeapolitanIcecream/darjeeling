@@ -158,8 +158,8 @@ Outer/Inner loop 分工：
 - Inner L2 target-evolution loop 在固定 target workspace 内多轮运行：L4 coding agent 改 `target/`，本地 evaluator 训练/验证 L2，直到 inner validation 收敛或预算耗尽。
 - Inner loop 不等待新的 stream prefix，也不把 target-specific code 回写到 Darjeeling core。
 - `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 使用；selection/promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer harness 使用。
-- Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；outer harness 使用 visible inner gate + private selection holdout 做 candidate selection/early stop，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。
-- `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial；`codex-cli` round 才消耗 GPT-5.5 agent budget。默认 `inner_patience_rounds=2`，连续两轮没有 inner validation improvement 就停止；candidate selection gate 通过也会停止。
+- Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；outer harness 使用 visible inner gate + private selection holdout 做 candidate selection，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。Private selection 默认不是 early-stop 信号。
+- `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial；`codex-cli` round 才消耗 GPT-5.5 agent budget。默认 `rounds=12`、`inner_patience_rounds=4`、`local_search_trials=96`；连续四轮没有 inner validation improvement 就停止。`--stop-on-selection-gate` 是显式 opt-in 的 smoke/cost-control 开关。
 - Inner validation improvement 只驱动继续探索；visible inner gate 是 selection 的必要条件，但不是充分条件。Adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 visible inner、private selection 和 private promotion gates 时接受。
 
 职责：
@@ -187,7 +187,7 @@ Prompt/cache 策略：
 - 稳定 prompt 最大化 provider/server-side KV cache 机会，也避免每轮把大量代码或样本直接塞入上下文。
 - 是否读取某个 data file 是 coding agent 的局部决策；harness 只提供可见边界和审计 artifact。
 - Agent objective 必须以 replay/promotion success 为目标；不能为了 raw L2 coverage 牺牲 frame exactness 或 wrong-accept safety。
-- Dataset-specific intent/slot hardcoding 默认不接受，除非有 teacher-visible hard case 支撑，且改动能表达为可复用机制。
+- 在 legacy `candidate/` core-patch path 中，dataset-specific intent/slot hardcoding 默认不接受。新的 target-evolution path 不走这个限制：target-specific code 可以写在 `target/`，但不能进入 Darjeeling core，也不能读取 private holdout。
 
 Agent 可见范围：
 
@@ -227,7 +227,7 @@ Agent 权限：
 - `edge-mvp experiment l2-agent` 会开启 `L2_AGENT_MODE=codex-cli` 和 Optuna tuning，用于真实 L2 patch generation 实验。
 - 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。
 - 已新增 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve`，用于新的 target-dependent inner loop。该路径当前支持 dry-run 多轮、固定 split evaluator 和 target-only code scope；后续应把 Codex 多轮 evolve 作为主线实验入口，而不是继续依赖 outer `compile_every` cadence。
-- `target-evolve` 已加入 baseline-first evaluation、private selection/promotion holdouts、visible objective/round-state files、selection-gate early stop、inner-validation patience stop、explicit adoption decision 和 `local-search` Optuna tuning mode。下一步真实 L4 experiment 应优先走该路径，而不是 legacy `l2_research/candidate` patch harness。
+- `target-evolve` 已加入 baseline-first evaluation、private selection/promotion holdouts、visible objective/round-state files、inner-validation patience stop、explicit selection/adoption decision 和 `local-search` Optuna tuning mode。Private selection 默认只参与最终 candidate selection，不作为 inner-loop early stop；`--stop-on-selection-gate` 仅作为 smoke/cost-control opt-in。下一步真实 L4 experiment 应优先走该路径，而不是 legacy `l2_research/candidate` patch harness。
 - `local-search` 不消耗 LLM tokens；它只优化可见 train/inner validation，并把 best visible config 写入 `target/config.json`。L4 coding agent 应在此基础上改 target-owned code/search-space，而不是手工猜 threshold、ngram 或模型 family。
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
 - Target evaluator 在 visible inner validation 上暴露 `near_miss_examples`，帮助 L4 agent 找到高 guard probability 但被拒绝的 coverage 机会。Private selection/promotion 的 near-miss 只能留在 outer artifact 中用于人类/outer harness 分析，不进入 agent workspace。

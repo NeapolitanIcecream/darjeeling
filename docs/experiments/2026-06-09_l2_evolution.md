@@ -645,3 +645,62 @@ Design correction:
 - This prevents private selection from masking an agent-visible regression and
   keeps the split roles clean: inner validation blocks known visible failures,
   private selection checks transfer, and private promotion remains final proof.
+
+## Budget policy and target-dependence correction
+
+The next design cleanup addressed two methodology issues:
+
+- Target evolution default budget was still smoke-shaped: 3 requested rounds,
+  2 non-improving inner rounds before patience stop, and selection-gate early
+  stop enabled by default.
+- Some text still treated target-specific lexical code as suspicious in the new
+  target workspace, even though `target/` is explicitly target-dependent. The
+  corrected boundary is: Darjeeling core must remain dataset-independent;
+  `target/` may contain visible-data-derived target-specific code, and
+  selection/promotion gates decide whether it is useful.
+
+Implementation changes:
+
+- Default target-evolve budget is now `rounds=12`,
+  `inner_patience_rounds=4`, `local_search_trials=96`.
+- `stop_on_selection_gate` now defaults to `false`. Private selection remains
+  part of outer candidate selection, but it is not an inner-loop early-stop
+  signal unless explicitly opted in for smoke or cost control.
+- Agent-visible `objective.json`, `round_state.json`, and `program.md` now
+  state that candidate selection requires visible inner + private selection,
+  adoption also requires private promotion, and target-specific lexical/state
+  machine logic is allowed under `target/` when derived from visible target data.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-budget-policy-r1 \
+  --max-traces 500
+```
+
+Result:
+
+- Runtime: about 11 seconds.
+- Split: train 300, inner validation 100, private selection 50, private
+  promotion 50.
+- Requested 12 rounds; completed 4 dry-run rounds and stopped by
+  `inner_validation_patience_exhausted`.
+- Budget policy in `summary.json`: `inner_patience_rounds=4`,
+  `stop_on_selection_gate=false`, `local_search_trials=96`,
+  `local_search_space=compact`.
+- Baseline and all dry-run rounds stayed at inner validation 1 accepted /
+  1 correct / 0 wrong; private selection and private promotion stayed at
+  0 accepted.
+- `workspace/l2_target/data/` contains only `train.jsonl`,
+  `inner_validation.jsonl`, `objective.json`, `round_state.json`, and
+  `commands.md`; private holdouts remain outside the agent workspace.
+
+Interpretation:
+
+- This smoke validates the corrected budget/stop semantics but does not improve
+  L2 quality.
+- The next quality-bearing run should spend the larger inner-loop budget on
+  `local-search` and/or GPT-5.5 target-code rounds, not on outer replay
+  generations.

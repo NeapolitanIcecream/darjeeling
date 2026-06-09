@@ -21,18 +21,22 @@ from darjeeling.schemas import Frame, TeacherTrace
 L2TargetEvolutionMode = Literal["dry-run", "codex-cli", "local-search"]
 L2TargetSearchSpace = Literal["compact", "wide"]
 
+DEFAULT_TARGET_EVOLVE_ROUNDS = 12
+DEFAULT_TARGET_LOCAL_SEARCH_TRIALS = 96
+DEFAULT_TARGET_INNER_PATIENCE_ROUNDS = 4
+
 
 @dataclass(frozen=True)
 class L2TargetEvolutionConfig:
     source_repo_dir: Path
     job_dir: Path
-    rounds: int = 3
+    rounds: int = DEFAULT_TARGET_EVOLVE_ROUNDS
     mode: L2TargetEvolutionMode = "dry-run"
     dry_run_patches: tuple[Path, ...] = ()
     codex_command: str = "codex"
     codex_model: str | None = "gpt-5.5"
     timeout_s: float = 7200.0
-    local_search_trials: int = 48
+    local_search_trials: int = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS
     local_search_timeout_s: float | None = None
     local_search_space: L2TargetSearchSpace = "compact"
     sandbox: str = "workspace-write"
@@ -42,8 +46,8 @@ class L2TargetEvolutionConfig:
     ephemeral: bool = True
     min_accepted_accuracy: float = 0.93
     max_wrong_accept_rate: float = 0.05
-    inner_patience_rounds: int = 2
-    stop_on_selection_gate: bool = True
+    inner_patience_rounds: int = DEFAULT_TARGET_INNER_PATIENCE_ROUNDS
+    stop_on_selection_gate: bool = False
 
 
 def run_l2_target_evolution(
@@ -544,6 +548,13 @@ def _write_target_state_files(
             "local_search_timeout_s": config.local_search_timeout_s,
             "local_search_space": config.local_search_space,
         },
+        "candidate_selection_gate": (
+            "visible inner validation gate and private selection holdout gate must both pass"
+        ),
+        "early_stop_policy": (
+            "private selection is evaluated for outer candidate selection, but does not stop "
+            "the inner loop unless stop_on_selection_gate is explicitly enabled"
+        ),
         "baseline_inner_validation": _visible_metric_summary(baseline["inner_validation"]),
         "round_history": [_visible_round_summary(round_result) for round_result in round_results],
         "private_holdout_visibility": (
@@ -568,15 +579,25 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
         "gates": {
             "min_accepted_accuracy": config.min_accepted_accuracy,
             "max_wrong_accept_rate": config.max_wrong_accept_rate,
+            "candidate_selection": (
+                "visible inner validation gate AND private selection holdout gate"
+            ),
+            "adoption": (
+                "visible inner validation gate AND private selection holdout gate "
+                "AND private promotion holdout gate"
+            ),
         },
         "optimization_order": [
             "zero or lower wrong accepts",
+            "visible inner validation gate must pass before candidate selection",
             "accepted accuracy at or above gate",
             "coverage increase only after safety gates",
             "lower latency for equally safe behavior",
         ],
         "invalid_strategies": [
             "raw coverage increase with lower frame exactness",
+            "lowering threshold when visible inner validation gate fails",
+            "treating private selection success alone as candidate success",
             "changes outside target/",
             "using private holdout rows or aggregate feedback",
             "hardcoding MASSIVE-specific behavior from outside visible data",
@@ -587,6 +608,8 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
             "local Optuna/config search over visible train and inner validation only",
             "postprocess_frame fixes that preserve exact frame correctness",
             "accept_prediction veto logic that abstains when uncertain",
+            "near_miss_examples-driven mechanisms that still pass visible inner gate",
+            "target-specific lexical or state-machine rules derived from visible target data",
         ],
     }
 
@@ -616,7 +639,7 @@ def _target_commands_text() -> str:
             "",
             "```bash",
             "uv run --project system/darjeeling python tools/search_config.py \\",
-            "  --trials 48 \\",
+            f"  --trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} \\",
             "  --out runs/local_search.json",
             "```",
             "",
@@ -624,7 +647,11 @@ def _target_commands_text() -> str:
             "",
             "```bash",
             "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=system/darjeeling/src \\",
-            "  python tools/search_config.py --trials 48 --out runs/local_search.json",
+            (
+                "  python tools/search_config.py "
+                f"--trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} "
+                "--out runs/local_search.json"
+            ),
             "```",
             "",
             "Inspect visible workspace context:",
@@ -1145,6 +1172,17 @@ def _target_program_text() -> str:
             "Optimize generalization from the visible train and inner-validation data.",
             "Wrong accepts are worse than abstentions. A raw coverage increase is not",
             "useful if frame exactness or wrong-accept safety gets worse.",
+            "A target round is selectable only if visible inner validation passes",
+            "and the outer private selection holdout passes. Private selection",
+            "alone is not success if visible inner validation has wrong accepts.",
+            "Adoption also requires the private promotion holdout to pass.",
+            "By default, private selection is an outer selection signal, not an",
+            "inner-loop early-stop signal; keep improving target code until the",
+            "round budget or visible inner-validation patience is exhausted.",
+            "Use `near_miss_examples` from visible inner validation to find safe",
+            "coverage opportunities, and use `wrong_examples` / `veto_examples`",
+            "to tighten safety. Do not lower threshold globally unless the visible",
+            "inner gate still passes.",
             "`target.accept_prediction` may veto uncertain guard accepts; it cannot",
             "force accepts that the core guard rejected.",
             "Private selection and promotion holdouts are outside this workspace and",
