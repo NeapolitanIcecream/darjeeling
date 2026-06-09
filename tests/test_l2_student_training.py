@@ -414,7 +414,6 @@ def test_l2_student_layer_reports_intent_support_metadata() -> None:
     assert "predicted_signature_frame_accuracy" in result.metadata
     assert result.metadata["frame_source"] in {"student", "retrieval"}
     assert "retrieval_similarity" in result.metadata
-    assert 0.0 < result.metadata["utterance_length_bucket"] <= 1.0
 
 
 def test_l2_bundle_keeps_legacy_five_feature_guard_compatible() -> None:

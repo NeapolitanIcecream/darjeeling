@@ -79,7 +79,6 @@ class L2Prediction(BaseModel):
     retrieval_similarity: float = 0.0
     retrieval_margin: float = 0.0
     retrieval_intent_matches_student: float = 0.0
-    utterance_length_bucket: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -471,7 +470,6 @@ class L2StudentBundle:
             retrieval,
             frame_source=self.config.frame_source,
         )
-        utterance_length_bucket = _utterance_length_bucket(utterance)
         support = _score_intent_support(
             getattr(self, "intent_support_index", None),
             self.intent_pipeline,
@@ -507,7 +505,6 @@ class L2StudentBundle:
                 and retrieval.frame.intent == student_frame.intent
             ),
             float(frame_source == "retrieval"),
-            utterance_length_bucket,
         )
         features = _match_guard_feature_width(features, self.guard_model)
         guard_probability = float(self.guard_model.predict_proba(features)[0][1])
@@ -539,7 +536,6 @@ class L2StudentBundle:
                 retrieval.frame is not None
                 and retrieval.frame.intent == student_frame.intent
             ),
-            utterance_length_bucket=utterance_length_bucket,
         )
 
     def save(self, path: Path) -> None:
@@ -613,7 +609,6 @@ class L2StudentLayer:
                     "retrieval_intent_matches_student": (
                         prediction.retrieval_intent_matches_student
                     ),
-                    "utterance_length_bucket": prediction.utterance_length_bucket,
                     "accept_threshold": self.bundle.config.accept_threshold,
                     "runtime_enabled": runtime_enabled,
                     "frame_source_config": self.bundle.config.frame_source,
@@ -822,7 +817,6 @@ def train_guard(
             retrieval,
             frame_source=config.frame_source,
         )
-        utterance_length_bucket = _utterance_length_bucket(example.utterance)
         support = _score_intent_support(
             intent_support_index,
             intent_pipeline,
@@ -859,7 +853,6 @@ def train_guard(
                     and retrieval.frame.intent == student_frame.intent
                 ),
                 float(frame_source == "retrieval"),
-                utterance_length_bucket,
             ]
         )
         correct_labels.append(int(predicted_frame == example.teacher_frame))
@@ -894,7 +887,6 @@ def guard_features(
     retrieval_margin: float = 0.0,
     retrieval_intent_matches_student: float = 0.0,
     retrieval_frame_source: float = 0.0,
-    utterance_length_bucket: float = 0.0,
 ) -> np.ndarray:
     return np.asarray(
         [
@@ -919,16 +911,10 @@ def guard_features(
                 retrieval_margin,
                 retrieval_intent_matches_student,
                 retrieval_frame_source,
-                utterance_length_bucket,
             ]
         ],
         dtype=float,
     )
-
-
-def _utterance_length_bucket(utterance: str) -> float:
-    token_count = len(tokenize(utterance))
-    return min(1.0, token_count / 20.0)
 
 
 def _score_intent_support(
