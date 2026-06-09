@@ -32,6 +32,28 @@ def test_l2_tuner_selects_best_config_and_reports_trials() -> None:
     assert any(trial.config == result.best_config for trial in result.trials)
 
 
+def test_l2_tuner_disables_mlp_early_stopping_for_small_samples() -> None:
+    result = tune_l2_student(
+        _teacher_traces(),
+        base_config=L2StudentConfig(min_examples=4, max_iter=100),
+        spec=L2TuneSpec(
+            n_trials=9,
+            validation_fraction=0.25,
+            random_state=17,
+            latency_weight=0.0,
+        ),
+    )
+
+    assert [trial.state for trial in result.trials] == ["COMPLETE"] * 9
+    mlp_configs = [
+        trial.config
+        for trial in result.trials
+        if trial.config is not None and trial.config["intent_model_family"] == "mlp"
+    ]
+    assert mlp_configs
+    assert all(config["mlp_early_stopping"] is False for config in mlp_configs)
+
+
 def test_l2_tune_split_keeps_each_intent_in_train_and_validation() -> None:
     train, validation = split_l2_tune_traces(
         _teacher_traces(),

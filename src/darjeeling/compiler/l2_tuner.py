@@ -86,7 +86,12 @@ def tune_l2_student(
     trial_reports: dict[int, L2TuneTrialReport] = {}
 
     def objective(trial: optuna.Trial) -> float:
-        config = _sample_l2_config(trial, base_config=base_config, spec=spec)
+        config = _sample_l2_config(
+            trial,
+            base_config=base_config,
+            spec=spec,
+            train_size=len(train_examples),
+        )
         try:
             bundle = train_l2_student(train_examples, config)
             unguarded = evaluate_l2_unguarded(bundle, validation_traces)
@@ -214,6 +219,7 @@ def _sample_l2_config(
     *,
     base_config: L2StudentConfig,
     spec: L2TuneSpec,
+    train_size: int,
 ) -> L2StudentConfig:
     intent_model_family = trial.suggest_categorical(
         "intent_model_family",
@@ -241,6 +247,9 @@ def _sample_l2_config(
         "mlp_hidden_layer_sizes",
         ["32", "64", "128", "64,32"] if spec.search_space == "wide" else ["32", "64"],
     )
+    mlp_early_stopping = False
+    if intent_model_family == "mlp" and spec.search_space == "wide" and train_size >= 200:
+        mlp_early_stopping = trial.suggest_categorical("mlp_early_stopping", [False, True])
     return base_config.model_copy(
         update={
             "intent_model_family": intent_model_family,
@@ -251,10 +260,7 @@ def _sample_l2_config(
             "char_ngram_range": (int(char_lower), int(char_upper)),
             "mlp_hidden_layer_sizes": _parse_hidden_layer_sizes(hidden_size_text),
             "mlp_alpha": trial.suggest_float("mlp_alpha", 1e-5, 1e-2, log=True),
-            "mlp_early_stopping": trial.suggest_categorical(
-                "mlp_early_stopping",
-                [False, True],
-            ),
+            "mlp_early_stopping": mlp_early_stopping,
         }
     )
 

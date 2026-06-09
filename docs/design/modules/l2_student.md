@@ -134,6 +134,7 @@ Optuna tuning path：
 - Tuning report 使用 `l2-tune-v1`，记录每个 trial 的 params、最终 `L2StudentConfig`、validation unguarded/guarded metrics 和 p95 latency。
 - Optuna 不能读取 promotion holdout、MASSIVE gold、final eval 或 future stream；它只优化 teacher-visible train window 的内部 validation。
 - `candidate_metrics["l2_tuning"]` 记录 trial 数、best value、best metrics；`artifact_paths["l2_tuning"]` 指向完整 tuning report。
+- Compact search 和小样本窗口默认不启用 MLP `early_stopping`，因为 sklearn 会在过小 validation split 上拒绝训练，浪费 trial budget。
 
 ## MLP evolve path
 
