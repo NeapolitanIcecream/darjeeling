@@ -1074,3 +1074,51 @@ Interpretation:
 - The target-specific lexical/state-machine boundary is now explicit: such code
   is allowed in `target/`; only Darjeeling core must remain
   dataset-independent.
+
+## Target family diagnostics
+
+The next bottleneck was that the workspace only exposed a few `near_miss_examples`.
+That made target evolution too dependent on manual inspection of large trace
+files. The evaluator now emits bounded family-level diagnostics from visible
+inner validation:
+
+- `family_diagnostics` is included in inner validation metrics.
+- `data/target_diagnostics.json` is written into the target workspace.
+- The workspace version is `visible_inner_validation_only`; private selection
+  and promotion holdout diagnostics stay outside the agent workspace.
+- Each family records rejected-correct, vetoed-correct, accepted-wrong,
+  intent-correct-slot-wrong, top predicted intents, and up to three examples per
+  important category.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-diagnostics-smoke-r1 \
+  --budget-profile smoke \
+  --mode dry-run \
+  --max-traces 500
+```
+
+Result:
+
+- Requested/completed rounds: 1 / 1.
+- `budget_policy.profile=smoke`.
+- `target_diagnostics.json` was written under
+  `runs/l2-target-diagnostics-smoke-r1/workspace/l2_target/data/`.
+- Top visible inner-validation opportunity families:
+  - `email_query`: total 5, rejected-correct 2, accepted-wrong 0.
+  - `calendar_query`: total 10, rejected-correct 2, intent-correct-slot-wrong 3.
+  - `audio_volume_up`: total 3, rejected-correct 2, accepted-wrong 0.
+  - `weather_query`: total 7, rejected-correct 1, intent-correct-slot-wrong 4.
+
+Interpretation:
+
+- The diagnostic points to the same narrow families that manual inspection found
+  (`email_query`, `audio_volume_up`), which validates the signal.
+- It also surfaces broader but slot-risky families (`calendar_query`,
+  `weather_query`). Those should be handled with postprocess/abstain design
+  before threshold changes, because slot exactness is the known L2 bottleneck.
+- This improves L4 agent context management: the prompt can stay short while
+  the workspace exposes structured, bounded triage data for Codex to inspect.

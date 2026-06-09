@@ -200,6 +200,7 @@ Inner L2 target-evolution path：
   - `data/inner_validation.jsonl` 可读，用于秒级多轮反馈。
   - `data/objective.json` 可读，定义 gates、优化顺序和无效策略。
   - `data/round_state.json` 可读，只包含 baseline 和历史轮次的 inner validation 聚合，不包含 promotion holdout 聚合。
+  - `data/target_diagnostics.json` 可读，只从 visible inner validation 生成，按 teacher intent family 汇总 rejected-correct、vetoed-correct、accepted-wrong、intent-correct-slot-wrong 和少量高 guard probability 例子，用于选择下一轮 target family。
   - `data/commands.md` 可读，提供本地 evaluate/inspect 命令。
   - selection holdout 和 promotion holdout 不进入 agent workspace，存放在 outer job 的私有目录，只由 outer harness 读取。
   - `tools/evaluate.py` 在固定 split 上训练 core L2 bundle，加载 `target/target_l2.py`，然后评估 inner validation；outer harness 使用同一 evaluator 加载私有 selection/promotion holdout 做 gate。
@@ -209,7 +210,7 @@ Inner L2 target-evolution path：
 - 默认 `compact` search space 只搜索低成本、保守的 `sgd_logreg + token_sgd` 配置和 guard/feature 参数；MLP 与 `slot_model_family=none` 留在 `wide` space 或 L4 agent 明确设计后的实验中，避免默认 tuner 用高成本 trial 或 slotless shortcut 制造 frame exactness 风险。
 - `target/target_l2.py` 暴露 `accept_prediction(...)` veto hook。它只能把 core guard 原本会接收的 prediction 改为 abstain，不能强行接收 core guard 已拒绝的 prediction；metrics 记录 `vetoed_accepts` 和最多 8 条 visible `veto_examples`，让 agent 能区分“安全拒绝”与“过度保守”。
 - `target/target_l2.py` 的 `postprocess_frame(...)` 是 target-code evolution 的主要修复点之一。它可以用 visible target data 推导出的解析逻辑补全缺失 slot 或修正 frame，但仍必须通过 visible inner、private selection 和 private promotion gates；对 slot-missing 问题，优先尝试精确 postprocess，而不是继续降低 threshold。
-- Evaluator 还记录最多 8 条按 guard probability 排序的 `near_miss_examples`，即 core guard 拒绝但接近阈值的 predictions，并标记 `would_be_correct`。这些 examples 在 agent-visible `round_state.json` 中只来自 inner validation，用于指导 coverage 改进；selection/promotion 的 near-miss 只属于 outer summary，不写回 workspace。
+- Evaluator 还记录最多 8 条按 guard probability 排序的 `near_miss_examples`，即 core guard 拒绝但接近阈值的 predictions，并标记 `would_be_correct`。这些 examples 在 agent-visible `round_state.json` 中只来自 inner validation，用于指导 coverage 改进；selection/promotion 的 near-miss 只属于 outer summary，不写回 workspace。由于 8 条样本太薄，workspace 还写入 bounded `target_diagnostics.json`，让 L4 agent 先按 family 选择方向，再按需查看 raw visible rows。
 - L4 coding agent round 应优先用于 `target/` 中的结构性改动：新特征、模型 family、校准方法、postprocess、abstain 机制和 search-space 设计。超参搜索本身交给 `tools/search_config.py` 或 `--mode local-search`，避免把 GPT-5.5 token 用在手工猜参数上。
 - 每个 job 先评估 unmodified baseline，再评估后续 target rounds。Inner improvement 的排序把 wrong accepts 放在 coverage 之前：提高 raw coverage 但引入 frame exactness regression 不算进步。
 - 默认 `standard` 预算策略是 `rounds=12`、`inner_patience_rounds=4`、`local_search_trials=96` 和 `stop_on_selection_gate=false`。连续四轮没有 inner validation improvement 会提前停止；candidate selection gate 通过默认不会停止 inner loop，因为 private selection 只是 outer model-selection 信号，不应限制 target-code exploration。真实固定 snapshot 探索应显式用 `--budget-profile fixed-inner`：默认 `rounds=48`、`inner_patience_rounds=0`、`local_search_trials=256`，让 L4/Optuna 在同一个 target workspace 上充分迭代。做 smoke 或节省 live LLM cost 时使用 `--budget-profile smoke` 或显式打开 `--stop-on-selection-gate`。

@@ -385,6 +385,7 @@ def prepare_l2_target_workspace(
         "visible_state_files": [
             "objective.json",
             "round_state.json",
+            "target_diagnostics.json",
             "commands.md",
         ],
     }
@@ -422,6 +423,7 @@ def evaluate_target_workspace(
     examples: list[dict[str, Any]] = []
     veto_examples: list[dict[str, Any]] = []
     near_miss_examples: list[dict[str, Any]] = []
+    family_stats: dict[str, dict[str, Any]] = {}
     for trace in validation_traces:
         if trace.teacher_frame is None:
             continue
@@ -443,6 +445,14 @@ def evaluate_target_workspace(
             frame=frame,
             metadata=metadata,
             default_accept=default_accept,
+        )
+        _record_family_diagnostic(
+            family_stats,
+            trace=trace,
+            frame=frame,
+            guard_probability=prediction.guard_probability,
+            default_accept=default_accept,
+            should_accept=should_accept,
         )
         if default_accept and not should_accept:
             vetoed_accepts += 1
@@ -509,6 +519,11 @@ def evaluate_target_workspace(
         "wrong_examples": examples,
         "veto_examples": veto_examples,
         "near_miss_examples": _top_guard_examples(near_miss_examples),
+        "family_diagnostics": _family_diagnostics_payload(
+            split=split,
+            validation_size=total,
+            family_stats=family_stats,
+        ),
     }
 
 
@@ -539,6 +554,201 @@ def _evaluate_target_candidate(
         "label": label,
         "inner_validation": inner_result,
         **private_results,
+    }
+
+
+def _record_family_diagnostic(
+    family_stats: dict[str, dict[str, Any]],
+    *,
+    trace: TeacherTrace,
+    frame: Any,
+    guard_probability: float,
+    default_accept: bool,
+    should_accept: bool,
+) -> None:
+    teacher_frame = trace.teacher_frame
+    if teacher_frame is None:
+        return
+    teacher_intent = teacher_frame.intent
+    predicted_intent = frame.intent
+    stats = family_stats.setdefault(
+        teacher_intent,
+        {
+            "teacher_intent": teacher_intent,
+            "total": 0,
+            "accepted_correct": 0,
+            "accepted_wrong": 0,
+            "rejected_correct": 0,
+            "rejected_wrong": 0,
+            "vetoed_correct": 0,
+            "vetoed_wrong": 0,
+            "intent_correct_slot_wrong": 0,
+            "predicted_intents": {},
+            "examples": {
+                "accepted_wrong": [],
+                "rejected_correct": [],
+                "vetoed_correct": [],
+                "intent_correct_slot_wrong": [],
+            },
+        },
+    )
+    stats["total"] += 1
+    stats["predicted_intents"][predicted_intent] = (
+        stats["predicted_intents"].get(predicted_intent, 0) + 1
+    )
+    correct = frame == teacher_frame
+    if predicted_intent == teacher_intent and not correct:
+        stats["intent_correct_slot_wrong"] += 1
+        _append_diagnostic_example(
+            stats["examples"]["intent_correct_slot_wrong"],
+            trace=trace,
+            frame=frame,
+            guard_probability=guard_probability,
+        )
+    if should_accept:
+        if correct:
+            stats["accepted_correct"] += 1
+        else:
+            stats["accepted_wrong"] += 1
+            _append_diagnostic_example(
+                stats["examples"]["accepted_wrong"],
+                trace=trace,
+                frame=frame,
+                guard_probability=guard_probability,
+            )
+        return
+    if default_accept:
+        if correct:
+            stats["vetoed_correct"] += 1
+            _append_diagnostic_example(
+                stats["examples"]["vetoed_correct"],
+                trace=trace,
+                frame=frame,
+                guard_probability=guard_probability,
+            )
+        else:
+            stats["vetoed_wrong"] += 1
+        return
+    if correct:
+        stats["rejected_correct"] += 1
+        _append_diagnostic_example(
+            stats["examples"]["rejected_correct"],
+            trace=trace,
+            frame=frame,
+            guard_probability=guard_probability,
+        )
+    else:
+        stats["rejected_wrong"] += 1
+
+
+def _append_diagnostic_example(
+    examples: list[dict[str, Any]],
+    *,
+    trace: TeacherTrace,
+    frame: Any,
+    guard_probability: float,
+    limit: int = 3,
+) -> None:
+    example = {
+        "request_id": trace.request_id,
+        "utterance": trace.utterance,
+        "teacher_frame": trace.teacher_frame.model_dump(mode="json")
+        if trace.teacher_frame is not None
+        else None,
+        "predicted_frame": frame.model_dump(mode="json"),
+        "guard_probability": guard_probability,
+    }
+    examples.append(example)
+    examples.sort(key=lambda item: float(item["guard_probability"]), reverse=True)
+    del examples[limit:]
+
+
+def _family_diagnostics_payload(
+    *,
+    split: str,
+    validation_size: int,
+    family_stats: dict[str, dict[str, Any]],
+    limit: int = 12,
+) -> dict[str, Any]:
+    families = [_finalize_family_diagnostic(stats) for stats in family_stats.values()]
+    families.sort(
+        key=lambda item: (
+            item["opportunity_score"],
+            item["rejected_correct"],
+            item["vetoed_correct"],
+            -item["accepted_wrong"],
+            item["teacher_intent"],
+        ),
+        reverse=True,
+    )
+    return {
+        "schema_version": "l2-target-family-diagnostics-v1",
+        "split": split,
+        "validation_size": validation_size,
+        "family_limit": limit,
+        "families": families[:limit],
+    }
+
+
+def _finalize_family_diagnostic(stats: dict[str, Any]) -> dict[str, Any]:
+    predicted_intents = sorted(
+        stats["predicted_intents"].items(),
+        key=lambda item: (-int(item[1]), str(item[0])),
+    )[:5]
+    accepted_wrong = int(stats["accepted_wrong"])
+    rejected_correct = int(stats["rejected_correct"])
+    vetoed_correct = int(stats["vetoed_correct"])
+    return {
+        "teacher_intent": stats["teacher_intent"],
+        "total": int(stats["total"]),
+        "accepted_correct": int(stats["accepted_correct"]),
+        "accepted_wrong": accepted_wrong,
+        "rejected_correct": rejected_correct,
+        "rejected_wrong": int(stats["rejected_wrong"]),
+        "vetoed_correct": vetoed_correct,
+        "vetoed_wrong": int(stats["vetoed_wrong"]),
+        "intent_correct_slot_wrong": int(stats["intent_correct_slot_wrong"]),
+        "opportunity_score": rejected_correct + vetoed_correct - (10 * accepted_wrong),
+        "top_predicted_intents": [
+            {"intent": intent, "count": count} for intent, count in predicted_intents
+        ],
+        "examples": stats["examples"],
+    }
+
+
+def _target_diagnostics_payload(
+    *,
+    state_kind: Literal["before_round", "final"],
+    round_index: int,
+    baseline: dict[str, Any],
+    round_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    recent_rounds = round_results[-6:]
+    latest_metric = (
+        recent_rounds[-1]["inner_validation"]
+        if recent_rounds
+        else baseline["inner_validation"]
+    )
+    return {
+        "schema_version": "l2-target-diagnostics-v1",
+        "visibility": "visible_inner_validation_only",
+        "state_kind": state_kind,
+        "next_round": round_index,
+        "round_history_window": "last_6",
+        "baseline_inner_validation": baseline["inner_validation"].get(
+            "family_diagnostics",
+        ),
+        "latest_inner_validation": latest_metric.get("family_diagnostics"),
+        "round_history": [
+            {
+                "round": round_result["round"],
+                "inner_improved": round_result["inner_improved"],
+                "family_diagnostics": round_result["inner_validation"].get(
+                    "family_diagnostics",
+                ),
+            }
+            for round_result in recent_rounds
+        ],
     }
 
 
@@ -586,6 +796,20 @@ def _write_target_state_files(
     )
     (data_dir / "round_state.json").write_text(
         json.dumps(state, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (data_dir / "target_diagnostics.json").write_text(
+        json.dumps(
+            _target_diagnostics_payload(
+                state_kind=state_kind,
+                round_index=round_index,
+                baseline=baseline,
+                round_results=round_results,
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     (data_dir / "commands.md").write_text(_target_commands_text(), encoding="utf-8")
@@ -697,6 +921,12 @@ def _target_commands_text() -> str:
             "python3 tools/inspect_context.py",
             "```",
             "",
+            "Inspect target family diagnostics:",
+            "",
+            "```bash",
+            "python3 -m json.tool data/target_diagnostics.json | head -120",
+            "```",
+            "",
             "Only edit files under `target/`.",
         ]
     )
@@ -728,6 +958,7 @@ def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
         "passes_gate": metric["passes_gate"],
         "veto_examples": metric.get("veto_examples", []),
         "near_miss_examples": metric.get("near_miss_examples", []),
+        "family_diagnostics": metric.get("family_diagnostics"),
     }
 
 
@@ -1202,6 +1433,8 @@ def _target_program_text() -> str:
             "- `data/inner_validation.jsonl` is visible fast feedback data.",
             "- `data/objective.json` defines gates and invalid strategies.",
             "- `data/round_state.json` contains visible inner-validation history.",
+            "- `data/target_diagnostics.json` summarizes visible inner-validation",
+            "  opportunities and risks by teacher intent family.",
             "- `data/commands.md` lists local commands.",
             "- `tools/evaluate.py` trains/evaluates the target code in seconds.",
             "- `tools/search_config.py` runs visible-data Optuna config search.",
@@ -1220,6 +1453,8 @@ def _target_program_text() -> str:
             "coverage opportunities, and use `wrong_examples` / `veto_examples`",
             "to tighten safety. Do not lower threshold globally unless the visible",
             "inner gate still passes.",
+            "Prefer `target_diagnostics.json` for choosing the next family to work on;",
+            "it gives bounded family-level counts without exposing private holdouts.",
             "`target.accept_prediction` may veto uncertain guard accepts; it cannot",
             "force accepts that the core guard rejected.",
             "Private selection and promotion holdouts are outside this workspace and",

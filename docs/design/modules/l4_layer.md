@@ -158,7 +158,7 @@ Outer/Inner loop 分工：
 - Inner L2 target-evolution loop 在固定 target workspace 内多轮运行：L4 coding agent 改 `target/`，本地 evaluator 训练/验证 L2，直到 inner validation 收敛或预算耗尽。
 - Inner loop 不等待新的 stream prefix，也不把 target-specific code 回写到 Darjeeling core。
 - `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 使用；selection/promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer harness 使用。
-- Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；outer harness 使用 visible inner gate + private selection holdout 做 candidate selection，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。Private selection 默认不是 early-stop 信号。
+- Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；`target_diagnostics.json` 只包含 visible inner validation 的 bounded family-level triage；outer harness 使用 visible inner gate + private selection holdout 做 candidate selection，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。Private selection 默认不是 early-stop 信号。
 - `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial；`codex-cli` round 才消耗 GPT-5.5 agent budget。`standard` profile 默认 `rounds=12`、`inner_patience_rounds=4`、`local_search_trials=96`；`fixed-inner` profile 用于真实固定 snapshot 探索，默认 `rounds=48`、`inner_patience_rounds=0`、`local_search_trials=256`。`--stop-on-selection-gate` 是显式 opt-in 的 smoke/cost-control 开关。
 - Inner validation improvement 只驱动继续探索；visible inner gate 是 selection 的必要条件，但不是充分条件。Adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 visible inner、private selection 和 private promotion gates 时接受。
 
@@ -232,7 +232,7 @@ Agent 权限：
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
 - Target workspace 也暴露 `postprocess_frame(...)`。当 visible target data 支持稳定解析时，L4 agent 应优先用 postprocess 补全 slot 或修正 frame；这类 target-specific code 只能留在 `target/`，不能进入 Darjeeling core。
 - Adopted target workspace 通过 `edge-mvp l2 promote-target` 进入 manifest，写入 `l2_student` 和 `l2_target` artifacts。Runtime replay 与 compiler offline replay 都加载 target wrapper，避免 target-loop evaluator 与系统 replay 语义分叉。
-- Target evaluator 在 visible inner validation 上暴露 `near_miss_examples`，帮助 L4 agent 找到高 guard probability 但被拒绝的 coverage 机会。Private selection/promotion 的 near-miss 只能留在 outer artifact 中用于人类/outer harness 分析，不进入 agent workspace。
+- Target evaluator 在 visible inner validation 上暴露 `near_miss_examples`，帮助 L4 agent 找到高 guard probability 但被拒绝的 coverage 机会。它同时写入 `target_diagnostics.json`，按 teacher intent family 汇总 rejected-correct、vetoed-correct、accepted-wrong 和 intent-correct-slot-wrong，避免 agent 只凭 8 条样本或 raw coverage 做选择。Private selection/promotion 的 near-miss 和 family diagnostics 只能留在 outer artifact 中用于人类/outer harness 分析，不进入 agent workspace。
 
 ## Direct API session 策略
 

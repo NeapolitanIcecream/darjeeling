@@ -115,12 +115,20 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "commands.md",
         "objective.json",
         "round_state.json",
+        "target_diagnostics.json",
     }
     assert (workspace / "data" / "objective.json").exists()
+    assert (workspace / "data" / "target_diagnostics.json").exists()
     round_state = json.loads((workspace / "data" / "round_state.json").read_text())
+    target_diagnostics = json.loads(
+        (workspace / "data" / "target_diagnostics.json").read_text()
+    )
     round_state_text = json.dumps(round_state)
+    target_diagnostics_text = json.dumps(target_diagnostics)
     assert "promotion_holdout" not in round_state_text
     assert "selection_holdout" not in round_state_text
+    assert "promotion_holdout" not in target_diagnostics_text
+    assert "selection_holdout" not in target_diagnostics_text
     private_rows = [
         json.loads(line)
         for path in [
@@ -130,6 +138,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         for line in path.read_text(encoding="utf-8").splitlines()
     ]
     assert all(row["request_id"] not in round_state_text for row in private_rows)
+    assert all(row["request_id"] not in target_diagnostics_text for row in private_rows)
     objective = json.loads((workspace / "data" / "objective.json").read_text())
     program_text = (workspace / "program.md").read_text(encoding="utf-8")
     assert "candidate_selection_gate" in round_state
@@ -146,6 +155,16 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "outer selection signal" in program_text
     assert "inner-loop early-stop signal" in program_text
     assert "near_miss_examples" in program_text
+    assert "target_diagnostics.json" in program_text
+    assert target_diagnostics["schema_version"] == "l2-target-diagnostics-v1"
+    assert target_diagnostics["visibility"] == "visible_inner_validation_only"
+    assert target_diagnostics["baseline_inner_validation"]["split"] == "inner_validation"
+    assert "families" in target_diagnostics["baseline_inner_validation"]
+    assert (
+        summary["baseline"]["inner_validation"]["family_diagnostics"]["schema_version"]
+        == "l2-target-family-diagnostics-v1"
+    )
+    assert "family_diagnostics" in round_state["baseline_inner_validation"]
     assert "not a" in program_text
     assert "Darjeeling-core dataset-independence violation" in program_text
 
