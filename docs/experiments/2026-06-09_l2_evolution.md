@@ -1978,15 +1978,44 @@ Outer replay result:
 - Cost per 100 requests improved from `0.217333` to `0.213685`.
 - Decision: promoted, `objective improved within gates`.
 
+10k replay command used the same adopted target, promoted into the existing
+10k tuned parent run:
+
+```bash
+cp -R runs/l2-scale-tuned-10k-r1 \
+  runs/l2-target-local-search-config-safety-veto-outer-10k-r1
+
+uv run edge-mvp l2 promote-target \
+  --target-run runs/l2-target-local-search-config-safety-veto-3k-r3 \
+  --run-dir runs/l2-target-local-search-config-safety-veto-outer-10k-r1
+
+uv run edge-mvp l2 replay-target \
+  --run-dir runs/l2-target-local-search-config-safety-veto-outer-10k-r1 \
+  --traces runs/l2-target-local-search-config-safety-veto-outer-10k-r1/traces.jsonl \
+  --out runs/l2-target-local-search-config-safety-veto-outer-10k-r1/reports/l2_target_outer_replay.json
+```
+
+10k result:
+
+- Baseline: `L0=9878`, `L1=1`, `L2=0`, `L4=121`, frame EM `1.0`.
+- Candidate: `L0=9878`, `L1=1`, `L2=3`, `L4=118`, frame EM `1.0`.
+- L2 accepted accuracy stayed `1.0`; L2 wrong accept rate stayed `0.0`.
+- Cost per 100 requests improved from `0.012100` to `0.0118015`.
+- Decision: not promoted, `objective did not improve`.
+
 Interpretation:
 
 - This is the first broad fixed-inner L2 target candidate in this series that
   passes inner adoption and the formal 3k outer replay gate.
 - The improvement is safe but still small: 11 / 3000 requests moved from L4 to
-  L2. L2 quality remains a bottleneck; the next useful work is to let L4/Codex
-  agent edit `target/` structure using the visible cross-audit and train-audit
-  backlogs, while leaving hyperparameter search to the bounded local-search
-  tool.
+- L2 on the 3k parent, and 3 / 10000 on the 10k parent. On the 10k tuned run,
+  L0 exact cache already covers 98.78%, leaving too little residual traffic for
+  this narrow target to beat the artifact-complexity penalty.
+- L2 quality remains a bottleneck, but the more precise conclusion is that the
+  current target patch is safe and real, yet too narrow to matter once L0 cache
+  coverage is very high. The next useful work is to let L4/Codex agent edit
+  `target/` structure using the visible cross-audit and train-audit backlogs,
+  while leaving hyperparameter search to the bounded local-search tool.
 - The aborted 64-trial run confirms that local-search budget needs explicit
   cost controls. The default top-k/trial budget was reduced; larger searches
   should be explicit experiment choices.
