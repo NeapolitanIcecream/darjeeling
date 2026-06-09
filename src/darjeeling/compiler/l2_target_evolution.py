@@ -840,6 +840,11 @@ def _evaluate_trained_target(
         and accepted_accuracy >= min_accepted_accuracy
         and wrong_accept_rate <= max_wrong_accept_rate
     )
+    family_diagnostics = _family_diagnostics_payload(
+        split=split,
+        validation_size=total,
+        family_stats=family_stats,
+    )
     return {
         "split": split,
         "train_size": train_size,
@@ -856,11 +861,8 @@ def _evaluate_trained_target(
         "wrong_examples": examples,
         "veto_examples": veto_examples,
         "near_miss_examples": _top_guard_examples(near_miss_examples),
-        "family_diagnostics": _family_diagnostics_payload(
-            split=split,
-            validation_size=total,
-            family_stats=family_stats,
-        ),
+        "family_diagnostics": family_diagnostics,
+        "safety_backlog": family_diagnostics["safety_backlog"],
     }
 
 
@@ -1023,6 +1025,11 @@ def _family_diagnostics_payload(
     limit: int = 12,
 ) -> dict[str, Any]:
     families = [_finalize_family_diagnostic(stats) for stats in family_stats.values()]
+    safety_backlog = _safety_backlog_payload(
+        split=split,
+        validation_size=validation_size,
+        families=families,
+    )
     families.sort(
         key=lambda item: (
             item["opportunity_score"],
@@ -1039,6 +1046,7 @@ def _family_diagnostics_payload(
         "validation_size": validation_size,
         "family_limit": limit,
         "families": families[:limit],
+        "safety_backlog": safety_backlog,
     }
 
 
@@ -1068,6 +1076,69 @@ def _finalize_family_diagnostic(stats: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safety_backlog_payload(
+    *,
+    split: str,
+    validation_size: int,
+    families: list[dict[str, Any]],
+    limit: int = 8,
+) -> dict[str, Any]:
+    items = [
+        _safety_backlog_item(family)
+        for family in families
+        if int(family["accepted_wrong"]) > 0
+    ]
+    items.sort(
+        key=lambda item: (
+            int(item["accepted_wrong"]),
+            float(item["wrong_accept_share"]),
+            int(item["intent_correct_slot_wrong"]),
+            float(item["max_wrong_guard_probability"]),
+            item["teacher_intent"],
+        ),
+        reverse=True,
+    )
+    return {
+        "schema_version": "l2-target-safety-backlog-v1",
+        "split": split,
+        "validation_size": validation_size,
+        "visibility": "visible_validation_only",
+        "priority": "fix_visible_accepted_wrong_before_coverage_expansion",
+        "item_limit": limit,
+        "items": items[:limit],
+        "empty_reason": None
+        if items
+        else "no_visible_accepted_wrong_families",
+    }
+
+
+def _safety_backlog_item(family: dict[str, Any]) -> dict[str, Any]:
+    accepted_wrong = int(family["accepted_wrong"])
+    accepted_correct = int(family["accepted_correct"])
+    accepted_total = accepted_wrong + accepted_correct
+    wrong_examples = family["examples"].get("accepted_wrong", [])
+    max_wrong_guard = max(
+        (float(example["guard_probability"]) for example in wrong_examples),
+        default=0.0,
+    )
+    return {
+        "teacher_intent": family["teacher_intent"],
+        "total": int(family["total"]),
+        "accepted_correct": accepted_correct,
+        "accepted_wrong": accepted_wrong,
+        "wrong_accept_share": accepted_wrong / accepted_total
+        if accepted_total
+        else 0.0,
+        "intent_correct_slot_wrong": int(family["intent_correct_slot_wrong"]),
+        "max_wrong_guard_probability": max_wrong_guard,
+        "top_predicted_intents": family["top_predicted_intents"],
+        "wrong_examples": wrong_examples,
+        "recommended_action": (
+            "tighten accept_prediction or add exact postprocess before any coverage expansion"
+        ),
+    }
+
+
 def _target_diagnostics_payload(
     *,
     state_kind: Literal["before_round", "final"],
@@ -1090,7 +1161,9 @@ def _target_diagnostics_payload(
         "baseline_inner_validation": baseline["inner_validation"].get(
             "family_diagnostics",
         ),
+        "baseline_safety_backlog": _metric_safety_backlog(baseline["inner_validation"]),
         "latest_inner_validation": latest_metric.get("family_diagnostics"),
+        "latest_safety_backlog": _metric_safety_backlog(latest_metric),
         "round_history": [
             {
                 "round": round_result["round"],
@@ -1098,10 +1171,24 @@ def _target_diagnostics_payload(
                 "family_diagnostics": round_result["inner_validation"].get(
                     "family_diagnostics",
                 ),
+                "safety_backlog": _metric_safety_backlog(
+                    round_result["inner_validation"],
+                ),
             }
             for round_result in recent_rounds
         ],
     }
+
+
+def _metric_safety_backlog(metric: dict[str, Any]) -> dict[str, Any] | None:
+    safety_backlog = metric.get("safety_backlog")
+    if isinstance(safety_backlog, dict):
+        return safety_backlog
+    family_diagnostics = metric.get("family_diagnostics")
+    if not isinstance(family_diagnostics, dict):
+        return None
+    nested_backlog = family_diagnostics.get("safety_backlog")
+    return nested_backlog if isinstance(nested_backlog, dict) else None
 
 
 def _write_target_state_files(
@@ -1242,6 +1329,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
         "workspace_scope": _workspace_scope_policy_payload(),
         "optimization_order": [
             "zero or lower wrong accepts",
+            "clear visible safety_backlog accepted-wrong families before coverage work",
             "visible validation gate must pass before candidate selection",
             "accepted accuracy at or above gate",
             "coverage increase only after safety gates",
@@ -1250,6 +1338,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
         "invalid_strategies": [
             "raw coverage increase with lower frame exactness",
             "lowering threshold when visible validation gate fails",
+            "expanding near-miss coverage while safety_backlog has accepted-wrong items",
             "treating private selection success alone as candidate success",
             "candidate code changes outside target/",
             "modifying data/, tools/, system/darjeeling/, or program.md",
@@ -1425,6 +1514,18 @@ def _target_commands_text() -> str:
             "python3 -m json.tool data/target_diagnostics.json | head -120",
             "```",
             "",
+            "Inspect visible safety backlog first:",
+            "",
+            "```bash",
+            (
+                "python3 - <<'PY'\n"
+                "import json\n"
+                "d=json.load(open('data/target_diagnostics.json'))\n"
+                "print(json.dumps(d.get('latest_safety_backlog'), indent=2))\n"
+                "PY"
+            ),
+            "```",
+            "",
             "Only edit candidate code under `target/`. `runs/` is scratch output.",
             "Do not modify `data/`, `tools/`, `system/darjeeling/`, or `program.md`.",
         ]
@@ -1458,6 +1559,7 @@ def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
         "veto_examples": metric.get("veto_examples", []),
         "near_miss_examples": metric.get("near_miss_examples", []),
         "family_diagnostics": metric.get("family_diagnostics"),
+        "safety_backlog": _metric_safety_backlog(metric),
     }
 
 
@@ -1943,6 +2045,8 @@ def _target_program_text() -> str:
             "- `data/round_state.json` contains visible validation history.",
             "- `data/target_diagnostics.json` summarizes visible validation",
             "  opportunities and risks by teacher intent family.",
+            "  Read `latest_safety_backlog` first; if it has items, clear those",
+            "  visible accepted-wrong families before working on near-miss coverage.",
             "- `data/commands.md` lists local commands.",
             "- `tools/evaluate.py` trains/evaluates the target code in seconds.",
             "- `tools/search_config.py` runs visible-data Optuna config search.",
@@ -1963,6 +2067,9 @@ def _target_program_text() -> str:
             "inner gate still passes.",
             "Prefer `target_diagnostics.json` for choosing the next family to work on;",
             "it gives bounded family-level counts without exposing private holdouts.",
+            "When `latest_safety_backlog.items` is non-empty, fix those visible",
+            "accepted-wrong families before coverage expansion or broad threshold",
+            "changes.",
             "`target.accept_prediction` may veto uncertain guard accepts; it cannot",
             "force accepts that the core guard rejected.",
             "Private selection and promotion holdouts are outside this workspace and",

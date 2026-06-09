@@ -1560,3 +1560,54 @@ Interpretation:
   still has multiple high-confidence slot/intent errors.
 - Next L2 quality work should use 5-fold fixed-inner diagnostics by default and
   design broader abstain/postprocess logic from visible examples only.
+
+## Visible safety backlog for target agent
+
+The 5-fold run showed that visible accepted-wrong examples existed, but
+`target_diagnostics.json` primarily ranked families by coverage opportunity.
+That made the next target-agent step ambiguous: an agent could work on
+near-miss coverage while visible wrong accepts were still present.
+
+Design change:
+
+- `family_diagnostics` now includes `safety_backlog`.
+- `target_diagnostics.json` exposes `baseline_safety_backlog` and
+  `latest_safety_backlog`.
+- `round_state.json` metric summaries include `safety_backlog`.
+- The backlog is derived only from agent-visible validation folds, and includes
+  only visible accepted-wrong families.
+- Agent instructions now say to clear `latest_safety_backlog` before broad
+  threshold lowering or near-miss coverage expansion.
+
+Validation command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-safety-backlog-currency-3k-r1 \
+  --budget-profile fixed-inner \
+  --rounds 1 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --dry-run-patch docs/experiments/patches/l2_target_currency_slotless_veto_r1.patch
+```
+
+Result:
+
+- Fixed-inner default used 5 visible folds: 192 / 187 / 182 / 175 / 166.
+- Visible aggregate remained unsafe: 32 accepted / 18 correct / 14 wrong.
+- Selection diagnosis remained `visible_validation_gate_failed`.
+- `latest_safety_backlog` was visible-only and ranked these accepted-wrong
+  families first: `transport_traffic`, `general_joke`, `general_quirky`,
+  `calendar_set`.
+- `round_state.json` and `target_diagnostics.json` did not contain
+  `selection_holdout` or `promotion_holdout`.
+
+Interpretation:
+
+- This does not improve L2 quality by itself; it improves the L4 agent feedback
+  surface.
+- The older currency veto patch is no longer the right next target for this
+  fixed 5-fold snapshot. The next L4 coding-agent round should start from the
+  visible safety backlog, especially high-confidence slotless
+  `transport_traffic` and slot-missing `general_joke`, before any coverage work.

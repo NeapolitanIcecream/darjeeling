@@ -187,13 +187,25 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "inner-loop early-stop signal" in program_text
     assert "near_miss_examples" in program_text
     assert "target_diagnostics.json" in program_text
+    assert "latest_safety_backlog" in program_text
     assert target_diagnostics["schema_version"] == "l2-target-diagnostics-v1"
     assert target_diagnostics["visibility"] == "visible_validation_only"
     assert target_diagnostics["baseline_inner_validation"]["split"] == "inner_validation"
     assert "families" in target_diagnostics["baseline_inner_validation"]
+    assert target_diagnostics["baseline_safety_backlog"]["schema_version"] == (
+        "l2-target-safety-backlog-v1"
+    )
+    assert target_diagnostics["baseline_safety_backlog"]["visibility"] == (
+        "visible_validation_only"
+    )
+    assert "latest_safety_backlog" in target_diagnostics
     assert (
         summary["baseline"]["inner_validation"]["family_diagnostics"]["schema_version"]
         == "l2-target-family-diagnostics-v1"
+    )
+    assert (
+        summary["baseline"]["inner_validation"]["safety_backlog"]["schema_version"]
+        == "l2-target-safety-backlog-v1"
     )
     assert summary["agent_budget"]["mode"] == "dry-run"
     assert summary["agent_budget"]["applies_to_mode"] is False
@@ -205,10 +217,82 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "outer_summary_only_not_agent_workspace"
     )
     assert "family_diagnostics" in round_state["baseline_inner_validation"]
+    assert "safety_backlog" in round_state["baseline_inner_validation"]
     assert round_state["agent_budget"]["mode"] == "dry-run"
     assert "private_holdout_evidence" not in round_state
     assert "not a" in program_text
     assert "Darjeeling-core dataset-independence violation" in program_text
+
+
+def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
+    risky_example = {
+        "request_id": "visible-risk-1",
+        "utterance": "tell me about the latest media trends",
+        "teacher_frame": {"intent": "general_quirky", "slots": {}},
+        "predicted_frame": {
+            "intent": "general_quirky",
+            "slots": {"date": "the latest media trends"},
+        },
+        "guard_probability": 0.99,
+    }
+    family_stats = {
+        "coverage_opportunity": {
+            "teacher_intent": "calendar_query",
+            "total": 20,
+            "accepted_correct": 0,
+            "accepted_wrong": 0,
+            "rejected_correct": 12,
+            "rejected_wrong": 8,
+            "vetoed_correct": 0,
+            "vetoed_wrong": 0,
+            "intent_correct_slot_wrong": 5,
+            "predicted_intents": {"calendar_query": 20},
+            "examples": {
+                "accepted_wrong": [],
+                "rejected_correct": [],
+                "vetoed_correct": [],
+                "intent_correct_slot_wrong": [],
+            },
+        },
+        "accepted_wrong_risk": {
+            "teacher_intent": "general_quirky",
+            "total": 5,
+            "accepted_correct": 1,
+            "accepted_wrong": 2,
+            "rejected_correct": 0,
+            "rejected_wrong": 2,
+            "vetoed_correct": 0,
+            "vetoed_wrong": 0,
+            "intent_correct_slot_wrong": 2,
+            "predicted_intents": {"general_quirky": 5},
+            "examples": {
+                "accepted_wrong": [risky_example],
+                "rejected_correct": [],
+                "vetoed_correct": [],
+                "intent_correct_slot_wrong": [risky_example],
+            },
+        },
+    }
+
+    payload = l2_target_evolution._family_diagnostics_payload(
+        split="visible_validation",
+        validation_size=25,
+        family_stats=family_stats,
+    )
+
+    safety_backlog = payload["safety_backlog"]
+    assert safety_backlog["schema_version"] == "l2-target-safety-backlog-v1"
+    assert safety_backlog["priority"] == (
+        "fix_visible_accepted_wrong_before_coverage_expansion"
+    )
+    assert safety_backlog["items"][0]["teacher_intent"] == "general_quirky"
+    assert safety_backlog["items"][0]["accepted_wrong"] == 2
+    assert safety_backlog["items"][0]["wrong_examples"] == [risky_example]
+    assert "postprocess" in safety_backlog["items"][0]["recommended_action"]
+    assert all(
+        item["teacher_intent"] != "calendar_query"
+        for item in safety_backlog["items"]
+    )
 
 
 def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
