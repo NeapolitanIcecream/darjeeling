@@ -653,7 +653,7 @@ def l2_target_evolve(
     rounds: Annotated[int, typer.Option(min=1, help="Inner evolution rounds.")] = 3,
     mode: Annotated[
         str,
-        typer.Option(help="Evolution mode: dry-run or codex-cli."),
+        typer.Option(help="Evolution mode: dry-run, local-search, or codex-cli."),
     ] = "dry-run",
     dry_run_patch: Annotated[
         list[Path] | None,
@@ -678,12 +678,26 @@ def l2_target_evolve(
         float | None,
         typer.Option(min=0.1, help="Optional per-agent-round timeout override in seconds."),
     ] = None,
+    local_search_trials: Annotated[
+        int,
+        typer.Option(min=1, help="Optuna trials per local-search target round."),
+    ] = 48,
+    local_search_space: Annotated[
+        str,
+        typer.Option(help="Local search space: compact or wide."),
+    ] = "compact",
+    local_search_timeout_s: Annotated[
+        float | None,
+        typer.Option(min=0.1, help="Optional Optuna timeout per local-search target round."),
+    ] = None,
 ) -> None:
     """Run an inner target-dependent L2 evolution loop over fixed trace splits."""
 
-    if mode not in {"dry-run", "codex-cli"}:
-        raise typer.BadParameter("mode must be dry-run or codex-cli")
-    evolution_mode: L2TargetEvolutionMode = "codex-cli" if mode == "codex-cli" else "dry-run"
+    if mode not in {"dry-run", "local-search", "codex-cli"}:
+        raise typer.BadParameter("mode must be dry-run, local-search, or codex-cli")
+    if local_search_space not in {"compact", "wide"}:
+        raise typer.BadParameter("local_search_space must be compact or wide")
+    evolution_mode: L2TargetEvolutionMode = mode  # type: ignore[assignment]
     settings = _load_cli_settings()
     trace_records = read_traces(traces)
     if max_traces is not None:
@@ -698,6 +712,9 @@ def l2_target_evolve(
             codex_command=settings.l2_agent_codex_command,
             codex_model=settings.l2_agent_model,
             timeout_s=timeout_s if timeout_s is not None else settings.l2_agent_timeout_s,
+            local_search_trials=local_search_trials,
+            local_search_space=local_search_space,  # type: ignore[arg-type]
+            local_search_timeout_s=local_search_timeout_s,
             sandbox=settings.l2_agent_sandbox,
             approval_policy=settings.l2_agent_approval_policy,
             ignore_user_config=settings.l2_agent_ignore_user_config,

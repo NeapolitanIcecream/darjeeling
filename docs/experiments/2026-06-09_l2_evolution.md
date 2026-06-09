@@ -365,3 +365,87 @@ Interpretation:
   `tools/inspect_context.py` now runs with plain `python3` and no project env.
   `tools/evaluate.py` still requires either `uv --project system/darjeeling` or
   an already-active Python >=3.11 environment with dependencies.
+
+## Target local-search tuning smoke
+
+The next design iteration added a non-LLM `local-search` mode to
+`edge-mvp l2 target-evolve`. It runs Optuna over target-owned
+`L2StudentConfig` overrides using only visible `train` and `inner_validation`,
+writes the selected visible config to `target/config.json`, and then lets the
+outer harness privately evaluate selection/promotion holdouts.
+
+First run:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-local-search-r1 \
+  --rounds 1 \
+  --mode local-search \
+  --max-traces 500 \
+  --local-search-trials 48 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Split: train 300, inner validation 100, selection holdout 50, promotion
+  holdout 50.
+- Local-search completed 48/48 trials without LLM calls.
+- Baseline inner validation: 1 accepted / 1 correct / 0 wrong.
+- Best visible inner validation: 4 accepted / 4 correct / 0 wrong.
+- Private selection holdout: 0 accepted.
+- Private promotion holdout: 1 accepted / 0 correct / 1 wrong.
+- The selected config used `frame_source=student`, `slot_model_family=none`,
+  `accept_threshold=0.90`, and reproduced the known `email_query` missing
+  `person` slot regression.
+
+Design correction from this run:
+
+- Default `compact` local-search was too permissive. It allowed
+  `slot_model_family=none`, which is a cheap slotless shortcut that can look
+  safe on visible inner validation but fail frame exactness on private traffic.
+- It also sampled many MLP trials, making a 48-trial smoke much slower than the
+  intended cheap path.
+- `compact` was tightened to low-cost, conservative `sgd_logreg + token_sgd`.
+  MLP and `slot_model_family=none` remain available only in `wide` search or
+  after an explicit L4 target-code/search-space design decision.
+
+Second run after tightening `compact`:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-local-search-r2 \
+  --rounds 1 \
+  --mode local-search \
+  --max-traces 500 \
+  --local-search-trials 48 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Runtime: about 33 seconds for 48 local-search trials on 500 trace rows.
+- Local-search completed 48/48 trials and did not use LLM tokens.
+- Baseline inner validation: 1 accepted / 1 correct / 0 wrong.
+- Best visible inner validation: 2 accepted / 2 correct / 0 wrong.
+- Private selection holdout: 0 accepted.
+- Private promotion holdout: 0 accepted.
+- `selection_decision.selected=false` and `adoption_decision.adopted=false`.
+
+Interpretation:
+
+- The local-search path now exercises many cheap target trials without coupling
+  L2 evolve rounds to replay/sample collection or GPT-5.5 agent calls.
+- The conservative compact space avoided the previously observed private wrong
+  accept, but it still did not produce private selection coverage.
+- Generated `tools/search_config.py` was verified from the target workspace. The
+  `uv --project system/darjeeling` path works, but first use creates a local
+  venv and is not a lightweight startup path; the generated command guide now
+  also documents a `PYTHONPATH=system/darjeeling/src python ...` fallback when
+  dependencies are already active.
+- The remaining L2 quality bottleneck is not simple hyperparameter search. The
+  next quality-bearing iteration should use L4 target-code evolution to improve
+  slot/frame exactness or calibration/search-space design, then call
+  `tools/search_config.py` for local tuning inside that target workspace.

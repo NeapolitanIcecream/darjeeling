@@ -18,7 +18,8 @@ from darjeeling.layers.l2_student import (
 )
 from darjeeling.schemas import Frame, TeacherTrace
 
-L2TargetEvolutionMode = Literal["dry-run", "codex-cli"]
+L2TargetEvolutionMode = Literal["dry-run", "codex-cli", "local-search"]
+L2TargetSearchSpace = Literal["compact", "wide"]
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,9 @@ class L2TargetEvolutionConfig:
     codex_command: str = "codex"
     codex_model: str | None = "gpt-5.5"
     timeout_s: float = 7200.0
+    local_search_trials: int = 48
+    local_search_timeout_s: float | None = None
+    local_search_space: L2TargetSearchSpace = "compact"
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
     ignore_user_config: bool = True
@@ -51,6 +55,8 @@ def run_l2_target_evolution(
         raise ValueError("rounds must be at least 1")
     if config.inner_patience_rounds < 0:
         raise ValueError("inner_patience_rounds must be non-negative")
+    if config.local_search_trials < 1:
+        raise ValueError("local_search_trials must be at least 1")
     job_dir = config.job_dir
     workspace_root = job_dir / "workspace" / "l2_target"
     rounds_dir = job_dir / "rounds"
@@ -111,6 +117,7 @@ def run_l2_target_evolution(
             no_inner_improvement_rounds=no_inner_improvement_rounds,
         )
         if config.mode == "dry-run":
+            local_search_report: dict[str, Any] | None = None
             patch_index = round_index - 1
             if patch_index < len(config.dry_run_patches):
                 command_results.append(
@@ -123,6 +130,39 @@ def run_l2_target_evolution(
                 if command_results[-1]["return_code"] != 0:
                     stop_reason = "dry_run_patch_failed"
                     break
+        elif config.mode == "local-search":
+            search_report_path = rounds_dir / f"round_{round_index:03d}_local_search.json"
+            try:
+                local_search_report = run_local_target_search(
+                    workspace_root=workspace_root,
+                    trials=config.local_search_trials,
+                    search_space=config.local_search_space,
+                    timeout_s=config.local_search_timeout_s,
+                    min_accepted_accuracy=config.min_accepted_accuracy,
+                    max_wrong_accept_rate=config.max_wrong_accept_rate,
+                )
+                search_report_path.write_text(
+                    json.dumps(local_search_report, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                command_results.append(
+                    _local_search_command_result(
+                        workspace_root=workspace_root,
+                        round_index=round_index,
+                        report_path=search_report_path,
+                        report=local_search_report,
+                    )
+                )
+            except Exception as exc:
+                command_results.append(
+                    _failed_local_search_command_result(
+                        workspace_root=workspace_root,
+                        round_index=round_index,
+                        error=str(exc),
+                    )
+                )
+                stop_reason = "local_search_failed"
+                break
         else:
             transcript_path = transcript_dir / f"round_{round_index:03d}.jsonl"
             report_path = rounds_dir / f"round_{round_index:03d}_agent_report.md"
@@ -138,6 +178,7 @@ def run_l2_target_evolution(
             if command_results[-1]["return_code"] != 0:
                 stop_reason = "agent_command_failed"
                 break
+            local_search_report = None
 
         candidate = _evaluate_target_candidate(
             workspace_root=workspace_root,
@@ -176,6 +217,10 @@ def run_l2_target_evolution(
             ),
             "promotion_holdout": promotion_result,
         }
+        if local_search_report is not None:
+            round_payload["local_search"] = _visible_local_search_summary(
+                local_search_report,
+            )
         (rounds_dir / f"round_{round_index:03d}.json").write_text(
             json.dumps(round_payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -212,6 +257,9 @@ def run_l2_target_evolution(
         "budget_policy": {
             "inner_patience_rounds": config.inner_patience_rounds,
             "stop_on_selection_gate": config.stop_on_selection_gate,
+            "local_search_trials": config.local_search_trials,
+            "local_search_timeout_s": config.local_search_timeout_s,
+            "local_search_space": config.local_search_space,
         },
         "workspace": str(workspace_root),
         "data_split": {key: len(value) for key, value in split.items()},
@@ -279,6 +327,10 @@ def prepare_l2_target_workspace(
     (workspace_root / "program.md").write_text(_target_program_text(), encoding="utf-8")
     (workspace_root / "tools" / "evaluate.py").write_text(
         _evaluate_tool_text(),
+        encoding="utf-8",
+    )
+    (workspace_root / "tools" / "search_config.py").write_text(
+        _search_config_tool_text(),
         encoding="utf-8",
     )
     (workspace_root / "tools" / "inspect_context.py").write_text(
@@ -440,6 +492,9 @@ def _write_target_state_files(
         "budget_policy": {
             "inner_patience_rounds": config.inner_patience_rounds,
             "stop_on_selection_gate": config.stop_on_selection_gate,
+            "local_search_trials": config.local_search_trials,
+            "local_search_timeout_s": config.local_search_timeout_s,
+            "local_search_space": config.local_search_space,
         },
         "baseline_inner_validation": _visible_metric_summary(baseline["inner_validation"]),
         "round_history": [_visible_round_summary(round_result) for round_result in round_results],
@@ -481,6 +536,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
         "allowed_strategies": [
             "target-dependent code derived from visible train/inner validation files",
             "config_overrides for bounded L2StudentConfig parameters",
+            "local Optuna/config search over visible train and inner validation only",
             "postprocess_frame fixes that preserve exact frame correctness",
             "mechanisms that abstain when uncertain",
         ],
@@ -506,6 +562,21 @@ def _target_commands_text() -> str:
             "```bash",
             "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=system/darjeeling/src \\",
             "  python tools/evaluate.py --split inner_validation --out runs/inner_validation.json",
+            "```",
+            "",
+            "Run local Optuna config search on visible train/inner validation only:",
+            "",
+            "```bash",
+            "uv run --project system/darjeeling python tools/search_config.py \\",
+            "  --trials 48 \\",
+            "  --out runs/local_search.json",
+            "```",
+            "",
+            "If Darjeeling dependencies are already active, avoid a nested uv env:",
+            "",
+            "```bash",
+            "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=system/darjeeling/src \\",
+            "  python tools/search_config.py --trials 48 --out runs/local_search.json",
             "```",
             "",
             "Inspect visible workspace context:",
@@ -599,6 +670,333 @@ def evaluate_target_workspace_cli(argv: list[str] | None = None) -> int:
     return 0
 
 
+def run_local_target_search(
+    *,
+    workspace_root: Path,
+    trials: int,
+    search_space: L2TargetSearchSpace = "compact",
+    timeout_s: float | None = None,
+    min_accepted_accuracy: float = 0.93,
+    max_wrong_accept_rate: float = 0.05,
+) -> dict[str, Any]:
+    """Tune target-owned L2 config using only visible train/inner validation data."""
+
+    if trials < 1:
+        raise ValueError("trials must be at least 1")
+    if search_space not in {"compact", "wide"}:
+        raise ValueError("search_space must be compact or wide")
+
+    config_path = workspace_root / "target" / "config.json"
+    original_config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else None
+    current_inner = evaluate_target_workspace(
+        workspace_root=workspace_root,
+        split="inner_validation",
+        min_accepted_accuracy=min_accepted_accuracy,
+        max_wrong_accept_rate=max_wrong_accept_rate,
+    )
+    current_config = L2StudentConfig(**current_inner["config"])
+
+    import optuna
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    trial_reports: dict[int, dict[str, Any]] = {}
+
+    def objective(trial: Any) -> float:
+        candidate_config = _sample_local_search_config(
+            trial,
+            base_config=current_config,
+            search_space=search_space,
+        )
+        _write_target_config_json(config_path, candidate_config)
+        try:
+            metric = evaluate_target_workspace(
+                workspace_root=workspace_root,
+                split="inner_validation",
+                min_accepted_accuracy=min_accepted_accuracy,
+                max_wrong_accept_rate=max_wrong_accept_rate,
+            )
+            value = _local_search_objective_value(metric)
+            trial_reports[trial.number] = {
+                "number": trial.number,
+                "state": "COMPLETE",
+                "value": value,
+                "params": dict(trial.params),
+                "config": candidate_config.model_dump(mode="json"),
+                "inner_validation": _visible_metric_summary(metric),
+            }
+            return value
+        except Exception as exc:
+            trial_reports[trial.number] = {
+                "number": trial.number,
+                "state": "FAIL",
+                "value": -1_000_000.0,
+                "params": dict(trial.params),
+                "config": candidate_config.model_dump(mode="json"),
+                "error": str(exc),
+            }
+            return -1_000_000.0
+
+    try:
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=current_config.random_state),
+        )
+        study.optimize(objective, n_trials=trials, timeout=timeout_s)
+        reports = [
+            trial_reports.get(
+                trial.number,
+                {
+                    "number": trial.number,
+                    "state": trial.state.name,
+                    "value": trial.value,
+                    "params": dict(trial.params),
+                },
+            )
+            for trial in study.trials
+        ]
+        completed = [
+            report
+            for report in reports
+            if (
+                report.get("state") == "COMPLETE"
+                and report.get("config") is not None
+                and report.get("inner_validation") is not None
+            )
+        ]
+        best_report = max(
+            completed,
+            key=lambda report: (
+                _inner_score(report["inner_validation"]),
+                float(report["value"] or -1_000_000.0),
+            ),
+            default=None,
+        )
+        applied = False
+        applied_reason = "no completed local-search trial"
+        if best_report is not None:
+            best_inner = best_report["inner_validation"]
+            if _inner_score(best_inner) > _inner_score(current_inner):
+                _write_target_config_json(
+                    config_path,
+                    L2StudentConfig(**best_report["config"]),
+                )
+                applied = True
+                applied_reason = "best visible inner-validation config improved current target"
+            else:
+                _restore_target_config_json(config_path, original_config_text)
+                applied_reason = (
+                    "best visible inner-validation config did not improve current target"
+                )
+        else:
+            _restore_target_config_json(config_path, original_config_text)
+        return {
+            "schema_version": "l2-target-local-search-v1",
+            "search_space": search_space,
+            "trials_requested": trials,
+            "trials_completed": len(completed),
+            "timeout_s": timeout_s,
+            "current_inner_validation": _visible_metric_summary(current_inner),
+            "best_trial_number": best_report["number"] if best_report is not None else None,
+            "best_value": best_report["value"] if best_report is not None else None,
+            "best_config": best_report["config"] if best_report is not None else None,
+            "best_inner_validation": (
+                best_report["inner_validation"] if best_report is not None else None
+            ),
+            "applied": applied,
+            "applied_reason": applied_reason,
+            "private_holdout_visibility": (
+                "local search used only visible train and inner_validation data"
+            ),
+            "trials": reports,
+        }
+    except Exception:
+        _restore_target_config_json(config_path, original_config_text)
+        raise
+
+
+def local_search_target_workspace_cli(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    parser.add_argument("--trials", type=int, default=48)
+    parser.add_argument("--search-space", choices=["compact", "wide"], default="compact")
+    parser.add_argument("--timeout-s", type=float, default=None)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--min-accepted-accuracy", type=float, default=0.93)
+    parser.add_argument("--max-wrong-accept-rate", type=float, default=0.05)
+    args = parser.parse_args(argv)
+    payload = run_local_target_search(
+        workspace_root=args.workspace,
+        trials=args.trials,
+        search_space=args.search_space,
+        timeout_s=args.timeout_s,
+        min_accepted_accuracy=args.min_accepted_accuracy,
+        max_wrong_accept_rate=args.max_wrong_accept_rate,
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+def _sample_local_search_config(
+    trial: Any,
+    *,
+    base_config: L2StudentConfig,
+    search_space: L2TargetSearchSpace,
+) -> L2StudentConfig:
+    max_features_choices = (
+        [1_000, 3_000, 5_000, 10_000]
+        if search_space == "compact"
+        else [1_000, 3_000, 5_000, 10_000, 25_000, 50_000]
+    )
+    max_iter_choices = [200, 300, 500] if search_space == "compact" else [200, 300, 500, 1000]
+    threshold_choices = (
+        [0.70, 0.80, 0.86, 0.90, 0.93, 0.96, 0.98]
+        if search_space == "compact"
+        else [0.50, 0.60, 0.70, 0.80, 0.86, 0.90, 0.93, 0.96, 0.98]
+    )
+    intent_model_family = trial.suggest_categorical(
+        "intent_model_family",
+        ["sgd_logreg"] if search_space == "compact" else ["sgd_logreg", "mlp"],
+    )
+    hidden_size_text = trial.suggest_categorical(
+        "mlp_hidden_layer_sizes",
+        ["32", "64", "128", "64,32"] if search_space == "wide" else ["32", "64"],
+    )
+    char_lower = trial.suggest_int("char_ngram_lower", 2, 4)
+    char_upper = trial.suggest_int(
+        "char_ngram_upper",
+        char_lower,
+        6 if search_space == "wide" else 5,
+    )
+    return base_config.model_copy(
+        update={
+            "accept_threshold": trial.suggest_categorical(
+                "accept_threshold",
+                threshold_choices,
+            ),
+            "runtime_enabled": True,
+            "frame_source": trial.suggest_categorical(
+                "frame_source",
+                ["retrieval", "student"],
+            ),
+            "intent_model_family": intent_model_family,
+            "slot_model_family": trial.suggest_categorical(
+                "slot_model_family",
+                ["token_sgd"] if search_space == "compact" else ["token_sgd", "none"],
+            ),
+            "max_features": int(
+                trial.suggest_categorical("max_features", max_features_choices),
+            ),
+            "max_iter": int(trial.suggest_categorical("max_iter", max_iter_choices)),
+            "word_ngram_range": (
+                1,
+                trial.suggest_int(
+                    "word_ngram_upper",
+                    1,
+                    4 if search_space == "wide" else 3,
+                ),
+            ),
+            "char_ngram_range": (char_lower, char_upper),
+            "mlp_hidden_layer_sizes": tuple(
+                int(part) for part in hidden_size_text.split(",") if part
+            ),
+            "mlp_alpha": trial.suggest_float("mlp_alpha", 1e-5, 1e-2, log=True),
+            "mlp_early_stopping": False,
+        },
+    )
+
+
+def _write_target_config_json(path: Path, config: L2StudentConfig) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(config.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _restore_target_config_json(path: Path, original_text: str | None) -> None:
+    if original_text is None:
+        path.unlink(missing_ok=True)
+        return
+    path.write_text(original_text, encoding="utf-8")
+
+
+def _local_search_objective_value(metric: dict[str, Any]) -> float:
+    return (
+        (100.0 if metric["passes_gate"] else 0.0)
+        - 10.0 * float(metric["wrong_accepts"])
+        + 2.0 * float(metric["accepted_accuracy"] or 0.0)
+        + float(metric["coverage"])
+    )
+
+
+def _local_search_command_result(
+    *,
+    workspace_root: Path,
+    round_index: int,
+    report_path: Path,
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "command": [
+            "local-search",
+            "--round",
+            str(round_index),
+            "--trials",
+            str(report["trials_requested"]),
+            "--search-space",
+            str(report["search_space"]),
+        ],
+        "cwd": str(workspace_root),
+        "started_at": datetime.now(UTC).isoformat(),
+        "return_code": 0,
+        "stdout": json.dumps(
+            {
+                "report": str(report_path),
+                "trials_completed": report["trials_completed"],
+                "applied": report["applied"],
+                "best_trial_number": report["best_trial_number"],
+            },
+            sort_keys=True,
+        ),
+        "stderr": "",
+    }
+
+
+def _failed_local_search_command_result(
+    *,
+    workspace_root: Path,
+    round_index: int,
+    error: str,
+) -> dict[str, Any]:
+    return {
+        "command": ["local-search", "--round", str(round_index)],
+        "cwd": str(workspace_root),
+        "started_at": datetime.now(UTC).isoformat(),
+        "return_code": 1,
+        "stdout": "",
+        "stderr": error,
+    }
+
+
+def _visible_local_search_summary(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": report["schema_version"],
+        "search_space": report["search_space"],
+        "trials_requested": report["trials_requested"],
+        "trials_completed": report["trials_completed"],
+        "best_trial_number": report["best_trial_number"],
+        "best_value": report["best_value"],
+        "best_inner_validation": report["best_inner_validation"],
+        "applied": report["applied"],
+        "applied_reason": report["applied_reason"],
+        "private_holdout_visibility": report["private_holdout_visibility"],
+    }
+
+
 def _copy_system_workspace(source_repo_dir: Path, system_repo_dir: Path) -> None:
     if system_repo_dir.exists():
         shutil.rmtree(system_repo_dir)
@@ -628,11 +1026,16 @@ def _copy_system_workspace(source_repo_dir: Path, system_repo_dir: Path) -> None
 def _target_l2_template() -> str:
     return '''from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 
 def config_overrides() -> dict[str, Any]:
     """Return target-specific L2StudentConfig overrides."""
+    config_path = Path(__file__).with_name("config.json")
+    if config_path.exists():
+        return json.loads(config_path.read_text(encoding="utf-8"))
     return {}
 
 
@@ -657,6 +1060,7 @@ def _target_program_text() -> str:
             "",
             "Workspace layout:",
             "- `target/` is editable target-specific L2 code.",
+            "- `target/config.json` is local-search-owned L2StudentConfig overrides.",
             "- `system/darjeeling/` is read-only Darjeeling core/evaluator code.",
             "- `data/train.jsonl` is visible training data.",
             "- `data/inner_validation.jsonl` is visible fast feedback data.",
@@ -664,6 +1068,7 @@ def _target_program_text() -> str:
             "- `data/round_state.json` contains visible inner-validation history.",
             "- `data/commands.md` lists local commands.",
             "- `tools/evaluate.py` trains/evaluates the target code in seconds.",
+            "- `tools/search_config.py` runs visible-data Optuna config search.",
             "",
             "Optimize generalization from the visible train and inner-validation data.",
             "Wrong accepts are worse than abstentions. A raw coverage increase is not",
@@ -675,6 +1080,8 @@ def _target_program_text() -> str:
             "It is acceptable for `target/` to contain target-dependent code derived",
             "from visible train and inner-validation data. Do not hardcode behavior",
             "from MASSIVE or any external dataset knowledge that is not visible here.",
+            "Use local config search for cheap tuning; reserve code edits for changes",
+            "that require target-specific design judgment.",
             "Do not move target-specific code into core.",
         ]
     )
@@ -694,6 +1101,23 @@ from darjeeling.compiler.l2_target_evolution import evaluate_target_workspace_cl
 
 if __name__ == "__main__":
     raise SystemExit(evaluate_target_workspace_cli())
+"""
+
+
+def _search_config_tool_text() -> str:
+    return """from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SYSTEM_SRC = ROOT / "system" / "darjeeling" / "src"
+sys.path.insert(0, str(SYSTEM_SRC))
+
+from darjeeling.compiler.l2_target_evolution import local_search_target_workspace_cli
+
+if __name__ == "__main__":
+    raise SystemExit(local_search_target_workspace_cli())
 """
 
 

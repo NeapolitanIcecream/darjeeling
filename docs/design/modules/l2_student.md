@@ -194,6 +194,7 @@ Inner L2 target-evolution path：
 - Outer Darjeeling loop 负责 teacher-visible data split、workspace/provenance、outer promotion gate 和 core artifact 管理；不承载 target-specific L2 代码。
 - Inner target workspace 使用 `program.md + target/ + system/darjeeling/ + data/ + tools/`：
   - `target/` 是唯一可写 target-dependent L2 runtime code。
+  - `target/config.json` 是 local-search/Optuna 产生的 target-specific `L2StudentConfig` overrides；`target_l2.py` 保留代码入口，避免 tuner 覆盖 agent 写出的 feature/postprocess 逻辑。
   - `system/darjeeling/` 是只读 core/evaluator copy。
   - `data/train.jsonl` 可训练、可读。
   - `data/inner_validation.jsonl` 可读，用于秒级多轮反馈。
@@ -202,12 +203,16 @@ Inner L2 target-evolution path：
   - `data/commands.md` 可读，提供本地 evaluate/inspect 命令。
   - selection holdout 和 promotion holdout 不进入 agent workspace，存放在 outer job 的私有目录，只由 outer harness 读取。
   - `tools/evaluate.py` 在固定 split 上训练 core L2 bundle，加载 `target/target_l2.py`，然后评估 inner validation；outer harness 使用同一 evaluator 加载私有 selection/promotion holdout 做 gate。
+  - `tools/search_config.py` 在可见 train/inner validation 上运行本地 Optuna config search，只写 `target/config.json`，不读取 private holdout。
 - Inner loop 可以在同一批 target data 上连续跑多轮，不再受 `compile_every` 或 replay stream 速度限制；`rounds` 是最大轮数，不是必须烧满的轮数。
+- `local-search` round 是 cheap tuning round，不是 LLM round。它在固定 target data 上跑多次 trial，选择 visible inner validation 更优的配置；若没有超过当前 target，则回滚 `target/config.json`。Outer harness 随后私下评估 selection/promotion holdout，local-search 不能自证 adoption。
+- 默认 `compact` search space 只搜索低成本、保守的 `sgd_logreg + token_sgd` 配置和 guard/feature 参数；MLP 与 `slot_model_family=none` 留在 `wide` space 或 L4 agent 明确设计后的实验中，避免默认 tuner 用高成本 trial 或 slotless shortcut 制造 frame exactness 风险。
+- L4 coding agent round 应优先用于 `target/` 中的结构性改动：新特征、模型 family、校准方法、postprocess、abstain 机制和 search-space 设计。超参搜索本身交给 `tools/search_config.py` 或 `--mode local-search`，避免把 GPT-5.5 token 用在手工猜参数上。
 - 每个 job 先评估 unmodified baseline，再评估后续 target rounds。Inner improvement 的排序把 wrong accepts 放在 coverage 之前：提高 raw coverage 但引入 frame exactness regression 不算进步。
 - 默认预算策略是 `inner_patience_rounds=2` 和 `stop_on_selection_gate=true`。连续两轮没有 inner validation improvement 会提前停止；private selection holdout 通过 gate 也会停止。
 - Summary 同时记录 diagnostic `best_round`、`best_selection_round`、`selection_decision` 和 adoption-oriented `best_adoptable_round` / `adoption_decision`。即使某轮 inner validation 变好，只要 private selection/promotion holdout 不过 gate，就不能被视为可采用 target candidate。
 - target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/inner validation 数据推导，不能依赖 MASSIVE 或外部 dataset 知识。是否采用由 holdout/promotion 指标决定，而不是由 dataset-independent core 规则决定。
-- 当前实现状态：已支持 baseline-first `dry-run`/`codex-cli` 多轮、target workspace evaluator、private holdout gate 和 inner-validation patience stop；`codex-cli` 多轮入口已预留在 harness 中，但尚未作为主实验默认使用。
+- 当前实现状态：已支持 baseline-first `dry-run`/`local-search`/`codex-cli` 多轮、target workspace evaluator、private holdout gate、inner-validation patience stop、visible `tools/search_config.py` 和 local-search trial report；`codex-cli` 多轮入口已预留在 harness 中，但尚未作为主实验默认使用。
 
 Optuna tuning path：
 

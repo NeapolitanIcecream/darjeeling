@@ -159,7 +159,7 @@ Outer/Inner loop 分工：
 - Inner loop 不等待新的 stream prefix，也不把 target-specific code 回写到 Darjeeling core。
 - `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 使用；selection/promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer harness 使用。
 - Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；outer harness 使用 private selection holdout 做 candidate selection/early stop，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。
-- `rounds` 是最大 agent 轮数。默认 `inner_patience_rounds=2`，连续两轮没有 inner validation improvement 就停止，以免无收益地消耗 GPT-5.5 agent budget；private selection gate 通过也会停止。
+- `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial；`codex-cli` round 才消耗 GPT-5.5 agent budget。默认 `inner_patience_rounds=2`，连续两轮没有 inner validation improvement 就停止；private selection gate 通过也会停止。
 - Inner validation improvement 只驱动继续探索；adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 private selection 和 promotion gates 时接受。
 
 职责：
@@ -227,7 +227,8 @@ Agent 权限：
 - `edge-mvp experiment l2-agent` 会开启 `L2_AGENT_MODE=codex-cli` 和 Optuna tuning，用于真实 L2 patch generation 实验。
 - 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。
 - 已新增 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve`，用于新的 target-dependent inner loop。该路径当前支持 dry-run 多轮、固定 split evaluator 和 target-only code scope；后续应把 Codex 多轮 evolve 作为主线实验入口，而不是继续依赖 outer `compile_every` cadence。
-- `target-evolve` 已加入 baseline-first evaluation、private selection/promotion holdouts、visible objective/round-state files、selection-gate early stop、inner-validation patience stop 和 explicit adoption decision。下一步真实 L4 experiment 应优先走该路径，而不是 legacy `l2_research/candidate` patch harness。
+- `target-evolve` 已加入 baseline-first evaluation、private selection/promotion holdouts、visible objective/round-state files、selection-gate early stop、inner-validation patience stop、explicit adoption decision 和 `local-search` Optuna tuning mode。下一步真实 L4 experiment 应优先走该路径，而不是 legacy `l2_research/candidate` patch harness。
+- `local-search` 不消耗 LLM tokens；它只优化可见 train/inner validation，并把 best visible config 写入 `target/config.json`。L4 coding agent 应在此基础上改 target-owned code/search-space，而不是手工猜 threshold、ngram 或模型 family。
 
 ## Direct API session 策略
 

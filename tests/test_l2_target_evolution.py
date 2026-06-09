@@ -99,14 +99,14 @@ def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Pa
                 "--- a/target/target_l2.py",
                 "+++ b/target/target_l2.py",
                 "@@ -3,6 +3,8 @@",
+                " import json",
+                " from pathlib import Path",
                 " from typing import Any",
-                " ",
                 " ",
                 "+TARGET_MARKER = 'patched'",
                 "+",
+                " ",
                 " def config_overrides() -> dict[str, Any]:",
-                "     \"\"\"Return target-specific L2StudentConfig overrides.\"\"\"",
-                "     return {}",
                 "",
             ]
         ),
@@ -151,6 +151,41 @@ def test_l2_target_evolution_stops_after_inner_patience(tmp_path: Path) -> None:
     assert summary["rounds"][0]["passes_private_promotion_gate"] is False
 
 
+def test_l2_target_evolution_local_search_uses_visible_workspace_only(
+    tmp_path: Path,
+) -> None:
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=1,
+            mode="local-search",
+            local_search_trials=2,
+            inner_patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    workspace = tmp_path / "job" / "workspace" / "l2_target"
+    report_path = tmp_path / "job" / "rounds" / "round_001_local_search.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert summary["mode"] == "local-search"
+    assert summary["rounds_completed"] == 1
+    assert summary["rounds"][0]["local_search"]["schema_version"] == (
+        "l2-target-local-search-v1"
+    )
+    assert report["trials_requested"] == 2
+    assert report["private_holdout_visibility"] == (
+        "local search used only visible train and inner_validation data"
+    )
+    assert "selection_holdout" not in report_path.read_text(encoding="utf-8")
+    assert "promotion_holdout" not in report_path.read_text(encoding="utf-8")
+    assert (workspace / "tools" / "search_config.py").exists()
+    assert not (workspace / "data" / "selection_holdout.jsonl").exists()
+    assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
+
+
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     traces_path = tmp_path / "traces.jsonl"
     traces_path.write_text(
@@ -178,3 +213,34 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert summary["budget_policy"]["inner_patience_rounds"] == 2
     assert summary["budget_policy"]["stop_on_selection_gate"] is True
     assert summary["data_split"]["train"] > 0
+
+
+def test_l2_target_evolve_cli_accepts_local_search_mode(tmp_path: Path) -> None:
+    traces_path = tmp_path / "traces.jsonl"
+    traces_path.write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in _traces()),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "target-evolve",
+            "--traces",
+            str(traces_path),
+            "--out-dir",
+            str(tmp_path / "target-run"),
+            "--rounds",
+            "1",
+            "--mode",
+            "local-search",
+            "--local-search-trials",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
+    assert summary["mode"] == "local-search"
+    assert summary["budget_policy"]["local_search_trials"] == 2
