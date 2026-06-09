@@ -236,25 +236,6 @@ def test_l2_slot_patterns_fill_missing_schema_slots() -> None:
     ) == {"definition_word": "hesitant"}
 
 
-def test_l2_slot_patterns_fallback_to_suffix_context() -> None:
-    examples = [
-        L2TrainingExample(
-            utterance="show grocery list",
-            teacher_frame=Frame(intent="lists_query", slots={"list_name": "grocery"}),
-        )
-    ]
-    slots_by_intent = slots_by_intent_from_examples(examples)
-    patterns = slot_patterns_by_intent_from_examples(examples)
-
-    assert apply_slot_patterns(
-        "lists_query",
-        "what's on my to do list",
-        {},
-        slots_by_intent,
-        patterns,
-    ) == {"list_name": "to do"}
-
-
 def test_l2_bundle_drops_slots_not_seen_for_predicted_intent() -> None:
     class FakeIntentPipeline:
         classes_ = ["music_play", "alarm_set"]
@@ -407,35 +388,6 @@ def test_l2_guard_probability_is_capped_by_signature_accuracy() -> None:
     assert result.frame is None
     assert result.metadata["raw_guard_probability"] == 0.99
     assert result.metadata["guard_calibration_cap"] == 0.72
-
-
-def test_l2_guard_signature_cap_ignores_moderately_reliable_signatures() -> None:
-    class FakeIntentPipeline:
-        classes_ = ["lists_query", "music_play"]
-
-        def predict_proba(self, utterances):
-            return np.asarray([[0.99, 0.01] for _utterance in utterances])
-
-    calibration = IntentCalibrationIndex(
-        predicted_intent_frame_accuracy={"lists_query": 0.80},
-        predicted_intent_intent_accuracy={"lists_query": 1.0},
-        predicted_intent_support={"lists_query": 0.10},
-        predicted_intent_slotless_rate={"lists_query": 1.0},
-        predicted_signature_frame_accuracy={("lists_query", ()): 0.80},
-        predicted_signature_support={("lists_query", ()): 0.10},
-    )
-    bundle = L2StudentBundle(
-        intent_pipeline=FakeIntentPipeline(),
-        slot_tagger=None,
-        guard_model=ConstantGuard(0.99),
-        config=L2StudentConfig(accept_threshold=0.93),
-        intent_calibration_index=calibration,
-    )
-
-    prediction = bundle.predict("what's on my list")
-
-    assert prediction.guard_calibration_cap == 1.0
-    assert prediction.guard_probability == 0.99
 
 
 def test_l2_student_layer_reports_intent_support_metadata() -> None:

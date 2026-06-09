@@ -952,10 +952,7 @@ def _score_intent_calibration(
 def _guard_calibration_cap(calibration: IntentCalibrationFeatures) -> float:
     if calibration.predicted_signature_support <= 0.0:
         return 1.0
-    signature_accuracy = max(0.0, min(1.0, calibration.predicted_signature_frame_accuracy))
-    if signature_accuracy < 0.75:
-        return signature_accuracy
-    return 1.0
+    return max(0.0, min(1.0, calibration.predicted_signature_frame_accuracy))
 
 
 def _score_frame_retrieval(
@@ -1121,39 +1118,14 @@ def _extract_slot_with_context(
     prefix = tuple(pattern.get("prefix", ()))
     suffix = tuple(pattern.get("suffix", ()))
     starts = _candidate_starts(tokens, prefix)
-    extracted = _first_slot_candidate(tokens, starts, suffix, trim_leading=False)
-    if extracted is not None:
-        return extracted
-    if prefix and suffix:
-        return _first_slot_candidate(tokens, [0], suffix, trim_leading=True)
-    return None
-
-
-def _first_slot_candidate(
-    tokens: list[str],
-    starts: list[int],
-    suffix: tuple[str, ...],
-    *,
-    trim_leading: bool,
-) -> str | None:
     for start in starts:
         end = _candidate_end(tokens, suffix, start)
         if end is None or end <= start:
             continue
-        slot_tokens = tokens[start:end]
-        if trim_leading:
-            slot_tokens = _trim_leading_slot_context(slot_tokens)
-        if not slot_tokens or len(slot_tokens) > 8:
+        if end - start > 8:
             continue
-        return " ".join(slot_tokens)
+        return " ".join(tokens[start:end])
     return None
-
-
-def _trim_leading_slot_context(tokens: list[str]) -> list[str]:
-    index = 0
-    while index < len(tokens) and tokens[index] in LEADING_SLOT_CONTEXT_TOKENS:
-        index += 1
-    return tokens[index:]
 
 
 def _candidate_starts(tokens: list[str], prefix: tuple[str, ...]) -> list[int]:
@@ -1226,26 +1198,6 @@ def predict_intent(intent_pipeline: Pipeline, utterance: str) -> dict[str, float
 
 
 TOKEN_RE = re.compile(r"[a-z0-9']+")
-LEADING_SLOT_CONTEXT_TOKENS = {
-    "a",
-    "an",
-    "are",
-    "can",
-    "get",
-    "give",
-    "in",
-    "is",
-    "me",
-    "my",
-    "on",
-    "please",
-    "show",
-    "tell",
-    "the",
-    "what",
-    "what's",
-    "you",
-}
 
 
 def tokenize(text: str) -> list[str]:
