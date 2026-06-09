@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,6 +26,7 @@ from darjeeling.schemas import TeacherTrace
 L2TargetEvolutionMode = Literal["dry-run", "codex-cli", "local-search"]
 L2TargetSearchSpace = Literal["compact", "wide"]
 L2TargetBudgetProfile = Literal["standard", "fixed-inner", "smoke"]
+L2TargetSplitPolicy = Literal["chronological", "intent-stratified"]
 
 DEFAULT_TARGET_EVOLVE_ROUNDS = 12
 DEFAULT_TARGET_LOCAL_SEARCH_TRIALS = 96
@@ -45,6 +47,7 @@ class L2TargetEvolutionConfig:
     local_search_timeout_s: float | None = None
     local_search_space: L2TargetSearchSpace = "compact"
     budget_profile: L2TargetBudgetProfile = "standard"
+    split_policy: L2TargetSplitPolicy = "chronological"
     max_agent_rounds: int | None = None
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
@@ -83,7 +86,7 @@ def run_l2_target_evolution(
     transcript_dir.mkdir(parents=True, exist_ok=True)
     private_dir.mkdir(parents=True, exist_ok=True)
 
-    split = split_l2_target_traces(traces)
+    split = split_l2_target_traces(traces, policy=config.split_policy)
     private_paths = {
         "selection_holdout": private_dir / "selection_holdout.jsonl",
         "promotion_holdout": private_dir / "promotion_holdout.jsonl",
@@ -138,6 +141,7 @@ def run_l2_target_evolution(
             agent_rounds_started=agent_rounds_started,
             agent_rounds_succeeded=agent_rounds_succeeded,
         )
+        protected_snapshot = _protected_workspace_snapshot(workspace_root)
         if config.mode == "dry-run":
             local_search_report: dict[str, Any] | None = None
             patch_index = round_index - 1
@@ -151,6 +155,20 @@ def run_l2_target_evolution(
                 )
                 if command_results[-1]["return_code"] != 0:
                     stop_reason = "dry_run_patch_failed"
+                    break
+                scope_report = _workspace_scope_violation_report(
+                    workspace_root=workspace_root,
+                    before=protected_snapshot,
+                )
+                if scope_report is not None:
+                    command_results.append(
+                        _workspace_scope_violation_command_result(
+                            workspace_root=workspace_root,
+                            round_index=round_index,
+                            report=scope_report,
+                        ),
+                    )
+                    stop_reason = "workspace_scope_violation"
                     break
         elif config.mode == "local-search":
             search_report_path = rounds_dir / f"round_{round_index:03d}_local_search.json"
@@ -175,6 +193,20 @@ def run_l2_target_evolution(
                         report=local_search_report,
                     )
                 )
+                scope_report = _workspace_scope_violation_report(
+                    workspace_root=workspace_root,
+                    before=protected_snapshot,
+                )
+                if scope_report is not None:
+                    command_results.append(
+                        _workspace_scope_violation_command_result(
+                            workspace_root=workspace_root,
+                            round_index=round_index,
+                            report=scope_report,
+                        ),
+                    )
+                    stop_reason = "workspace_scope_violation"
+                    break
             except Exception as exc:
                 command_results.append(
                     _failed_local_search_command_result(
@@ -206,6 +238,20 @@ def run_l2_target_evolution(
             )
             if command_results[-1]["return_code"] != 0:
                 stop_reason = "agent_command_failed"
+                break
+            scope_report = _workspace_scope_violation_report(
+                workspace_root=workspace_root,
+                before=protected_snapshot,
+            )
+            if scope_report is not None:
+                command_results.append(
+                    _workspace_scope_violation_command_result(
+                        workspace_root=workspace_root,
+                        round_index=round_index,
+                        report=scope_report,
+                    ),
+                )
+                stop_reason = "workspace_scope_violation"
                 break
             agent_rounds_succeeded += 1
             local_search_report = None
@@ -326,6 +372,7 @@ def run_l2_target_evolution(
         },
         "workspace": str(workspace_root),
         "data_split": {key: len(value) for key, value in split.items()},
+        "data_split_policy": _target_split_policy_payload(config.split_policy, split),
         "baseline": baseline,
         "rounds": round_results,
         "best_round": _best_round(round_results),
@@ -337,6 +384,7 @@ def run_l2_target_evolution(
         "target_code_scope": "target/",
         "core_code_scope": "system/darjeeling/ is read-only evaluator/core",
         "target_code_policy": _target_code_policy_payload(),
+        "workspace_scope_policy": _workspace_scope_policy_payload(),
         "private_data_scope": (
             "selection and promotion holdouts are stored outside the agent workspace"
         ),
@@ -349,10 +397,24 @@ def run_l2_target_evolution(
     return summary
 
 
-def split_l2_target_traces(traces: list[TeacherTrace]) -> dict[str, list[TeacherTrace]]:
+def split_l2_target_traces(
+    traces: list[TeacherTrace],
+    *,
+    policy: L2TargetSplitPolicy = "chronological",
+) -> dict[str, list[TeacherTrace]]:
     labeled = [trace for trace in traces if trace.teacher_frame is not None]
     if len(labeled) < 10:
         raise ValueError("target evolution requires at least 10 teacher-labeled traces")
+    if policy == "intent-stratified":
+        return _split_l2_target_traces_by_intent(labeled)
+    if policy != "chronological":
+        raise ValueError(f"unsupported target split policy: {policy}")
+    return _split_l2_target_traces_chronological(labeled)
+
+
+def _split_l2_target_traces_chronological(
+    labeled: list[TeacherTrace],
+) -> dict[str, list[TeacherTrace]]:
     train_end = max(4, int(len(labeled) * 0.60))
     inner_end = max(train_end + 1, int(len(labeled) * 0.80))
     selection_end = max(inner_end + 1, int(len(labeled) * 0.90))
@@ -363,6 +425,72 @@ def split_l2_target_traces(traces: list[TeacherTrace]) -> dict[str, list[Teacher
         "inner_validation": labeled[train_end:inner_end],
         "selection_holdout": labeled[inner_end:selection_end],
         "promotion_holdout": labeled[selection_end:],
+    }
+
+
+def _split_l2_target_traces_by_intent(
+    labeled: list[TeacherTrace],
+) -> dict[str, list[TeacherTrace]]:
+    split: dict[str, list[TeacherTrace]] = {
+        "train": [],
+        "inner_validation": [],
+        "selection_holdout": [],
+        "promotion_holdout": [],
+    }
+    grouped: dict[str, list[TeacherTrace]] = {}
+    for trace in labeled:
+        intent = trace.teacher_frame.intent if trace.teacher_frame is not None else ""
+        grouped.setdefault(intent, []).append(trace)
+    for group in grouped.values():
+        counts = _intent_stratified_group_counts(len(group))
+        start = 0
+        for split_name, count in zip(split, counts, strict=True):
+            end = start + count
+            split[split_name].extend(group[start:end])
+            start = end
+    private_or_validation_splits = [
+        "inner_validation",
+        "selection_holdout",
+        "promotion_holdout",
+    ]
+    if any(not split[name] for name in private_or_validation_splits):
+        return _split_l2_target_traces_chronological(labeled)
+    if len(split["train"]) < 4:
+        return _split_l2_target_traces_chronological(labeled)
+    return split
+
+
+def _intent_stratified_group_counts(size: int) -> tuple[int, int, int, int]:
+    if size < 4:
+        return (size, 0, 0, 0)
+    counts = [max(1, int(size * ratio)) for ratio in (0.60, 0.20, 0.10, 0.10)]
+    while sum(counts) > size:
+        for index in [0, 1, 2, 3]:
+            if sum(counts) <= size:
+                break
+            if counts[index] > 1:
+                counts[index] -= 1
+    while sum(counts) < size:
+        deficits = [
+            (size * ratio) - count
+            for ratio, count in zip((0.60, 0.20, 0.10, 0.10), counts, strict=True)
+        ]
+        index = max(range(4), key=lambda item: deficits[item])
+        counts[index] += 1
+    return (counts[0], counts[1], counts[2], counts[3])
+
+
+def _target_split_policy_payload(
+    policy: L2TargetSplitPolicy,
+    split: dict[str, list[TeacherTrace]],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "l2-target-split-policy-v1",
+        "policy": policy,
+        "group_key": "teacher_frame.intent" if policy == "intent-stratified" else None,
+        "split_counts": {key: len(value) for key, value in split.items()},
+        "private_splits": ["selection_holdout", "promotion_holdout"],
+        "private_split_visibility": "outer_harness_only",
     }
 
 
@@ -906,7 +1034,7 @@ def _effective_max_agent_rounds(config: L2TargetEvolutionConfig) -> int | None:
     if config.budget_profile == "standard":
         return 3
     if config.budget_profile == "fixed-inner":
-        return 6
+        return 16
     return 1
 
 
@@ -930,6 +1058,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
                 "AND private promotion holdout gate"
             ),
         },
+        "workspace_scope": _workspace_scope_policy_payload(),
         "optimization_order": [
             "zero or lower wrong accepts",
             "visible inner validation gate must pass before candidate selection",
@@ -941,7 +1070,8 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
             "raw coverage increase with lower frame exactness",
             "lowering threshold when visible inner validation gate fails",
             "treating private selection success alone as candidate success",
-            "changes outside target/",
+            "candidate code changes outside target/",
+            "modifying data/, tools/, system/darjeeling/, or program.md",
             "using private holdout rows or aggregate feedback",
             "hardcoding MASSIVE-specific behavior from outside visible data",
         ],
@@ -972,6 +1102,92 @@ def _target_code_policy_payload() -> dict[str, Any]:
         "adoption_authority": (
             "visible inner gate, private selection/promotion gates, and final outer replay"
         ),
+    }
+
+
+def _workspace_scope_policy_payload() -> dict[str, Any]:
+    return {
+        "schema_version": "l2-target-workspace-scope-v1",
+        "candidate_code_writable_roots": ["target/"],
+        "scratch_writable_roots": ["runs/"],
+        "protected_roots": ["data/", "system/darjeeling/", "tools/", "program.md"],
+        "ignored_generated_files": ["__pycache__/", ".pytest_cache/", "*.pyc", "*.pyo"],
+        "enforcement": "checked_after_each_mutating_round_before_candidate_evaluation",
+    }
+
+
+def _protected_workspace_snapshot(workspace_root: Path) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    if not workspace_root.exists():
+        return snapshot
+    for path in workspace_root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel_path = path.relative_to(workspace_root)
+        if _is_workspace_scope_ignored(rel_path) or _is_workspace_scope_writable(rel_path):
+            continue
+        snapshot[rel_path.as_posix()] = _file_sha256(path)
+    return snapshot
+
+
+def _workspace_scope_violation_report(
+    *,
+    workspace_root: Path,
+    before: dict[str, str],
+) -> dict[str, Any] | None:
+    after = _protected_workspace_snapshot(workspace_root)
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    modified = sorted(path for path in set(before) & set(after) if before[path] != after[path])
+    if not added and not removed and not modified:
+        return None
+    return {
+        "schema_version": "l2-target-workspace-scope-violation-v1",
+        "policy": _workspace_scope_policy_payload(),
+        "added_protected_files": added,
+        "removed_protected_files": removed,
+        "modified_protected_files": modified,
+        "message": (
+            "target evolution rounds may change target/ and write runs/ scratch outputs; "
+            "protected workspace files changed before candidate evaluation"
+        ),
+    }
+
+
+def _is_workspace_scope_writable(rel_path: Path) -> bool:
+    parts = rel_path.parts
+    return bool(parts and parts[0] in {"target", "runs"})
+
+
+def _is_workspace_scope_ignored(rel_path: Path) -> bool:
+    ignored_dirs = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+    if any(part in ignored_dirs for part in rel_path.parts):
+        return True
+    return rel_path.suffix in {".pyc", ".pyo"}
+
+
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _workspace_scope_violation_command_result(
+    *,
+    workspace_root: Path,
+    round_index: int,
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "command": ["workspace-scope-check", "--round", str(round_index)],
+        "cwd": str(workspace_root),
+        "started_at": datetime.now(UTC).isoformat(),
+        "return_code": 1,
+        "stdout": "",
+        "stderr": json.dumps(report, sort_keys=True),
+        "workspace_scope_violation": report,
     }
 
 
@@ -1027,7 +1243,8 @@ def _target_commands_text() -> str:
             "python3 -m json.tool data/target_diagnostics.json | head -120",
             "```",
             "",
-            "Only edit files under `target/`.",
+            "Only edit candidate code under `target/`. `runs/` is scratch output.",
+            "Do not modify `data/`, `tools/`, `system/darjeeling/`, or `program.md`.",
         ]
     )
 
@@ -1523,10 +1740,13 @@ def _target_program_text() -> str:
             "# L2 target evolution program",
             "",
             "You are evolving target-dependent L2 runtime code, not Darjeeling core.",
-            "Edit only files under `target/`.",
+            "Edit candidate code only under `target/`.",
+            "`runs/` is available for scratch command output.",
+            "Do not modify `data/`, `tools/`, `system/darjeeling/`, or `program.md`.",
             "",
             "Workspace layout:",
             "- `target/` is editable target-specific L2 code.",
+            "- `runs/` is scratch output; it is not promoted.",
             "- `target/config.json` is local-search-owned L2StudentConfig overrides.",
             "- `system/darjeeling/` is read-only Darjeeling core/evaluator code.",
             "- `data/train.jsonl` is visible training data.",

@@ -22,6 +22,7 @@ from darjeeling.compiler.l2_target_evolution import (
     L2TargetBudgetProfile,
     L2TargetEvolutionConfig,
     L2TargetEvolutionMode,
+    L2TargetSplitPolicy,
     run_l2_target_evolution,
 )
 from darjeeling.compiler.l2_tuner import L2TuneSpec, tune_l2_student
@@ -690,6 +691,10 @@ def l2_target_evolve(
         int | None,
         typer.Option(min=1, help="Optional prefix of traces to use for the target split."),
     ] = None,
+    split_policy: Annotated[
+        str,
+        typer.Option(help="Target split policy: chronological or intent-stratified."),
+    ] = "chronological",
     inner_patience_rounds: Annotated[
         int | None,
         typer.Option(
@@ -739,10 +744,13 @@ def l2_target_evolve(
         raise typer.BadParameter("mode must be dry-run, local-search, or codex-cli")
     if budget_profile not in {"standard", "fixed-inner", "smoke"}:
         raise typer.BadParameter("budget_profile must be standard, fixed-inner, or smoke")
+    if split_policy not in {"chronological", "intent-stratified"}:
+        raise typer.BadParameter("split_policy must be chronological or intent-stratified")
     if local_search_space not in {"compact", "wide"}:
         raise typer.BadParameter("local_search_space must be compact or wide")
     evolution_mode: L2TargetEvolutionMode = mode  # type: ignore[assignment]
     resolved_budget_profile: L2TargetBudgetProfile = budget_profile  # type: ignore[assignment]
+    resolved_split_policy: L2TargetSplitPolicy = split_policy  # type: ignore[assignment]
     resolved_rounds, resolved_inner_patience, resolved_local_search_trials = (
         _resolve_l2_target_budget(
             budget_profile=resolved_budget_profile,
@@ -774,6 +782,7 @@ def l2_target_evolve(
             local_search_space=local_search_space,  # type: ignore[arg-type]
             local_search_timeout_s=local_search_timeout_s,
             budget_profile=resolved_budget_profile,
+            split_policy=resolved_split_policy,
             max_agent_rounds=resolved_max_agent_rounds,
             sandbox=settings.l2_agent_sandbox,
             approval_policy=settings.l2_agent_approval_policy,
@@ -837,7 +846,7 @@ def _resolve_l2_target_agent_rounds(
     if budget_profile == "standard":
         return 3
     if budget_profile == "fixed-inner":
-        return 6
+        return 16
     return 1
 
 
@@ -978,9 +987,11 @@ def _promote_l2_target_run(
             "l2_target_staged_round": selected_round,
             "l2_target_mode": summary.get("mode"),
             "l2_target_data_split": summary.get("data_split"),
+            "l2_target_data_split_policy": summary.get("data_split_policy"),
             "l2_target_loop_cadence": summary.get("loop_cadence"),
             "l2_target_agent_budget": summary.get("agent_budget"),
             "l2_target_code_policy": summary.get("target_code_policy"),
+            "l2_target_workspace_scope_policy": summary.get("workspace_scope_policy"),
             "l2_target_private_holdout_evidence": summary.get(
                 "private_holdout_evidence"
             ),

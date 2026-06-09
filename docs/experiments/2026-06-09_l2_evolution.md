@@ -1231,7 +1231,7 @@ independent `max_agent_rounds` budget for live `codex-cli` rounds.
 Default live agent caps:
 
 - `standard`: 3 `codex-cli` rounds.
-- `fixed-inner`: 6 `codex-cli` rounds.
+- `fixed-inner`: 16 `codex-cli` rounds.
 - `smoke`: 1 `codex-cli` round.
 - `local-search`: does not consume LLM budget and is not capped by this field.
 
@@ -1313,3 +1313,69 @@ Interpretation:
   This gives the next design step a concrete direction: larger or stratified
   target selection splits, while still reserving final authority for outer e2e
   replay.
+
+## Intent-stratified split and workspace scope gate
+
+The next design issue was that narrow target patches can be invisible to a
+small chronological private selection split. We added an explicit target split
+policy:
+
+- `chronological` remains the default.
+- `intent-stratified` groups teacher-visible traces by `teacher_frame.intent`
+  before assigning train / inner validation / selection holdout / promotion
+  holdout. It is a diagnostic split policy, not a gate relaxation.
+- The split policy is recorded in `summary.json` and promoted manifests.
+
+We also hardened the isolated target workspace boundary:
+
+- Candidate code may change only under `target/`.
+- `runs/` is scratch output.
+- `data/`, `tools/`, `system/darjeeling/`, and `program.md` are protected.
+- The harness checks scope after every mutating round and before candidate
+  evaluation. A protected-file change stops the job with
+  `workspace_scope_violation`.
+- `fixed-inner` live `codex-cli` cap is now 16 rounds by default. `standard`
+  remains 3 rounds, and `smoke` remains 1.
+
+Intent-stratified weather command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-intent-stratified-weather-r2 \
+  --budget-profile fixed-inner \
+  --rounds 4 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --dry-run-patch docs/experiments/patches/l2_target_email_audio_veto_r3.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_weather_threshold_delta_r1.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_weather_slot_guard_delta_r1.patch \
+  --max-traces 500
+```
+
+Result:
+
+- Split: train 294, inner validation 95, selection holdout 57, promotion
+  holdout 54.
+- Rounds completed: 4. Stop reason: `round_budget_exhausted`.
+- Round 2 reproduced the weather slot regression under the lower threshold:
+  inner had 4 accepted / 3 correct / 1 wrong; promotion had 1 accepted / 0
+  correct / 1 wrong.
+- Round 3/4 applied the weather slot guard. Inner: 3 accepted / 3 correct / 0
+  wrong, pass. Selection: 3 accepted / 3 correct / 0 wrong, pass.
+- Promotion: 0 accepted / 0 wrong, so `adoption_decision.adopted=false`.
+- `private_holdout_evidence.adoption_gate_diagnosis=promotion_zero_accepts`.
+- `commands.jsonl` shows all three target patches applied successfully and no
+  workspace scope violation.
+
+Interpretation:
+
+- `intent-stratified` fixed the earlier selection sparsity enough to observe a
+  useful private selection signal.
+- The new weather slot guard removed the concrete wrong accepts:
+  `"home town weather"` no longer accepts `date=town`, and `"what is the
+  weather in this week"` no longer accepts `date=the, place_name=this week`.
+- This is a selectable but not adopted target candidate. It should either be
+  staged only with `--allow-non-adopted` for outer replay diagnosis, or rerun on
+  a larger target split. Promotion authority remains with promotion holdout plus
+  outer e2e replay.

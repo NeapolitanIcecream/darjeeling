@@ -65,6 +65,19 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert summary["rounds_completed"] == 3
     assert summary["stop_reason"] == "round_budget_exhausted"
     assert summary["budget_policy"]["profile"] == "standard"
+    assert summary["data_split_policy"] == {
+        "schema_version": "l2-target-split-policy-v1",
+        "policy": "chronological",
+        "group_key": None,
+        "split_counts": {
+            "train": 7,
+            "inner_validation": 2,
+            "selection_holdout": 1,
+            "promotion_holdout": 2,
+        },
+        "private_splits": ["selection_holdout", "promotion_holdout"],
+        "private_split_visibility": "outer_harness_only",
+    }
     assert summary["loop_cadence"] == {
         "kind": "fixed_trace_snapshot_inner_loop",
         "outer_replay_cadence_bound": False,
@@ -157,6 +170,9 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "early_stop_policy" in round_state
     assert "does not stop the inner loop" in round_state["early_stop_policy"]
     assert "candidate_selection" in objective["gates"]
+    assert objective["workspace_scope"]["candidate_code_writable_roots"] == ["target/"]
+    assert objective["workspace_scope"]["scratch_writable_roots"] == ["runs/"]
+    assert "system/darjeeling/" in objective["workspace_scope"]["protected_roots"]
     assert any(
         "near_miss_examples" in strategy
         for strategy in objective["allowed_strategies"]
@@ -189,6 +205,31 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "private_holdout_evidence" not in round_state
     assert "not a" in program_text
     assert "Darjeeling-core dataset-independence violation" in program_text
+
+
+def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
+    traces = [
+        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        for index in range(10)
+    ] + [
+        _trace(index + 10, intent="weather_query", slots={"location": f"city {index}"})
+        for index in range(10)
+    ]
+
+    split = split_l2_target_traces(
+        traces_to_teacher_view(traces),
+        policy="intent-stratified",
+    )
+
+    assert {key: len(value) for key, value in split.items()} == {
+        "train": 12,
+        "inner_validation": 4,
+        "selection_holdout": 2,
+        "promotion_holdout": 2,
+    }
+    for split_name in ["inner_validation", "selection_holdout", "promotion_holdout"]:
+        intents = {trace.teacher_frame.intent for trace in split[split_name]}
+        assert intents == {"alarm_set", "weather_query"}
 
 
 def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Path) -> None:
@@ -230,6 +271,61 @@ def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Pa
     ).read_text(encoding="utf-8")
     assert "TARGET_MARKER = 'patched'" in target_text
     assert summary["rounds_completed"] == 2
+    assert summary["workspace_scope_policy"] == {
+        "schema_version": "l2-target-workspace-scope-v1",
+        "candidate_code_writable_roots": ["target/"],
+        "scratch_writable_roots": ["runs/"],
+        "protected_roots": ["data/", "system/darjeeling/", "tools/", "program.md"],
+        "ignored_generated_files": ["__pycache__/", ".pytest_cache/", "*.pyc", "*.pyo"],
+        "enforcement": "checked_after_each_mutating_round_before_candidate_evaluation",
+    }
+
+
+def test_l2_target_evolution_rejects_protected_workspace_edits(
+    tmp_path: Path,
+) -> None:
+    patch_path = tmp_path / "core.patch"
+    patch_path.write_text(
+        "\n".join(
+            [
+                "diff --git a/system/darjeeling/README.md b/system/darjeeling/README.md",
+                "--- a/system/darjeeling/README.md",
+                "+++ b/system/darjeeling/README.md",
+                "@@ -1,4 +1,4 @@",
+                "-# darjeeling",
+                "+# patched darjeeling",
+                " ",
+                (
+                    " Profile-guided edge intelligence runtime MVP for the NLU replay "
+                    "demo described in"
+                ),
+                " [docs/mvp_demo_proposal.md](docs/mvp_demo_proposal.md).",
+                "",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=1,
+            mode="dry-run",
+            dry_run_patches=(patch_path,),
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    commands = [
+        json.loads(line)
+        for line in (tmp_path / "job" / "commands.jsonl").read_text().splitlines()
+    ]
+    assert summary["stop_reason"] == "workspace_scope_violation"
+    assert summary["rounds_completed"] == 0
+    assert commands[-1]["command"] == ["workspace-scope-check", "--round", "1"]
+    violation = commands[-1]["workspace_scope_violation"]
+    assert violation["modified_protected_files"] == ["system/darjeeling/README.md"]
 
 
 def test_l2_target_evolution_stops_after_inner_patience(tmp_path: Path) -> None:
@@ -414,7 +510,7 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
         mode="codex-cli",
         budget_profile="fixed-inner",
         max_agent_rounds=None,
-    ) == 6
+    ) == 16
     assert _resolve_l2_target_agent_rounds(
         mode="codex-cli",
         budget_profile="smoke",
@@ -437,7 +533,7 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
             mode="codex-cli",
             budget_profile="fixed-inner",
         )
-    ) == 6
+    ) == 16
 
 
 def test_l2_target_accept_hook_can_veto_guard_accepts(tmp_path: Path) -> None:
@@ -692,6 +788,37 @@ def test_l2_target_evolve_cli_allows_zero_agent_round_budget(tmp_path: Path) -> 
     assert summary["agent_budget"]["agent_rounds_started"] == 0
 
 
+def test_l2_target_evolve_cli_accepts_intent_stratified_split_policy(
+    tmp_path: Path,
+) -> None:
+    traces_path = tmp_path / "traces.jsonl"
+    traces_path.write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in _traces()),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "target-evolve",
+            "--traces",
+            str(traces_path),
+            "--out-dir",
+            str(tmp_path / "target-run"),
+            "--rounds",
+            "1",
+            "--split-policy",
+            "intent-stratified",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
+    assert summary["data_split_policy"]["policy"] == "intent-stratified"
+    assert summary["data_split_policy"]["group_key"] == "teacher_frame.intent"
+
+
 def test_l2_target_evolve_cli_accepts_local_search_mode(tmp_path: Path) -> None:
     traces_path = tmp_path / "traces.jsonl"
     traces_path.write_text(
@@ -787,6 +914,26 @@ SELECTED_SNAPSHOT_MARKER = True
                     "target_dependent_code_allowed_in": "target/",
                     "target_specific_code_is_not_rejected_for_dataset_dependence": True,
                 },
+                "workspace_scope_policy": {
+                    "schema_version": "l2-target-workspace-scope-v1",
+                    "candidate_code_writable_roots": ["target/"],
+                    "scratch_writable_roots": ["runs/"],
+                    "protected_roots": [
+                        "data/",
+                        "system/darjeeling/",
+                        "tools/",
+                        "program.md",
+                    ],
+                    "ignored_generated_files": [
+                        "__pycache__/",
+                        ".pytest_cache/",
+                        "*.pyc",
+                        "*.pyo",
+                    ],
+                    "enforcement": (
+                        "checked_after_each_mutating_round_before_candidate_evaluation"
+                    ),
+                },
                 "rounds": [
                     {
                         "round": 1,
@@ -839,6 +986,14 @@ SELECTED_SNAPSHOT_MARKER = True
         "core_must_remain_dataset_independent": True,
         "target_dependent_code_allowed_in": "target/",
         "target_specific_code_is_not_rejected_for_dataset_dependence": True,
+    }
+    assert manifest["candidate_metrics"]["l2_target_workspace_scope_policy"] == {
+        "schema_version": "l2-target-workspace-scope-v1",
+        "candidate_code_writable_roots": ["target/"],
+        "scratch_writable_roots": ["runs/"],
+        "protected_roots": ["data/", "system/darjeeling/", "tools/", "program.md"],
+        "ignored_generated_files": ["__pycache__/", ".pytest_cache/", "*.pyc", "*.pyo"],
+        "enforcement": "checked_after_each_mutating_round_before_candidate_evaluation",
     }
     assert manifest["candidate_metrics"]["l2_target_training_traces"] == 12
     assert manifest["candidate_metrics"]["l2_training_scope"] == "l2_target_workspace_train"
