@@ -21,6 +21,7 @@ L4CodingAgentAdapter
   Codex CLI coding-agent harness
   scoped multi-turn session
   evolves L1 Rust source tree
+  evolves L2 Python patch candidates
 ```
 
 ## L4TeacherAdapter
@@ -81,7 +82,7 @@ Context：
 - adapter 使用 `build_proposal_context`、OpenAI chat completions、JSON response format、`prompt_cache_key`、`prompt_cache_retention` 和 `PROPOSAL_MAX_TOKENS`。
 - adapter 返回 validated JSON object、raw response、usage、model、context hash、prompt cache key 和 source trace IDs。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded L2 config proposal；这是轻量 proposal path。
-- 用户决策后的 L2 主 evolve path 是 L4 coding agent 负责代码/特征/search-space 设计，Optuna 负责局部调参。当前已实现本地 Optuna tuner 和 `L2_TUNING_MODE=optuna` compiler 接入；完整 L2 coding-agent harness 仍是后续工作。
+- 用户决策后的 L2 主 evolve path 是 L4 coding agent 负责代码/特征/search-space 设计，Optuna 负责局部调参。当前已实现本地 Optuna tuner、`L2_TUNING_MODE=optuna` compiler 接入，以及 `L2_AGENT_MODE` coding-agent patch harness。
 - L2 proposal 或 Optuna tuning 都不能直接决定 runtime accept；accept threshold 仍由 deterministic grid search 选择，最终仍由 replay gate 决定。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded L3 prompt candidate proposal。
 - L3 prompt proposal 只能引用 teacher-visible trace IDs 作为 few-shot examples；compiler 会展开为 `L3PromptArtifact` 并写入 `l3_prompt_candidate`，但不会在缺少 regenerated/shadow replay 时提升为 runtime `l3_prompt`。
@@ -140,6 +141,50 @@ Agent 权限：
 - compiler generation 已在 `L1_AGENT_MODE` 非 disabled 时调用该 adapter。
 - L1 candidate 已纳入 `L0 -> L1 -> L2 -> teacher fallback` 离线 replay gate。
 - 当前默认配置仍是 disabled；主 demo 若要展示 L1 evolution，必须显式开启 `codex-cli`。
+
+## L2CodingAgentAdapter
+
+职责：
+
+- 在 L2 compiler generation 中启动 Codex CLI。
+- 向 agent 提供隔离 Darjeeling workspace、teacher-visible L2 context files、当前 metrics、objective、constraints 和命令说明。
+- 允许 agent 修改 L2-owned Python source、tests 和模块设计文档，并调用 Optuna/local tests。
+- 收集 diff、raw transcript、commands、agent report 和结构化 provenance。
+
+Agent 可见范围：
+
+- `teacher_train` 或当前 `L2_TRAINING_SCOPE` 选出的 teacher-visible traces。
+- `visibility=train_visible` hard cases。
+- 当前 L2 config、tuning、guard calibration、promotion-window metrics 的 summary。
+- objective/gates 和命令说明。
+
+Agent 不可见：
+
+- MASSIVE gold。
+- `teacher_promotion_holdout`。
+- final eval labels。
+- future stream。
+
+Agent 权限：
+
+- 只写隔离 Python workspace。
+- 不联网。
+- 可运行 L2 unit tests、ruff、`edge-mvp l2 tune` 和小型 cached experiments。
+- 不允许修改外层 replay、promotion logic、teacher cache、data loader 或非 L2-owned orchestration。
+
+重要边界：
+
+- Python L2 patch 不在当前 compiler 进程中热加载。Harness 产出的是 auditable patch candidate，记录 `runtime_patch_applied=false`。
+- 若要让 patch 影响真实 L2 runtime，外层开发/实验循环必须应用 patch、纳入 Git、重启实验进程。
+- Agent 不能 self-certify；即便 patch 通过自身验证，也必须经过外层 replay/promotion 和后续 experiment comparison。
+
+当前实现状态：
+
+- 已实现 `darjeeling.compiler.l2_coding_agent.L2CodingAgentAdapter`。
+- 支持 `dry-run` fixture patch 和 `codex-cli` 模式。
+- compiler generation 已在 `L2_AGENT_MODE` 非 disabled 时运行该 harness，并记录 `l2_agent_*` artifact paths 与 metrics。
+- `edge-mvp experiment l2-agent` 会开启 `L2_AGENT_MODE=codex-cli` 和 Optuna tuning，用于真实 L2 patch generation 实验。
+- 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。
 
 ## Direct API session 策略
 

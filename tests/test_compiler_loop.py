@@ -402,6 +402,59 @@ def test_compiler_generation_respects_no_guard_ablation(tmp_path: Path) -> None:
     assert metrics["l2_guard_search"]["mode"] == "always_accept"
 
 
+def test_compiler_generation_records_l2_agent_patch_artifacts(tmp_path: Path) -> None:
+    patch_path = tmp_path / "l2_agent.patch"
+    patch_path.write_text(
+        "\n".join(
+            [
+                "diff --git a/tests/test_l2_agent_marker.py b/tests/test_l2_agent_marker.py",
+                "new file mode 100644",
+                "--- /dev/null",
+                "+++ b/tests/test_l2_agent_marker.py",
+                "@@ -0,0 +1 @@",
+                "+MARKER = 'compiler dry run marker'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings()
+    settings.l2_agent_mode = "dry-run"
+    settings.l2_agent_dry_run_patch = patch_path
+    settings.l2_agent_run_validation = False
+
+    result = run_compiler_generation(
+        run_dir=tmp_path,
+        traces=_two_intent_traces(),
+        settings=settings,
+    )
+
+    assert result.manifest is not None
+    manifest = result.manifest
+    metrics = manifest.candidate_metrics
+    assert metrics["l2_agent_mode"] == "dry-run"
+    assert metrics["l2_agent_succeeded"] is True
+    assert metrics["l2_agent_patch_runtime_applied"] is False
+    assert "outer process apply/restart" in metrics["l2_agent_patch_runtime_reason"]
+    assert "l2_agent_diff" in manifest.artifact_paths
+    assert "l2_agent_transcript" in manifest.artifact_paths
+    assert "l2_agent_provenance" in manifest.artifact_paths
+    l2_agent_dir = tmp_path / "artifacts" / manifest.artifact_paths["l2_agent_dir"]
+    context_families = json.loads(
+        (l2_agent_dir / "contexts" / "l2_context_families.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert context_families["schema_version"] == "l2-context-families-v1"
+    assert "gold_frame" not in json.dumps(context_families)
+    provenance = json.loads(
+        (tmp_path / "artifacts" / manifest.artifact_paths["l2_agent_provenance"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert provenance["runtime_patch_applied"] is False
+
+
 def test_compiler_generation_uses_l2_mlp_settings(tmp_path: Path) -> None:
     settings = load_settings()
     settings.l2_intent_model_family = "mlp"

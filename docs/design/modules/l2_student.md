@@ -166,6 +166,14 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 - Proposal 只允许影响白名单字段：`frame_source`、`intent_model_family`、`slot_model_family`、`min_examples`、`max_features`、`max_iter`、`mlp_hidden_layer_sizes`、`mlp_alpha`、`mlp_early_stopping`、`word_ngram_range`、`char_ngram_range`。
 - Proposal 不直接决定 accept threshold；threshold 仍由 deterministic grid search 选择。
 
+L2 coding-agent path：
+
+- `L2_AGENT_MODE=disabled|dry-run|codex-cli` 控制 L4 coding agent 是否为 L2 生成 patch candidate。默认 disabled，不产生 live LLM cost。
+- `dry-run` 应用 fixture patch，只用于 harness 和 artifact 测试。
+- `codex-cli` 在隔离 Darjeeling workspace 中运行 Codex CLI，可修改 L2-owned Python source、tests 和模块设计文档，并调用 Optuna/pytest/ruff。
+- Agent context 只包含 teacher-visible L2 train scope、train-visible hard cases、current metrics、objective、constraints 和命令说明。
+- 当前 compiler 只记录 agent patch artifact，不在同一 Python 进程中热加载 patch：`candidate_metrics["l2_agent_patch_runtime_applied"] = false`。真实采用 patch 必须由外层开发循环应用、提交 Git、重启实验。
+
 Optuna tuning path：
 
 - `edge-mvp l2 tune --traces <trace.jsonl> --out <report.json>` 是 L4 coding agent 可调用的本地工具接口。

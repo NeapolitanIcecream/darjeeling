@@ -89,13 +89,17 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `l2-tuned-lower-miss` 是分布对齐诊断实验：它设置 `L2_TRAINING_SCOPE=lower_miss` 和 `L2_TUNING_MODE=optuna`，让 tuning 与训练只看当前 `teacher_train` 中 L0/L1 未接收的样本，并继续使用 residual validation 做目标评估。该实验用于检验 L2 在真实低层 miss 分布上的吸收改善，不取代默认 `teacher_train` 主线。
 
+`l2-agent` 是 L4 coding-agent evolve L2 的 patch-generation 实验：它设置 `L2_AGENT_MODE=codex-cli` 和 `L2_TUNING_MODE=optuna`。当前 harness 只产出可审计 patch artifact，不在同一 Python 进程中热加载；要测 patch 的真实效果，需要外层应用 patch、提交 Git、重启实验。
+
 `workload-locality` 会在同一个 experiment root 下分别运行 `uniform`、`zipf-mild` 和 `zipf-heavy` 子目录。
 
 `experiment compare` 不重新执行实验，只读取已有 run dir。输入可以是重复传入的 `--run`，也可以是 `--root` 下递归发现的 `traces.jsonl` 所在目录。输出 `comparison.csv` 和 `comparison.html`。
 
-`experiment preflight` 是实验前只读检查入口，输出 `experiment-preflight-v1` JSON。它检查 processed train split、teacher cache/API key 可用性、L1 Rust crate、L1 agent 配置和 L3 benchmark artifact。默认不下载数据、不调用 OpenAI、不加载本地 SLM；`--check-l1-build` 才会构建 L1。
+`experiment preflight` 是实验前只读检查入口，输出 `experiment-preflight-v1` JSON。它检查 processed train split、teacher cache/API key 可用性、L1 Rust crate、L1/L2 agent 配置和 L3 benchmark artifact。默认不下载数据、不调用 OpenAI、不加载本地 SLM；`--check-l1-build` 才会构建 L1。
 
 `L1_AGENT_MODE=disabled` 在 preflight 中是 warn，不是 fail。它允许用户跑 smoke/replay 实验，但明确说明这不是完整 L1 evolution；真实 L1 evolution 实验必须显式设置 `L1_AGENT_MODE=codex-cli` 并保证 `codex` 命令可用。
+
+`L2_AGENT_MODE=disabled` 在 preflight 中也是 warn。真实 L2 coding-agent patch generation 必须显式设置 `L2_AGENT_MODE=codex-cli`；`dry-run` 需要 `L2_AGENT_DRY_RUN_PATCH`。
 
 ## Fail-fast 行为
 

@@ -91,6 +91,14 @@ Replay/promotion：
 - `L2_TUNING_LATENCY_WEIGHT`
 - `L2_TRAINING_SCOPE`: `teacher_train | lower_miss`
 - `L2_TUNING_MIN_EXAMPLES`
+- `L2_AGENT_MODE`: `disabled | dry-run | codex-cli`
+- `L2_AGENT_CODEX_COMMAND`
+- `L2_AGENT_MODEL`
+- `L2_AGENT_TIMEOUT_S`
+- `L2_AGENT_DRY_RUN_PATCH`
+- `L2_AGENT_SANDBOX`
+- `L2_AGENT_APPROVAL_POLICY`
+- `L2_AGENT_RUN_VALIDATION`
 - `L2_MIN_RUNTIME_EXAMPLES`
 - objective weights
 - wrong accept limits

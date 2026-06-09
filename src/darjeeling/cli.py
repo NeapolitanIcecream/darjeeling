@@ -812,6 +812,33 @@ def experiment_l2_tuned_lower_miss(
     )
 
 
+@experiments_app.command("l2-agent")
+def experiment_l2_agent(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Directory for experiment artifacts."),
+    ] = Path("runs/l2-agent"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[str, typer.Option(help="Teacher mode: live, cache, or live-or-cache.")] = (
+        "live-or-cache"
+    ),
+    data_dir: Annotated[Path, typer.Option(help="Processed data directory.")] = Path(
+        "data/processed/massive_en_us"
+    ),
+) -> None:
+    _run_single_experiment(
+        "l2-agent",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
 @experiments_app.command("no-guard")
 def experiment_no_guard(
     run_dir: Annotated[
@@ -1082,6 +1109,7 @@ def _experiment_preflight_payload(
         _preflight_teacher_check(run_dir=run_dir, teacher=teacher, settings=settings),
         _preflight_l1_check(settings=settings, check_l1_build=check_l1_build),
         _preflight_l1_agent_check(settings=settings),
+        _preflight_l2_agent_check(settings=settings),
         _preflight_l3_check(run_dir=run_dir, settings=settings),
     ]
     status = "fail" if any(check["status"] == "fail" for check in checks) else "pass"
@@ -1198,6 +1226,44 @@ def _preflight_l1_agent_check(*, settings) -> dict:
         "name": "l1.agent",
         "status": "pass",
         "message": f"codex command found: {settings.l1_agent_codex_command}",
+    }
+
+
+def _preflight_l2_agent_check(*, settings) -> dict:
+    if settings.l2_agent_mode == "disabled":
+        return {
+            "name": "l2.agent",
+            "status": "warn",
+            "message": "L2_AGENT_MODE=disabled; set codex-cli for L2 coding-agent experiments",
+        }
+    if settings.l2_agent_mode == "dry-run":
+        if settings.l2_agent_dry_run_patch is None:
+            return {
+                "name": "l2.agent",
+                "status": "fail",
+                "message": "L2_AGENT_MODE=dry-run requires L2_AGENT_DRY_RUN_PATCH",
+            }
+        if not settings.l2_agent_dry_run_patch.exists():
+            return {
+                "name": "l2.agent",
+                "status": "fail",
+                "message": f"dry-run patch missing: {settings.l2_agent_dry_run_patch}",
+            }
+        return {
+            "name": "l2.agent",
+            "status": "pass",
+            "message": f"dry-run patch found: {settings.l2_agent_dry_run_patch}",
+        }
+    if shutil.which(settings.l2_agent_codex_command) is None:
+        return {
+            "name": "l2.agent",
+            "status": "fail",
+            "message": f"codex command not found: {settings.l2_agent_codex_command}",
+        }
+    return {
+        "name": "l2.agent",
+        "status": "pass",
+        "message": f"codex command found: {settings.l2_agent_codex_command}",
     }
 
 
