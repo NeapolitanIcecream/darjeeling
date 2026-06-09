@@ -13,6 +13,8 @@ import typer
 from rich.console import Console
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
+from darjeeling.compiler.l2_distiller import l2_config_from_settings
+from darjeeling.compiler.l2_tuner import L2TuneSpec, tune_l2_student
 from darjeeling.compiler.l3_prompt_optimizer import (
     l3_prompt_artifact_hash,
     replay_l3_prompt_artifact,
@@ -578,6 +580,60 @@ def l2_train(
     console.print(f"trained L2 student with {len(examples)} teacher examples: {out}")
 
 
+@l2_app.command("tune")
+def l2_tune(
+    traces: Annotated[Path, typer.Option(help="Trace JSONL file with teacher_frame labels.")],
+    out: Annotated[Path, typer.Option(help="Output JSON path for the tuning report.")],
+    n_trials: Annotated[int, typer.Option(min=1, help="Optuna trial budget.")] = 16,
+    timeout_s: Annotated[
+        float | None,
+        typer.Option(min=0.1, help="Optional Optuna study timeout in seconds."),
+    ] = None,
+    validation_fraction: Annotated[
+        float,
+        typer.Option(min=0.05, max=0.75, help="Teacher-visible tuning holdout fraction."),
+    ] = 0.25,
+    search_space: Annotated[
+        str,
+        typer.Option(help="Tuning search space: compact or wide."),
+    ] = "compact",
+    latency_weight: Annotated[
+        float,
+        typer.Option(min=0.0, help="Penalty per millisecond of validation p95 latency."),
+    ] = 0.01,
+) -> None:
+    """Run Optuna tuning for L2 hyperparameters over teacher-visible traces."""
+
+    if search_space not in {"compact", "wide"}:
+        raise typer.BadParameter("search_space must be compact or wide")
+    settings = _load_cli_settings()
+    base_config = l2_config_from_settings(settings)
+    trace_records = read_traces(traces)
+    result = tune_l2_student(
+        traces_to_teacher_view(trace_records),
+        base_config=base_config,
+        spec=L2TuneSpec(
+            n_trials=n_trials,
+            timeout_s=timeout_s,
+            validation_fraction=validation_fraction,
+            random_state=base_config.random_state,
+            search_space=search_space,
+            max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
+            min_accepted_accuracy=settings.l2_min_guarded_accuracy,
+            latency_weight=latency_weight,
+        ),
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    console.print(
+        f"tuned L2 with {result.n_trials_completed}/{result.n_trials_requested} "
+        f"completed trials; best={result.best_value}; report={out}"
+    )
+
+
 @experiments_app.command("main-evolution")
 def experiment_main_evolution(
     run_dir: Annotated[Path, typer.Option(help="Experiment run directory.")] = Path("runs/main"),
@@ -682,6 +738,35 @@ def experiment_l2_mlp(
 ) -> None:
     _run_single_experiment(
         "l2-mlp",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
+@experiments_app.command("l2-tuned")
+def experiment_l2_tuned(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Experiment run directory."),
+    ] = Path("runs/l2-tuned"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
+    ] = Path("data/processed/massive_en_us"),
+) -> None:
+    _run_single_experiment(
+        "l2-tuned",
         run_dir=run_dir,
         stream=stream,
         max_requests=max_requests,

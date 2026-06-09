@@ -12,8 +12,10 @@
    DSL 可作为可选的表格/规则辅助格式，但架构主路径是 agent-maintained Rust source tree。
 3. **L4 在 evolve L1 时就是 coding agent 形态。**
    不是“一个 L4 模型给另一个 agent 发指令”，而是 L4 层在 L1 compiler mode 下通过 Codex CLI harness 运行，模型搭载在 coding agent 内部，利用多轮对话、局部读写文件、构建、测试和 benchmark 能力修改 L1 Rust 代码。
-4. **L2、L3、guard 的 L4 使用方式不随 L1 改变。**
-   它们仍使用 direct model API 生成 bounded config、prompt 或 threshold proposal。
+4. **L2 evolve 拆成 coding-agent 结构改造和本地调参工具。**
+   L4 coding agent 负责真正需要 generalized intelligence 的 L2 代码/特征/验证协议改造；Optuna 等本地工具负责在 agent 设计的搜索空间内做超参搜索。旧的 direct L2 bounded config proposal 只保留为轻量 proposal path，不代表最终 L2 evolve 主路径。
+5. **L3、guard 的 L4 使用方式不随 L1 改变。**
+   它们仍使用 direct model API 生成 bounded prompt 或 threshold proposal。
 
 ## 文档结构
 

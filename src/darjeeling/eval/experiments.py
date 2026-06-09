@@ -41,6 +41,15 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         },
         description="Run the deterministic MLP intent-family L2 candidate.",
     ),
+    "l2-tuned": ExperimentSpec(
+        name="l2-tuned",
+        settings_overrides={
+            "l2_tuning_mode": "optuna",
+            "l2_tuning_trials": 12,
+            "l2_tuning_search_space": "compact",
+        },
+        description="Run Optuna-tuned L2 hyperparameters before replay promotion.",
+    ),
     "no-guard": ExperimentSpec(
         name="no-guard",
         settings_overrides={

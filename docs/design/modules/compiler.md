@@ -115,11 +115,26 @@ Agent 产出的 artifact 仍必须经过外层 replay。
 
 ## L2/L3/guard compiler jobs
 
-这些 job 使用 `L4ProposalAdapter` direct API：
+这些 job 的 L4 参与方式分层：
 
-- L2: bounded config JSON，不生成训练代码。
+- L2: 轻量路径仍支持 bounded config JSON；主 evolve 路径是 L4 coding agent 修改 L2 代码/search space，并调用 Optuna 等本地工具做超参搜索。
 - L3: prompt artifact JSON，few-shot 只能引用 teacher trace IDs。
 - Guard: threshold/search proposal，最终通过 deterministic grid search/replay 选择。
+
+L2 Optuna tuning 在 compiler 中是显式开关：
+
+```text
+L2_TUNING_MODE=optuna
+teacher_train
+-> internal train/validation split
+-> Optuna trials over L2StudentConfig
+-> l2/l2_tuning.json
+-> train final L2 candidate on full teacher_train with best config
+-> deterministic guard search
+-> outer replay promotion gate
+```
+
+Optuna tuning 不能读取 `teacher_promotion_holdout`、gold eval 或 future stream。它产出的 best config 仍只是 candidate 输入，不能绕过外层 replay。
 
 ## Objective
 

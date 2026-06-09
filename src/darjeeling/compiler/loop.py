@@ -21,6 +21,7 @@ from darjeeling.compiler.l2_distiller import (
     l2_config_from_proposal,
     l2_config_from_settings,
 )
+from darjeeling.compiler.l2_tuner import L2TuneSpec, tune_l2_student
 from darjeeling.compiler.l3_prompt_optimizer import (
     L3_PROMPT_PROPOSAL_SCHEMA,
     l3_prompt_artifact_from_proposal,
@@ -50,6 +51,7 @@ from darjeeling.layers.l1_rust_programbank import (
     build_l1_binary,
 )
 from darjeeling.layers.l2_student import (
+    L2StudentConfig,
     train_l2_student,
     training_examples_from_teacher_traces,
 )
@@ -180,6 +182,7 @@ def run_compiler_generation(
     candidate_metrics["l2_examples"] = len(l2_examples)
     candidate_metrics["l2_enabled"] = settings.l2_enabled
     candidate_metrics["l2_guard_mode"] = settings.l2_guard_mode
+    candidate_metrics["l2_tuning_mode"] = settings.l2_tuning_mode
     candidate_metrics["l4_proposal_mode"] = settings.l4_proposal_mode
     l2_config = l2_config_from_settings(settings)
     guard_search_spec = GuardSearchSpec(
@@ -251,6 +254,46 @@ def run_compiler_generation(
             )
             candidate_metrics["guard_search_spec"] = asdict(guard_search_spec)
             generated_artifacts = True
+    if settings.l2_enabled and settings.l2_tuning_mode == "optuna" and l2_examples:
+        try:
+            tune_spec = L2TuneSpec(
+                n_trials=settings.l2_tuning_trials,
+                timeout_s=settings.l2_tuning_timeout_s,
+                validation_fraction=settings.l2_tuning_validation_fraction,
+                random_state=l2_config.random_state,
+                search_space=settings.l2_tuning_search_space,
+                max_wrong_accept_rate=guard_search_spec.max_wrong_accept_rate,
+                min_accepted_accuracy=settings.l2_min_guarded_accuracy,
+                latency_weight=settings.l2_tuning_latency_weight,
+            )
+            tune_result = tune_l2_student(
+                split.teacher_train,
+                base_config=l2_config,
+                spec=tune_spec,
+            )
+            tune_path = store.write_generation_json(
+                generation,
+                "l2/l2_tuning.json",
+                tune_result.model_dump(mode="json"),
+            )
+            artifact_paths["l2_tuning"] = _artifact_relative_path(store.root, tune_path)
+            candidate_metrics["l2_tuning_succeeded"] = tune_result.best_config is not None
+            candidate_metrics["l2_tuning"] = {
+                "schema_version": tune_result.schema_version,
+                "train_size": tune_result.train_size,
+                "validation_size": tune_result.validation_size,
+                "n_trials_requested": tune_result.n_trials_requested,
+                "n_trials_completed": tune_result.n_trials_completed,
+                "best_trial_number": tune_result.best_trial_number,
+                "best_value": tune_result.best_value,
+                "best_metrics": tune_result.best_metrics,
+            }
+            generated_artifacts = True
+            if tune_result.best_config is not None:
+                l2_config = L2StudentConfig.model_validate(tune_result.best_config)
+        except (ImportError, ValueError) as exc:
+            candidate_metrics["l2_tuning_succeeded"] = False
+            candidate_metrics["l2_tuning_error"] = str(exc)
     if settings.l2_enabled:
         candidate_metrics["l2_config"] = l2_config.model_dump(mode="json")
         try:

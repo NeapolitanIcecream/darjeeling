@@ -22,6 +22,7 @@ edge-mvp experiment compare --run runs/main --run runs/no-l2 --out-dir runs/expe
 edge-mvp l1 build --crate-dir native/l1_programbank
 edge-mvp l1 bench --crate-dir native/l1_programbank
 edge-mvp l1 bench --crate-dir native/l1_programbank --out runs/main/reports/l1_benchmark.json
+edge-mvp l2 tune --traces runs/main/traces.jsonl --out runs/main/reports/l2_tuning.json
 edge-mvp l3 bench --out runs/main/reports/l3_benchmark.json
 edge-mvp l3 replay-prompt --prompt runs/main/artifacts/generations/gen_001/l3/l3_prompt.candidate.json --traces runs/main/traces.jsonl --out runs/main/reports/l3_prompt_replay.json
 edge-mvp l3 promote-prompt --run-dir runs/main --prompt runs/main/artifacts/generations/gen_001/l3/l3_prompt.candidate.json --replay runs/main/reports/l3_prompt_replay.json
@@ -71,6 +72,7 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 - `direct-l4-optimization`
 - `l2-family`
 - `l2-mlp`
+- `l2-tuned`
 - `no-guard`
 - `no-l2`
 - `workload-locality`
@@ -79,6 +81,8 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 `no-guard` 是诊断性 ablation：它设置 `L2_GUARD_MODE=always_accept` 和 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能进入该隔离 experiment runtime，报告 threshold 移除后的真实错误率和时延。该配置不用于主线 evolution。
 
 `l2-mlp` 是确定性 MLP family 实验：它设置 `L2_INTENT_MODEL_FAMILY=mlp`，不要求 live L4 proposal，用于把 MLP candidate 与默认 `sgd_logreg` 在同一 replay/report 框架下比较。
+
+`l2-tuned` 是 Optuna tuning 实验：它设置 `L2_TUNING_MODE=optuna`，compiler 只用 `teacher_train` 内部切分做调参，写出 `l2/l2_tuning.json`，再用 best config 训练最终 L2 candidate。
 
 `workload-locality` 会在同一个 experiment root 下分别运行 `uniform`、`zipf-mild` 和 `zipf-heavy` 子目录。
 

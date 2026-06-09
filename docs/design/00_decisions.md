@@ -128,7 +128,21 @@ L3 local SLM 是 proposal 的重要层级，但本地模型可能慢，且本地
 - 同一 teacher cache key 命中时不刷新。
 - prompt/schema/model 变化进入新的 cache namespace。
 
-## 决策 9：L0 第一阶段只要求 exact cache
+## 决策 9：L2 evolve 拆成 coding-agent 结构改造与 Optuna 调参
+
+**状态：用户决策。**
+
+L2 的演化不应让 L4 模型手工猜超参。L4 coding agent 负责需要 generalized intelligence 的工作：修改 L2 代码、设计特征、模型家族、校准方法、accept policy、验证协议和 Optuna search space。Optuna 或同类本地工具负责在已定义 search space 内做局部超参搜索。
+
+设计含义：
+
+- 调参是本地、可复现、可审计的工具调用，不消耗 L4 token 做人工搜索。
+- L4 coding agent 可以自由调用 `edge-mvp l2 tune` 或等价 Python API，并读取 tuning report。
+- Optuna 不能直接优化最终 e2e test；compiler 中的 tuning 只使用 `teacher_train` 内部切分出的 validation，不读取 promotion holdout、gold eval 或 future stream。
+- `L2_TUNING_MODE=optuna` 是显式开关，默认关闭，避免普通 replay 默认变慢。
+- 旧的 direct L4 bounded L2 config proposal 只保留为轻量 proposal path；它不能取代 coding-agent 级别的 L2 code evolution。
+
+## 决策 10：L0 第一阶段只要求 exact cache
 
 **状态：设计决策。**
 

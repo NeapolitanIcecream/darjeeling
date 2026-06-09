@@ -118,6 +118,27 @@ class Settings(BaseSettings):
         default=False,
         validation_alias="L2_MLP_EARLY_STOPPING",
     )
+    l2_tuning_mode: Literal["disabled", "optuna"] = Field(
+        default="disabled",
+        validation_alias="L2_TUNING_MODE",
+    )
+    l2_tuning_trials: int = Field(default=16, validation_alias="L2_TUNING_TRIALS")
+    l2_tuning_timeout_s: float | None = Field(
+        default=None,
+        validation_alias="L2_TUNING_TIMEOUT_S",
+    )
+    l2_tuning_validation_fraction: float = Field(
+        default=0.25,
+        validation_alias="L2_TUNING_VALIDATION_FRACTION",
+    )
+    l2_tuning_search_space: Literal["compact", "wide"] = Field(
+        default="compact",
+        validation_alias="L2_TUNING_SEARCH_SPACE",
+    )
+    l2_tuning_latency_weight: float = Field(
+        default=0.01,
+        validation_alias="L2_TUNING_LATENCY_WEIGHT",
+    )
     l2_min_guarded_accuracy: float = 0.93
     l2_max_wrong_accept_rate: float = 0.05
     l2_min_runtime_examples: int = Field(default=30, validation_alias="L2_MIN_RUNTIME_EXAMPLES")

@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from darjeeling.artifacts.store import ArtifactStore
+from darjeeling.compiler.l2_tuner import L2TuneResult
 from darjeeling.compiler.loop import run_compiler_generation
 from darjeeling.data.massive import DataRecord
 from darjeeling.runtime.replay import load_l0_layer_from_manifest, run_replay
@@ -139,6 +140,76 @@ def test_compiler_generation_records_l2_guard_threshold_search(tmp_path: Path) -
     assert metrics["l2_runtime_enabled"] is False
     assert metrics["l2_min_runtime_examples"] == settings.l2_min_runtime_examples
     assert metrics["l2_guard_search"]["selected"]["threshold"] == metrics["l2_guard_threshold"]
+
+
+def test_compiler_generation_uses_optuna_l2_tuning_when_enabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_tune_l2_student(traces, *, base_config, spec):
+        tuned_config = base_config.model_copy(
+            update={
+                "slot_model_family": "none",
+                "max_features": 1234,
+                "word_ngram_range": (1, 3),
+            }
+        )
+        captured["trace_ids"] = [trace.request_id for trace in traces]
+        captured["spec"] = spec
+        return L2TuneResult(
+            train_size=4,
+            validation_size=2,
+            n_trials_requested=spec.n_trials,
+            n_trials_completed=1,
+            best_trial_number=0,
+            best_value=1.5,
+            best_config=tuned_config.model_dump(mode="json"),
+            best_metrics={
+                "unguarded": {"accepted_accuracy": 1.0, "total": 2},
+                "guarded": {"coverage": 0.5, "wrong_accept_rate": 0.0},
+                "p95_latency_ms": 1.0,
+            },
+            trials=[],
+        )
+
+    monkeypatch.setattr("darjeeling.compiler.loop.tune_l2_student", fake_tune_l2_student)
+    settings = load_settings().model_copy(
+        update={
+            "l2_tuning_mode": "optuna",
+            "l2_tuning_trials": 3,
+            "l2_tuning_search_space": "wide",
+        }
+    )
+    traces = [
+        _teacher_trace("m1", "play jazz", "music_play"),
+        _teacher_trace("a1", "set alarm for seven", "alarm_set"),
+        _teacher_trace("m2", "play music", "music_play"),
+        _teacher_trace("a2", "wake me at eight", "alarm_set"),
+        _teacher_trace("m3", "start playlist", "music_play"),
+        _teacher_trace("a3", "alarm at nine", "alarm_set"),
+        _teacher_trace("m4", "play songs", "music_play"),
+        _teacher_trace("a4", "set morning alarm", "alarm_set"),
+    ]
+
+    result = run_compiler_generation(
+        run_dir=tmp_path,
+        traces=traces,
+        settings=settings,
+    )
+
+    assert result.manifest is not None
+    metrics = result.manifest.candidate_metrics
+    assert captured["trace_ids"] == ["m1", "a1", "m2", "a2", "m3", "a3"]
+    assert captured["spec"].n_trials == 3
+    assert captured["spec"].search_space == "wide"
+    assert metrics["l2_tuning_mode"] == "optuna"
+    assert metrics["l2_tuning_succeeded"] is True
+    assert metrics["l2_tuning"]["best_value"] == 1.5
+    assert metrics["l2_config"]["slot_model_family"] == "none"
+    assert metrics["l2_config"]["max_features"] == 1234
+    assert "l2_tuning" in result.manifest.artifact_paths
 
 
 def test_compiler_generation_uses_live_l4_l2_proposal_when_enabled(

@@ -54,6 +54,9 @@ def test_default_prompt_cache_retention_matches_live_provider_requirement() -> N
     settings = load_settings()
 
     assert settings.prompt_cache_retention == "24h"
+    assert settings.l2_tuning_mode == "disabled"
+    assert settings.l2_tuning_trials == 16
+    assert settings.l2_tuning_search_space == "compact"
 
 
 def test_load_settings_fails_for_explicit_missing_file(tmp_path: Path) -> None:

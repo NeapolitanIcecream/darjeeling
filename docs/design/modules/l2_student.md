@@ -113,7 +113,12 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 
 ## L4 参与方式
 
-L4 对 L2 使用 direct model API，输出 bounded config JSON。L4 不生成训练代码，不参与多轮 coding-agent session。
+用户决策：L2 evolve 拆成两类工作。
+
+- 调参交给 Optuna 或同类本地 optimizer。
+- 真正需要 generalized intelligence 的设计工作由 L4 coding agent 承担，包括修改 L2 代码、设计特征管线、模型家族、calibration、accept policy、验证协议和 Optuna search space。
+
+旧的 direct L4 bounded config proposal 仍保留为轻量 proposal path，但它不是最终 L2 evolve 主路径。
 
 当前接入状态：
 
@@ -122,11 +127,20 @@ L4 对 L2 使用 direct model API，输出 bounded config JSON。L4 不生成训
 - Proposal 只允许影响白名单字段：`intent_model_family`、`slot_model_family`、`min_examples`、`max_features`、`max_iter`、`mlp_hidden_layer_sizes`、`mlp_alpha`、`mlp_early_stopping`、`word_ngram_range`、`char_ngram_range`。
 - Proposal 不直接决定 accept threshold；threshold 仍由 deterministic grid search 选择。
 
+Optuna tuning path：
+
+- `edge-mvp l2 tune --traces <trace.jsonl> --out <report.json>` 是 L4 coding agent 可调用的本地工具接口。
+- `L2_TUNING_MODE=optuna` 时，compiler 在每个 generation 中先对 `teacher_train` 做内部 train/validation split，再运行 Optuna search，最后用 best config 训练 runtime candidate。
+- Tuning report 使用 `l2-tune-v1`，记录每个 trial 的 params、最终 `L2StudentConfig`、validation unguarded/guarded metrics 和 p95 latency。
+- Optuna 不能读取 promotion holdout、MASSIVE gold、final eval 或 future stream；它只优化 teacher-visible train window 的内部 validation。
+- `candidate_metrics["l2_tuning"]` 记录 trial 数、best value、best metrics；`artifact_paths["l2_tuning"]` 指向完整 tuning report。
+
 ## MLP evolve path
 
 MLP 不是替换默认 L2 的硬编码选择，而是一个可复现实验 family：
 
 - `L2_INTENT_MODEL_FAMILY=mlp` 可以直接启用 deterministic MLP candidate。
 - `edge-mvp experiment l2-mlp` 固定开启 MLP intent family，用于与 baseline 同场 replay。
-- `L4_PROPOSAL_MODE=live` 时，L4 可以在 bounded config 中提议 `intent_model_family=mlp` 及相关参数，但 compiler 仍只用 deterministic trainer 和 replay gate 决定是否 promotion。
+- `edge-mvp experiment l2-tuned` 开启 Optuna tuning，用于验证本地搜索是否优于 baseline/固定 MLP。
+- `L4_PROPOSAL_MODE=live` 时，L4 可以在 bounded config 中提议 `intent_model_family=mlp` 及相关参数；更强路径是 L4 coding agent 修改 L2 代码或 search space 后再调用 Optuna。
 - `candidate_metrics["l2_config"]` 记录最终训练配置，避免实验结果只留下自然语言描述。
