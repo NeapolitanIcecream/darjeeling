@@ -172,6 +172,7 @@ L2 coding-agent path：
 - `dry-run` 应用 fixture patch，只用于 harness 和 artifact 测试。
 - `codex-cli` 在隔离 Darjeeling workspace 中运行 Codex CLI，可修改 L2-owned Python source、tests 和模块设计文档，并调用 Optuna/pytest/ruff。
 - Agent context 只包含 teacher-visible L2 train scope、train-visible hard cases、current metrics、objective、constraints 和命令说明。
+- Agent context 还包含 `slot_error_summary.json`，从 teacher-visible train/hard cases 中汇总 L2 wrong accept，尤其标出 intent 正确但 slot 缺失、多余或值错误的样本。该 summary 用于把下一轮 L2 evolve 的焦点放在 frame exactness，而不是只扩大 coverage。
 - 当前 compiler 只记录 agent patch artifact，不在同一 Python 进程中热加载 patch：`candidate_metrics["l2_agent_patch_runtime_applied"] = false`。真实采用 patch 必须由外层开发循环应用、提交 Git、重启实验。
 
 Optuna tuning path：

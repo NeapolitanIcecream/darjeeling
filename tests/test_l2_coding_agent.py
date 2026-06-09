@@ -39,6 +39,33 @@ def _teacher_trace():
     return traces_to_teacher_view([trace])[0]
 
 
+def _slot_wrong_hard_case():
+    trace = TraceRecord(
+        request_id="r-slot",
+        utterance="what's on my to do list",
+        gold_frame=Frame(intent="lists_query", slots={"list_name": "to do"}),
+        teacher_frame=Frame(intent="lists_query", slots={"list_name": "to do"}),
+        chosen_layer="L2",
+        final_frame=Frame(intent="lists_query", slots={}),
+        layer_results=[
+            LayerResult(
+                layer="L2",
+                accepted=True,
+                frame=Frame(intent="lists_query", slots={}),
+                confidence=0.95,
+                latency_ms=2.0,
+                metadata={
+                    "guard_probability": 0.95,
+                    "frame_source": "student",
+                    "predicted_slot_count": 0.0,
+                    "predicted_signature_frame_accuracy": 0.72,
+                },
+            )
+        ],
+    )
+    return traces_to_teacher_view([trace])[0]
+
+
 def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     tmp_path: Path,
 ) -> None:
@@ -67,7 +94,7 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
             run_validation=False,
         ),
         teacher_train=[_teacher_trace()],
-        hard_cases=[],
+        hard_cases=[_slot_wrong_hard_case()],
         current_metrics={"l2_runtime_coverage": 0.001},
         objective={"wrong_accept_limit": 0.05},
     )
@@ -89,10 +116,13 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     assert str(workspace_context_dir.resolve()) in prompt_text
     assert (workspace_context_dir / "agent_brief.md").exists()
     assert (workspace_context_dir / "l2_context_families.json").exists()
+    assert (workspace_context_dir / "slot_error_summary.json").exists()
     agent_brief = (workspace_context_dir / "agent_brief.md").read_text(encoding="utf-8")
     assert "bounded evolve job" in agent_brief
     assert "l2_examples" in agent_brief
     assert "alarm_set|time" in agent_brief
+    assert "Slot-level L2 failure summary" in agent_brief
+    assert "missing_slot_counts" in agent_brief
     context_families = json.loads(
         (result.context_dir / "l2_context_families.json").read_text(encoding="utf-8")
     )
@@ -102,6 +132,14 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     assert context_families["schema_version"] == "l2-context-families-v1"
     assert workspace_context_families == context_families
     assert context_families["families"][0]["family_id"] == "alarm_set|time"
+    slot_error_summary = json.loads(
+        (workspace_context_dir / "slot_error_summary.json").read_text(encoding="utf-8")
+    )
+    assert slot_error_summary["schema_version"] == "l2-slot-error-summary-v1"
+    assert slot_error_summary["l2_wrong_accept_count"] == 1
+    assert slot_error_summary["l2_intent_correct_slot_mismatch_count"] == 1
+    assert slot_error_summary["missing_slot_counts"] == {"list_name": 1}
+    assert slot_error_summary["examples"][0]["l2_metadata"]["guard_probability"] == 0.95
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l2-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"

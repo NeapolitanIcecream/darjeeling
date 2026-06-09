@@ -229,15 +229,21 @@ def _write_context_files(
         teacher_train=teacher_train,
         hard_cases=hard_cases,
     )
+    slot_error_summary = _slot_error_summary_payload(
+        teacher_train=teacher_train,
+        hard_cases=hard_cases,
+    )
     payloads = {
         "agent_brief.md": _agent_brief_text(
             context_families=context_families,
+            slot_error_summary=slot_error_summary,
             current_metrics=current_metrics,
             objective=objective,
         ),
         "teacher_train.jsonl": [trace.model_dump(mode="json") for trace in teacher_train],
         "hard_cases.jsonl": [trace.model_dump(mode="json") for trace in hard_cases],
         "l2_context_families.json": context_families,
+        "slot_error_summary.json": slot_error_summary,
         "current_metrics.json": current_metrics,
         "objective.json": objective,
         "constraints.md": _constraints_text(),
@@ -305,6 +311,7 @@ def _build_l2_agent_prompt(
 def _agent_brief_text(
     *,
     context_families: dict[str, Any],
+    slot_error_summary: dict[str, Any],
     current_metrics: dict[str, Any],
     objective: dict[str, Any],
 ) -> str:
@@ -330,6 +337,8 @@ def _agent_brief_text(
         "   quality, guard calibration, or L2 search-space plumbing.",
         "3. Add or update a focused L2 test.",
         "4. Run the smallest relevant pytest/ruff commands from `agent_contexts/commands.md`.",
+        "5. If `agent_contexts/slot_error_summary.json` contains L2 slot failures,",
+        "   prioritize exact frame quality over broad coverage.",
         "",
         "Objective:",
         _compact_json(objective),
@@ -337,6 +346,8 @@ def _agent_brief_text(
         "Current metrics summary:",
     ]
     lines.extend(f"- {line}" for line in _l2_metric_summary_lines(current_metrics))
+    lines.extend(["", "Slot-level L2 failure summary:"])
+    lines.extend(f"- {line}" for line in _slot_error_summary_lines(slot_error_summary))
     lines.extend(["", "Top visible context families:"])
     for family in context_families.get("families", [])[:8]:
         examples = family.get("examples") or []
@@ -428,6 +439,18 @@ def _l2_metric_summary_lines(metrics: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _slot_error_summary_lines(summary: dict[str, Any]) -> list[str]:
+    return [
+        f"l2_wrong_accept_count={summary.get('l2_wrong_accept_count')}",
+        "l2_intent_correct_slot_mismatch_count="
+        f"{summary.get('l2_intent_correct_slot_mismatch_count')}",
+        "missing_slot_counts=" + _compact_json(summary.get("missing_slot_counts", {})),
+        "extra_slot_counts=" + _compact_json(summary.get("extra_slot_counts", {})),
+        "changed_slot_counts=" + _compact_json(summary.get("changed_slot_counts", {})),
+        f"example_count={len(summary.get('examples', []))}",
+    ]
+
+
 def _compact_json(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -497,6 +520,121 @@ def _context_families_payload(
     }
     assert_no_forbidden_context(payload)
     return payload
+
+
+def _slot_error_summary_payload(
+    *,
+    teacher_train: list[TeacherTrace],
+    hard_cases: list[TeacherTrace],
+) -> dict[str, Any]:
+    hard_case_ids = {trace.request_id for trace in hard_cases}
+    traces_by_id = {trace.request_id: trace for trace in teacher_train}
+    traces_by_id.update({trace.request_id: trace for trace in hard_cases})
+    missing_slot_counts: Counter[str] = Counter()
+    extra_slot_counts: Counter[str] = Counter()
+    changed_slot_counts: Counter[str] = Counter()
+    examples: list[dict[str, Any]] = []
+    wrong_accept_count = 0
+    slot_mismatch_count = 0
+
+    for trace in sorted(
+        traces_by_id.values(),
+        key=lambda item: (item.request_id not in hard_case_ids, item.request_id),
+    ):
+        if trace.teacher_frame is None:
+            continue
+        l2_result = next((result for result in trace.layer_results if result.layer == "L2"), None)
+        if l2_result is None or not l2_result.accepted or l2_result.frame is None:
+            continue
+        if l2_result.frame == trace.teacher_frame:
+            continue
+        wrong_accept_count += 1
+        if l2_result.frame.intent != trace.teacher_frame.intent:
+            mismatch_type = "intent_mismatch"
+        else:
+            mismatch_type = "slot_mismatch"
+            slot_mismatch_count += 1
+        slot_delta = _slot_delta(
+            expected_slots=trace.teacher_frame.slots,
+            predicted_slots=l2_result.frame.slots,
+        )
+        missing_slot_counts.update(slot_delta["missing_slots"])
+        extra_slot_counts.update(slot_delta["extra_slots"])
+        changed_slot_counts.update(slot_delta["changed_slots"])
+        if len(examples) < 12:
+            examples.append(
+                {
+                    "request_id": trace.request_id,
+                    "utterance": trace.utterance,
+                    "is_hard_case": trace.request_id in hard_case_ids,
+                    "mismatch_type": mismatch_type,
+                    "teacher_frame": trace.teacher_frame.model_dump(mode="json"),
+                    "l2_frame": l2_result.frame.model_dump(mode="json"),
+                    "missing_slots": slot_delta["missing_slots"],
+                    "extra_slots": slot_delta["extra_slots"],
+                    "changed_slots": slot_delta["changed_slots"],
+                    "l2_confidence": l2_result.confidence,
+                    "l2_metadata": _l2_metadata_summary(l2_result.metadata),
+                }
+            )
+
+    payload = {
+        "schema_version": "l2-slot-error-summary-v1",
+        "teacher_train_count": len(teacher_train),
+        "hard_case_count": len(hard_cases),
+        "l2_wrong_accept_count": wrong_accept_count,
+        "l2_intent_correct_slot_mismatch_count": slot_mismatch_count,
+        "missing_slot_counts": dict(sorted(missing_slot_counts.items())),
+        "extra_slot_counts": dict(sorted(extra_slot_counts.items())),
+        "changed_slot_counts": dict(sorted(changed_slot_counts.items())),
+        "examples": examples,
+    }
+    assert_no_forbidden_context(payload)
+    return payload
+
+
+def _slot_delta(
+    *,
+    expected_slots: dict[str, str],
+    predicted_slots: dict[str, str],
+) -> dict[str, list[str]]:
+    expected_names = set(expected_slots)
+    predicted_names = set(predicted_slots)
+    shared_names = expected_names & predicted_names
+    return {
+        "missing_slots": sorted(expected_names - predicted_names),
+        "extra_slots": sorted(predicted_names - expected_names),
+        "changed_slots": sorted(
+            name for name in shared_names if expected_slots[name] != predicted_slots[name]
+        ),
+    }
+
+
+def _l2_metadata_summary(metadata: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = [
+        "accept_threshold",
+        "entropy",
+        "frame_source",
+        "frame_source_config",
+        "guard_probability",
+        "intent_model",
+        "intent_support_margin",
+        "margin",
+        "predicted_has_slots",
+        "predicted_intent_frame_accuracy",
+        "predicted_intent_intent_accuracy",
+        "predicted_signature_frame_accuracy",
+        "predicted_signature_support",
+        "predicted_slot_count",
+        "retrieval_intent_matches_student",
+        "retrieval_margin",
+        "retrieval_similarity",
+        "slot_avg_probability",
+        "slot_invalid_bio",
+        "slot_model",
+        "top1_probability",
+    ]
+    return {key: metadata[key] for key in allowed_keys if key in metadata}
 
 
 def _family_id(intent: str, slot_signature: tuple[str, ...]) -> str:

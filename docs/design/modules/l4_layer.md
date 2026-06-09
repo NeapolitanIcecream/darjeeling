@@ -148,6 +148,7 @@ Agent 权限：
 
 - 在 L2 compiler generation 中启动 Codex CLI。
 - 向 agent 提供隔离 Darjeeling workspace、teacher-visible L2 context files、当前 metrics、objective、constraints 和命令说明。
+- L2 context files 包含 `slot_error_summary.json`，用于暴露 teacher-visible L2 wrong accepts 和 slot-level mismatch，使 agent 在扩大 coverage 前优先处理 frame exactness 风险。
 - 允许 agent 修改 L2-owned Python source、tests 和模块设计文档，并调用 Optuna/local tests。
 - 收集 diff、raw transcript、commands、agent report 和结构化 provenance。
 
