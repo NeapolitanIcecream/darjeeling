@@ -78,7 +78,8 @@ guard 并写入 trace metadata：
 Slot 输出还经过两层 schema-aware 后处理：
 
 - 按 predicted intent 的 teacher-visible slot 白名单过滤，避免给该 intent 未见过的 slot。
-- 从 teacher examples 自动抽取 slot 左右上下文 pattern，作为 token tagger 漏召回时的 fallback span extractor，例如从 `how old is <person>` 或 `what does <definition_word> mean` 这类 teacher-visible pattern 泛化。该机制不写死数据集 intent、slot 或模板，只依赖当前 examples。
+- 从 teacher examples 自动抽取 slot 左右上下文 pattern，作为 token tagger 漏召回时的 fallback span extractor，例如从 `how old is <person>` 或 `what does <definition_word> mean` 这类 teacher-visible pattern 泛化。主机制不写死数据集 intent 或模板，只依赖当前 examples。
+- 对少数 slot-name 本身带有稳定 lexical marker 的场景，允许 guard-protected 的窄 fallback；当前只实现 `list_name` 在 singular `list` marker 前的抽取，例如 `to do list` -> `list_name=to do`。该 fallback 只在当前 predicted intent 的 slot 白名单允许该 slot、且 learned pattern 没有填充时触发；如果它降低 guard confidence，则请求会继续 fallback 到 L4。
 
 仍需作为实验限制记录：
 

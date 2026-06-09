@@ -1079,12 +1079,13 @@ def apply_slot_patterns(
     if not allowed_slots:
         return slots
     patterns_by_slot = slot_patterns_by_intent.get(intent, {})
-    if not patterns_by_slot:
-        return slots
     tokens = tokenize(utterance)
     if not tokens:
         return slots
     updated = dict(slots)
+    if not patterns_by_slot:
+        _apply_slot_fallbacks(intent, tokens, updated, allowed_slots)
+        return updated
     for slot_name in allowed_slots:
         for pattern in patterns_by_slot.get(slot_name, []):
             extracted = _extract_slot_with_context(tokens, pattern)
@@ -1094,7 +1095,54 @@ def apply_slot_patterns(
             if slot_name not in updated or len(tokenize(extracted)) > len(existing):
                 updated[slot_name] = extracted
             break
+    _apply_slot_fallbacks(intent, tokens, updated, allowed_slots)
     return updated
+
+
+def _apply_slot_fallbacks(
+    intent: str,
+    tokens: list[str],
+    slots: dict[str, str],
+    allowed_slots: tuple[str, ...],
+) -> None:
+    del intent
+    if "list_name" in allowed_slots and "list_name" not in slots:
+        list_name = _extract_list_name_before_list(tokens)
+        if list_name:
+            slots["list_name"] = list_name
+
+
+_LIST_NAME_BOUNDARIES = frozenset({"a", "an", "my", "our", "the", "their", "your"})
+_LIST_NAME_LEADING_FILLERS = frozenset(
+    {
+        "display",
+        "get",
+        "open",
+        "please",
+        "show",
+        "tell",
+    }
+)
+
+
+def _extract_list_name_before_list(tokens: list[str]) -> str | None:
+    for index, token in enumerate(tokens):
+        if token != "list":
+            continue
+        prefix = tokens[max(0, index - 4) : index]
+        if not prefix:
+            continue
+        start = 0
+        for offset in range(len(prefix) - 1, -1, -1):
+            if prefix[offset] in _LIST_NAME_BOUNDARIES:
+                start = offset + 1
+                break
+        candidate = prefix[start:]
+        while candidate and candidate[0] in _LIST_NAME_LEADING_FILLERS:
+            candidate = candidate[1:]
+        if candidate:
+            return " ".join(candidate)
+    return None
 
 
 def _extract_slot_with_context(

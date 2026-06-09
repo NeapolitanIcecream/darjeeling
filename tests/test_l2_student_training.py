@@ -255,6 +255,32 @@ def test_l2_slot_patterns_match_question_is_contractions() -> None:
     ) == {"list_name": "to do"}
 
 
+def test_l2_slot_fallback_extracts_list_name_before_list_marker() -> None:
+    slots_by_intent = {"lists_query": ("list_name",)}
+
+    assert apply_slot_patterns(
+        "lists_query",
+        "what's on my to do list",
+        {},
+        slots_by_intent,
+        {},
+    ) == {"list_name": "to do"}
+    assert apply_slot_patterns(
+        "lists_query",
+        "show grocery list",
+        {},
+        slots_by_intent,
+        {},
+    ) == {"list_name": "grocery"}
+    assert apply_slot_patterns(
+        "lists_query",
+        "what's on my list",
+        {},
+        slots_by_intent,
+        {},
+    ) == {}
+
+
 def test_l2_bundle_drops_slots_not_seen_for_predicted_intent() -> None:
     class FakeIntentPipeline:
         classes_ = ["music_play", "alarm_set"]
