@@ -992,7 +992,9 @@ profile:
 - `loop_cadence.outer_replay_cadence_bound = false`.
 - `budget_policy.profile = fixed-inner`.
 - `fixed-inner` defaults to `rounds=48`, `inner_patience_rounds=0`, and
-  `local_search_trials=256`, unless explicit flags override them.
+  `local_search_trials=32`, unless explicit flags override them. Later
+  cross-audit local-search experiments also set the default top-k re-rank budget
+  to 4 after a 64-trial run proved too slow for routine feedback.
 - `target_code_policy` records that Darjeeling core remains
   dataset-independent, while visible-data-derived target-specific code is
   legal inside `target/`.
@@ -1847,3 +1849,144 @@ Interpretation:
   visible agent signal and should run a longer fixed-inner loop. The current
   3-round dry-run sequence is still only a harness/protocol validation, not
   evidence that L4/Codex-driven target evolution has been exhausted.
+
+## Local-search cross-audit re-rank
+
+The next implementation changed `local-search` so Optuna still scores all trials
+with ordinary visible validation, but the top visible candidates can be
+re-evaluated with visible cross-audit before applying `target/config.json`.
+This keeps tuning visible-only while avoiding a single-split objective. The
+fixed-inner default was set to `local_search_trials=32` and
+`local_search_cross_audit_top_k=4`; larger budgets must be explicit.
+
+An attempted larger run was intentionally stopped:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-local-search-cross-audit-3k-r1 \
+  --budget-profile fixed-inner \
+  --rounds 3 \
+  --mode local-search \
+  --split-policy intent-stratified \
+  --local-search-trials 64 \
+  --local-search-cross-audit-top-k 4
+```
+
+After more than ten minutes, the run had only written `baseline.json` and had
+not finished round 1. This showed that `trials * folds * rounds` is not a
+seconds-level budget even though individual L2 training is small.
+
+The bounded validation run used 12 trials, top-2 cross-audit re-rank, and a
+180-second local-search timeout:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-local-search-cross-audit-3k-r2 \
+  --budget-profile fixed-inner \
+  --rounds 1 \
+  --mode local-search \
+  --split-policy intent-stratified \
+  --local-search-trials 12 \
+  --local-search-cross-audit-top-k 2 \
+  --local-search-timeout-s 180
+```
+
+Result:
+
+- Local-search completed all 12 trials and applied trial 0.
+- The selected config was conservative: `accept_threshold=0.98`,
+  `frame_source=student`, `sgd_logreg`, `token_sgd`, `max_features=1000`,
+  word 1-gram and char 2-gram.
+- Visible validation improved from 32 / 18 / 14 to 8 / 7 / 1, but still failed
+  the visible gate.
+- Visible cross-audit passed: 21 / 20 / 1 with wrong accept rate 0.0476.
+- Private selection passed: 6 / 6 / 0.
+- Private promotion passed: 7 / 7 / 0.
+
+Interpretation:
+
+- Cross-audit-aware tuning found a useful high-precision configuration quickly
+  once the budget was bounded.
+- The remaining blocker was a single visible validation wrong accept in
+  `general_quirky`, plus one cross-audit `email_query` wrong accept. This is a
+  good fit for target-only safety vetoes, not for lowering the visible gate.
+
+## Local-search config plus safety veto
+
+The next patch fixed the remaining visible safety backlog while keeping the
+local-search config target-local:
+
+```text
+docs/experiments/patches/l2_target_local_search_config_safety_veto_r1.patch
+```
+
+It adds:
+
+- the target-specific config found by local-search;
+- a `general_quirky` veto for non-temporal values hallucinated into the `date`
+  slot, derived from the visible validation and train-audit backlog;
+- an `email_query` veto for `person` values that are actually generic
+  "email(s)" phrases, derived from the visible cross-audit backlog.
+
+Validation command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-local-search-config-safety-veto-3k-r3 \
+  --budget-profile fixed-inner \
+  --rounds 1 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --dry-run-patch docs/experiments/patches/l2_target_local_search_config_safety_veto_r1.patch
+```
+
+Result:
+
+- Visible validation passed: 7 / 7 / 0, with 1 vetoed accept.
+- Visible cross-audit passed: 20 / 20 / 0, with 1 vetoed accept.
+- Private selection passed: 6 / 6 / 0.
+- Private promotion passed: 7 / 7 / 0.
+- `adoption_decision.adopted=true`.
+- Visible validation and visible cross-audit safety backlogs were empty. Train
+  audit still exposed diagnostic-only residual risks in `general_quirky`,
+  `general_joke`, and `cooking_recipe`.
+
+Outer replay command:
+
+```bash
+cp -R runs/l2-list-fallback-tuned-3k-r1 \
+  runs/l2-target-local-search-config-safety-veto-outer-3k-r1
+
+uv run edge-mvp l2 promote-target \
+  --target-run runs/l2-target-local-search-config-safety-veto-3k-r3 \
+  --run-dir runs/l2-target-local-search-config-safety-veto-outer-3k-r1
+
+uv run edge-mvp l2 replay-target \
+  --run-dir runs/l2-target-local-search-config-safety-veto-outer-3k-r1 \
+  --traces runs/l2-target-local-search-config-safety-veto-outer-3k-r1/traces.jsonl \
+  --out runs/l2-target-local-search-config-safety-veto-outer-3k-r1/reports/l2_target_outer_replay.json
+```
+
+Outer replay result:
+
+- Baseline: `L0=2344`, `L1=4`, `L2=0`, `L4=652`, frame EM `1.0`.
+- Candidate: `L0=2344`, `L1=4`, `L2=11`, `L4=641`, frame EM `1.0`.
+- L2 accepted accuracy stayed `1.0`; L2 wrong accept rate stayed `0.0`.
+- Cost per 100 requests improved from `0.217333` to `0.213685`.
+- Decision: promoted, `objective improved within gates`.
+
+Interpretation:
+
+- This is the first broad fixed-inner L2 target candidate in this series that
+  passes inner adoption and the formal 3k outer replay gate.
+- The improvement is safe but still small: 11 / 3000 requests moved from L4 to
+  L2. L2 quality remains a bottleneck; the next useful work is to let L4/Codex
+  agent edit `target/` structure using the visible cross-audit and train-audit
+  backlogs, while leaving hyperparameter search to the bounded local-search
+  tool.
+- The aborted 64-trial run confirms that local-search budget needs explicit
+  cost controls. The default top-k/trial budget was reduced; larger searches
+  should be explicit experiment choices.

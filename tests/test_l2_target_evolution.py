@@ -8,6 +8,7 @@ from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.cli import (
     _resolve_l2_target_agent_rounds,
     _resolve_l2_target_budget,
+    _resolve_l2_target_local_search_cross_audit_top_k,
     _resolve_l2_target_visible_cross_audit_folds,
     _resolve_l2_target_visible_validation_folds,
     app,
@@ -645,14 +646,47 @@ def test_l2_target_evolution_local_search_uses_visible_workspace_only(
         "l2-target-local-search-v1"
     )
     assert report["trials_requested"] == 2
+    assert report["cross_audit_rerank_enabled"] is False
     assert report["private_holdout_visibility"] == (
-        "local search used only visible train and validation-fold data"
+        "local search used only agent-visible train and validation-fold data"
     )
     assert "selection_holdout" not in report_path.read_text(encoding="utf-8")
     assert "promotion_holdout" not in report_path.read_text(encoding="utf-8")
     assert (workspace / "tools" / "search_config.py").exists()
     assert not (workspace / "data" / "selection_holdout.jsonl").exists()
     assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
+
+
+def test_l2_target_evolution_local_search_can_rerank_with_visible_cross_audit(
+    tmp_path: Path,
+) -> None:
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=1,
+            mode="local-search",
+            local_search_trials=2,
+            local_search_cross_audit_top_k=1,
+            visible_cross_audit_folds=2,
+            inner_patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    report_path = tmp_path / "job" / "rounds" / "round_001_local_search.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert summary["rounds_completed"] == 1
+    assert report["cross_audit_rerank_enabled"] is True
+    assert report["cross_audit_top_k"] == 1
+    assert report["cross_audit_folds"] == 2
+    assert report["current_visible_cross_audit"]["split"] == "visible_cross_audit"
+    reranked = [
+        trial for trial in report["trials"] if trial.get("visible_cross_audit") is not None
+    ]
+    assert len(reranked) == 1
+    assert reranked[0]["visible_cross_audit"]["split"] == "visible_cross_audit"
 
 
 def test_l2_target_evolution_respects_zero_agent_round_budget(tmp_path: Path) -> None:
@@ -702,7 +736,7 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
         rounds=None,
         inner_patience_rounds=None,
         local_search_trials=None,
-    ) == (48, 0, 256)
+    ) == (48, 0, 32)
     assert _resolve_l2_target_budget(
         budget_profile="fixed-inner",
         rounds=3,
@@ -762,6 +796,26 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
         budget_profile="fixed-inner",
         visible_cross_audit_folds=4,
     ) == 4
+    assert _resolve_l2_target_local_search_cross_audit_top_k(
+        budget_profile="standard",
+        visible_cross_audit_folds=0,
+        local_search_cross_audit_top_k=None,
+    ) == 0
+    assert _resolve_l2_target_local_search_cross_audit_top_k(
+        budget_profile="fixed-inner",
+        visible_cross_audit_folds=0,
+        local_search_cross_audit_top_k=None,
+    ) == 0
+    assert _resolve_l2_target_local_search_cross_audit_top_k(
+        budget_profile="fixed-inner",
+        visible_cross_audit_folds=3,
+        local_search_cross_audit_top_k=None,
+    ) == 4
+    assert _resolve_l2_target_local_search_cross_audit_top_k(
+        budget_profile="fixed-inner",
+        visible_cross_audit_folds=3,
+        local_search_cross_audit_top_k=0,
+    ) == 0
     assert l2_target_evolution._effective_max_agent_rounds(  # noqa: SLF001
         L2TargetEvolutionConfig(
             source_repo_dir=Path.cwd(),
@@ -985,7 +1039,8 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert summary["rounds_completed"] == 2
     assert summary["budget_policy"]["profile"] == "fixed-inner"
     assert summary["budget_policy"]["inner_patience_rounds"] == 0
-    assert summary["budget_policy"]["local_search_trials"] == 256
+    assert summary["budget_policy"]["local_search_trials"] == 32
+    assert summary["budget_policy"]["local_search_cross_audit_top_k"] == 4
     assert summary["budget_policy"]["visible_validation_folds"] == 5
     assert summary["budget_policy"]["visible_cross_audit_folds"] == 3
     assert summary["data_split_policy"]["visible_validation_folds"] == 5
@@ -1090,6 +1145,7 @@ def test_l2_target_evolve_cli_accepts_local_search_mode(tmp_path: Path) -> None:
     summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
     assert summary["mode"] == "local-search"
     assert summary["budget_policy"]["local_search_trials"] == 2
+    assert summary["budget_policy"]["local_search_cross_audit_top_k"] == 0
 
 
 def test_l2_promote_target_cli_writes_runtime_artifacts(tmp_path: Path) -> None:

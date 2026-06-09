@@ -32,6 +32,7 @@ DEFAULT_TARGET_EVOLVE_ROUNDS = 12
 DEFAULT_TARGET_LOCAL_SEARCH_TRIALS = 96
 DEFAULT_TARGET_INNER_PATIENCE_ROUNDS = 4
 DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS = 3
+DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K = 4
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class L2TargetEvolutionConfig:
     local_search_trials: int = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS
     local_search_timeout_s: float | None = None
     local_search_space: L2TargetSearchSpace = "compact"
+    local_search_cross_audit_top_k: int = 0
     budget_profile: L2TargetBudgetProfile = "standard"
     split_policy: L2TargetSplitPolicy = "chronological"
     visible_validation_folds: int = 1
@@ -74,6 +76,8 @@ def run_l2_target_evolution(
         raise ValueError("inner_patience_rounds must be non-negative")
     if config.local_search_trials < 1:
         raise ValueError("local_search_trials must be at least 1")
+    if config.local_search_cross_audit_top_k < 0:
+        raise ValueError("local_search_cross_audit_top_k must be non-negative")
     if config.visible_validation_folds < 1:
         raise ValueError("visible_validation_folds must be at least 1")
     if config.visible_cross_audit_folds == 1 or config.visible_cross_audit_folds < 0:
@@ -189,6 +193,8 @@ def run_l2_target_evolution(
                     trials=config.local_search_trials,
                     search_space=config.local_search_space,
                     timeout_s=config.local_search_timeout_s,
+                    cross_audit_folds=config.visible_cross_audit_folds,
+                    cross_audit_top_k=config.local_search_cross_audit_top_k,
                     min_accepted_accuracy=config.min_accepted_accuracy,
                     max_wrong_accept_rate=config.max_wrong_accept_rate,
                 )
@@ -364,6 +370,7 @@ def run_l2_target_evolution(
             "local_search_trials": config.local_search_trials,
             "local_search_timeout_s": config.local_search_timeout_s,
             "local_search_space": config.local_search_space,
+            "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
             "max_agent_rounds": max_agent_rounds,
             "profile": config.budget_profile,
             "visible_validation_folds": config.visible_validation_folds,
@@ -1546,6 +1553,7 @@ def _write_target_state_files(
             "local_search_trials": config.local_search_trials,
             "local_search_timeout_s": config.local_search_timeout_s,
             "local_search_space": config.local_search_space,
+            "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
             "max_agent_rounds": _effective_max_agent_rounds(config),
             "visible_validation_folds": config.visible_validation_folds,
             "visible_cross_audit_folds": config.visible_cross_audit_folds,
@@ -1692,7 +1700,10 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
         "allowed_strategies": [
             "target-dependent code derived from visible train and validation-fold files",
             "config_overrides for bounded L2StudentConfig parameters",
-            "local Optuna/config search over visible train and inner validation only",
+            (
+                "local Optuna/config search over visible train/validation with optional "
+                "visible cross-audit top-k rerank"
+            ),
             "visible cross-audit diagnostics for selection-like safety pressure",
             "postprocess_frame fixes that preserve exact frame correctness",
             "accept_prediction veto logic that abstains when uncertain",
@@ -1852,6 +1863,14 @@ def _target_commands_text() -> str:
             "```bash",
             "uv run --project system/darjeeling python tools/search_config.py \\",
             f"  --trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} \\",
+            (
+                "  --cross-audit-folds "
+                f"{DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS} \\"
+            ),
+            (
+                "  --cross-audit-top-k "
+                f"{DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K} \\"
+            ),
             "  --out runs/local_search.json",
             "```",
             "",
@@ -1862,6 +1881,8 @@ def _target_commands_text() -> str:
             (
                 "  python tools/search_config.py "
                 f"--trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} "
+                f"--cross-audit-folds {DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS} "
+                f"--cross-audit-top-k {DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K} "
                 "--out runs/local_search.json"
             ),
             "```",
@@ -2026,6 +2047,8 @@ def run_local_target_search(
     trials: int,
     search_space: L2TargetSearchSpace = "compact",
     timeout_s: float | None = None,
+    cross_audit_folds: int = 0,
+    cross_audit_top_k: int = 0,
     min_accepted_accuracy: float = 0.93,
     max_wrong_accept_rate: float = 0.05,
 ) -> dict[str, Any]:
@@ -2035,6 +2058,10 @@ def run_local_target_search(
         raise ValueError("trials must be at least 1")
     if search_space not in {"compact", "wide"}:
         raise ValueError("search_space must be compact or wide")
+    if cross_audit_folds == 1 or cross_audit_folds < 0:
+        raise ValueError("cross_audit_folds must be 0 or at least 2")
+    if cross_audit_top_k < 0:
+        raise ValueError("cross_audit_top_k must be non-negative")
 
     config_path = workspace_root / "target" / "config.json"
     original_config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else None
@@ -2113,29 +2140,62 @@ def run_local_target_search(
                 and report.get("inner_validation") is not None
             )
         ]
+        current_cross_audit = None
+        cross_audit_rerank_enabled = cross_audit_folds >= 2 and cross_audit_top_k > 0
+        if cross_audit_rerank_enabled:
+            current_cross_audit = evaluate_target_workspace(
+                workspace_root=workspace_root,
+                split="visible_cross_audit",
+                min_accepted_accuracy=min_accepted_accuracy,
+                max_wrong_accept_rate=max_wrong_accept_rate,
+                visible_cross_audit_folds=cross_audit_folds,
+            )
+            for report in _local_search_cross_audit_candidates(
+                completed,
+                limit=cross_audit_top_k,
+            ):
+                _write_target_config_json(
+                    config_path,
+                    L2StudentConfig(**report["config"]),
+                )
+                metric = evaluate_target_workspace(
+                    workspace_root=workspace_root,
+                    split="visible_cross_audit",
+                    min_accepted_accuracy=min_accepted_accuracy,
+                    max_wrong_accept_rate=max_wrong_accept_rate,
+                    visible_cross_audit_folds=cross_audit_folds,
+                )
+                report["visible_cross_audit"] = _visible_metric_summary(metric)
+                report["cross_audit_score"] = list(_inner_score(metric))
         best_report = max(
             completed,
-            key=lambda report: (
-                _inner_score(report["inner_validation"]),
-                float(report["value"] or -1_000_000.0),
-            ),
+            key=lambda report: _local_search_report_score(report),
             default=None,
         )
         applied = False
         applied_reason = "no completed local-search trial"
         if best_report is not None:
-            best_inner = best_report["inner_validation"]
-            if _inner_score(best_inner) > _inner_score(current_inner):
+            if _local_search_report_score(best_report) > _local_search_current_score(
+                current_inner=current_inner,
+                current_cross_audit=current_cross_audit,
+                cross_audit_enabled=cross_audit_rerank_enabled,
+            ):
                 _write_target_config_json(
                     config_path,
                     L2StudentConfig(**best_report["config"]),
                 )
                 applied = True
-                applied_reason = "best visible validation config improved current target"
+                applied_reason = (
+                    "best visible/cross-audit config improved current target"
+                    if cross_audit_rerank_enabled
+                    else "best visible validation config improved current target"
+                )
             else:
                 _restore_target_config_json(config_path, original_config_text)
                 applied_reason = (
-                    "best visible validation config did not improve current target"
+                    "best visible/cross-audit config did not improve current target"
+                    if cross_audit_rerank_enabled
+                    else "best visible validation config did not improve current target"
                 )
         else:
             _restore_target_config_json(config_path, original_config_text)
@@ -2145,17 +2205,26 @@ def run_local_target_search(
             "trials_requested": trials,
             "trials_completed": len(completed),
             "timeout_s": timeout_s,
+            "cross_audit_folds": cross_audit_folds,
+            "cross_audit_top_k": cross_audit_top_k,
+            "cross_audit_rerank_enabled": cross_audit_rerank_enabled,
             "current_inner_validation": _visible_metric_summary(current_inner),
+            "current_visible_cross_audit": _optional_visible_metric_summary(
+                current_cross_audit,
+            ),
             "best_trial_number": best_report["number"] if best_report is not None else None,
             "best_value": best_report["value"] if best_report is not None else None,
             "best_config": best_report["config"] if best_report is not None else None,
             "best_inner_validation": (
                 best_report["inner_validation"] if best_report is not None else None
             ),
+            "best_visible_cross_audit": (
+                best_report.get("visible_cross_audit") if best_report is not None else None
+            ),
             "applied": applied,
             "applied_reason": applied_reason,
             "private_holdout_visibility": (
-                "local search used only visible train and validation-fold data"
+                "local search used only agent-visible train and validation-fold data"
             ),
             "trials": reports,
         }
@@ -2172,6 +2241,8 @@ def local_search_target_workspace_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--trials", type=int, default=48)
     parser.add_argument("--search-space", choices=["compact", "wide"], default="compact")
     parser.add_argument("--timeout-s", type=float, default=None)
+    parser.add_argument("--cross-audit-folds", type=int, default=0)
+    parser.add_argument("--cross-audit-top-k", type=int, default=0)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--min-accepted-accuracy", type=float, default=0.93)
     parser.add_argument("--max-wrong-accept-rate", type=float, default=0.05)
@@ -2181,6 +2252,8 @@ def local_search_target_workspace_cli(argv: list[str] | None = None) -> int:
         trials=args.trials,
         search_space=args.search_space,
         timeout_s=args.timeout_s,
+        cross_audit_folds=args.cross_audit_folds,
+        cross_audit_top_k=args.cross_audit_top_k,
         min_accepted_accuracy=args.min_accepted_accuracy,
         max_wrong_accept_rate=args.max_wrong_accept_rate,
     )
@@ -2283,6 +2356,55 @@ def _local_search_objective_value(metric: dict[str, Any]) -> float:
     )
 
 
+def _local_search_cross_audit_candidates(
+    reports: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    return sorted(
+        reports,
+        key=lambda report: (
+            _inner_score(report["inner_validation"]),
+            float(report["value"] or -1_000_000.0),
+        ),
+        reverse=True,
+    )[:limit]
+
+
+def _local_search_report_score(
+    report: dict[str, Any],
+) -> tuple[tuple[bool, int, float, float], tuple[bool, int, float, float], float]:
+    return (
+        _inner_score(report["inner_validation"]),
+        _optional_inner_score(report.get("visible_cross_audit")),
+        float(report["value"] or -1_000_000.0),
+    )
+
+
+def _local_search_current_score(
+    *,
+    current_inner: dict[str, Any],
+    current_cross_audit: dict[str, Any] | None,
+    cross_audit_enabled: bool,
+) -> tuple[tuple[bool, int, float, float], tuple[bool, int, float, float], float]:
+    cross_score = (
+        _inner_score(current_cross_audit)
+        if cross_audit_enabled and current_cross_audit is not None
+        else _empty_metric_score()
+    )
+    return (_inner_score(current_inner), cross_score, 0.0)
+
+
+def _optional_inner_score(metric: Any) -> tuple[bool, int, float, float]:
+    if isinstance(metric, dict):
+        return _inner_score(metric)
+    return _empty_metric_score()
+
+
+def _empty_metric_score() -> tuple[bool, int, float, float]:
+    return (False, -1_000_000_000, 0.0, 0.0)
+
+
 def _local_search_command_result(
     *,
     workspace_root: Path,
@@ -2338,9 +2460,13 @@ def _visible_local_search_summary(report: dict[str, Any]) -> dict[str, Any]:
         "search_space": report["search_space"],
         "trials_requested": report["trials_requested"],
         "trials_completed": report["trials_completed"],
+        "cross_audit_folds": report.get("cross_audit_folds"),
+        "cross_audit_top_k": report.get("cross_audit_top_k"),
+        "cross_audit_rerank_enabled": report.get("cross_audit_rerank_enabled"),
         "best_trial_number": report["best_trial_number"],
         "best_value": report["best_value"],
         "best_inner_validation": report["best_inner_validation"],
+        "best_visible_cross_audit": report.get("best_visible_cross_audit"),
         "applied": report["applied"],
         "applied_reason": report["applied_reason"],
         "private_holdout_visibility": report["private_holdout_visibility"],

@@ -18,6 +18,7 @@ from darjeeling.compiler.l2_distiller import l2_config_from_settings
 from darjeeling.compiler.l2_target_evolution import (
     DEFAULT_TARGET_EVOLVE_ROUNDS,
     DEFAULT_TARGET_INNER_PATIENCE_ROUNDS,
+    DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K,
     DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
     DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS,
     L2TargetBudgetProfile,
@@ -750,6 +751,16 @@ def l2_target_evolve(
         float | None,
         typer.Option(min=0.1, help="Optional Optuna timeout per local-search target round."),
     ] = None,
+    local_search_cross_audit_top_k: Annotated[
+        int | None,
+        typer.Option(
+            min=0,
+            help=(
+                "Re-rank this many top local-search trials with visible cross-audit. "
+                "Defaults are profile-specific; 0 disables."
+            ),
+        ),
+    ] = None,
     max_agent_rounds: Annotated[
         int | None,
         typer.Option(
@@ -795,6 +806,13 @@ def l2_target_evolve(
         budget_profile=resolved_budget_profile,
         visible_cross_audit_folds=visible_cross_audit_folds,
     )
+    resolved_local_search_cross_audit_top_k = (
+        _resolve_l2_target_local_search_cross_audit_top_k(
+            budget_profile=resolved_budget_profile,
+            visible_cross_audit_folds=resolved_visible_cross_audit_folds,
+            local_search_cross_audit_top_k=local_search_cross_audit_top_k,
+        )
+    )
     settings = _load_cli_settings()
     trace_records = read_traces(traces)
     if max_traces is not None:
@@ -812,6 +830,7 @@ def l2_target_evolve(
             local_search_trials=resolved_local_search_trials,
             local_search_space=local_search_space,  # type: ignore[arg-type]
             local_search_timeout_s=local_search_timeout_s,
+            local_search_cross_audit_top_k=resolved_local_search_cross_audit_top_k,
             budget_profile=resolved_budget_profile,
             split_policy=resolved_split_policy,
             visible_validation_folds=resolved_visible_validation_folds,
@@ -846,7 +865,7 @@ def _resolve_l2_target_budget(
     elif budget_profile == "fixed-inner":
         default_rounds = 48
         default_inner_patience = 0
-        default_local_search_trials = 256
+        default_local_search_trials = 32
     else:
         default_rounds = 1
         default_inner_patience = 0
@@ -904,6 +923,19 @@ def _resolve_l2_target_visible_cross_audit_folds(
         return visible_cross_audit_folds
     if budget_profile == "fixed-inner":
         return DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS
+    return 0
+
+
+def _resolve_l2_target_local_search_cross_audit_top_k(
+    *,
+    budget_profile: L2TargetBudgetProfile,
+    visible_cross_audit_folds: int,
+    local_search_cross_audit_top_k: int | None,
+) -> int:
+    if local_search_cross_audit_top_k is not None:
+        return local_search_cross_audit_top_k
+    if budget_profile == "fixed-inner" and visible_cross_audit_folds >= 2:
+        return DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K
     return 0
 
 
