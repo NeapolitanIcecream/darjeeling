@@ -77,7 +77,7 @@ def test_l2_retrieval_frame_source_returns_nearest_teacher_frame() -> None:
         ),
     )
 
-    prediction = bundle.predict("alarm at nine tomorrow")
+    prediction = bundle.predict("please alarm at nine tomorrow")
 
     assert prediction.frame == Frame(
         intent="alarm_set",
@@ -85,7 +85,27 @@ def test_l2_retrieval_frame_source_returns_nearest_teacher_frame() -> None:
     )
     assert prediction.frame_source == "retrieval"
     assert prediction.retrieval_frame == prediction.frame
-    assert prediction.retrieval_similarity > 0.99
+    assert prediction.retrieval_similarity > 0.5
+
+
+def test_l2_retrieval_does_not_return_exact_self_neighbor() -> None:
+    bundle = train_l2_student(
+        _examples(),
+        L2StudentConfig(
+            accept_threshold=0.0,
+            min_examples=4,
+            frame_source="retrieval",
+            slot_model_family="none",
+        ),
+    )
+
+    prediction = bundle.predict("alarm at nine tomorrow")
+
+    assert prediction.frame != Frame(
+        intent="alarm_set",
+        slots={"time": "nine tomorrow"},
+    )
+    assert prediction.retrieval_frame == prediction.frame
 
 
 def test_l2_student_trains_mlp_intent_family_and_reports_it() -> None:
@@ -370,4 +390,6 @@ def test_l2_student_bundle_round_trips_with_joblib(tmp_path: Path) -> None:
     loaded = L2StudentBundle.load(path)
 
     assert loaded.predict("play jazz").frame.intent == "music_play"
-    assert loaded.predict("alarm at nine tomorrow").frame.slots == {"time": "nine tomorrow"}
+    assert loaded.predict("please alarm at nine tomorrow").frame.slots == {
+        "time": "nine tomorrow"
+    }

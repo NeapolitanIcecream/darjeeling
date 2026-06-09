@@ -48,7 +48,9 @@ Decision tree 只允许在 L2，不允许在 L1。
 
 当前主线 frame source 是 `retrieval`。原因是实验显示直接 student 生成开放 slot frame 的 forced accuracy 很低，错误主要集中在 slot exact match；retrieval 路径把 L2 收缩为高精度 semantic-cache 式层，只在 replay 证明安全时吸收请求。`student` 路径继续保留，因为后续 L4 coding agent 可以演进更强的 slot extractor 或模型 family。
 
-Retrieval prototype index 使用同一套 TF-IDF feature space 保存 teacher-visible utterance 及其 teacher frame。Guard/calibration 训练时，prototype index 只来自 internal train split，guard split 不会进入自己的 retrieval index；runtime artifact 才使用完整 teacher-visible train window。Promotion holdout、gold eval 和 future stream 仍不可见。
+Retrieval prototype index 使用同一套 TF-IDF feature space 保存 teacher-visible utterance 及其 teacher frame。查询时会排除 normalized utterance 完全相同的 prototype：exact repeat 属于 L0 的职责，L2 retrieval 只处理近似重复或语义相似请求。这也避免 final threshold search 在 teacher_train 上检索到同一条训练样本而产生虚假的 100% coverage/accuracy。
+
+Guard/calibration 训练时，prototype index 只来自 internal train split，guard split 不会进入自己的 retrieval index；runtime artifact 才使用完整 teacher-visible train window。Promotion holdout、gold eval 和 future stream 仍不可见。
 
 L2 artifact 同时保存 intent prototype index：用同一套 TF-IDF feature space 存储 teacher-visible utterance prototype 及其 teacher intent。Runtime 预测时计算：
 

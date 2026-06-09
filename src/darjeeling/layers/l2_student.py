@@ -17,6 +17,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import normalize
 
+from darjeeling.data.frames import normalize_utterance
 from darjeeling.runtime.timing import elapsed_ms
 from darjeeling.schemas import Frame, LayerResult, TeacherTrace
 
@@ -172,9 +173,11 @@ class FramePrototypeIndex:
         self,
         *,
         prototype_frames: tuple[Frame, ...],
+        prototype_normalized_utterances: tuple[str, ...],
         prototype_matrix: Any,
     ) -> None:
         self.prototype_frames = prototype_frames
+        self.prototype_normalized_utterances = prototype_normalized_utterances
         self.prototype_matrix = prototype_matrix
 
     @classmethod
@@ -188,6 +191,9 @@ class FramePrototypeIndex:
         matrix = normalize(feature_step.transform(texts), copy=True)
         return cls(
             prototype_frames=tuple(example.teacher_frame for example in examples),
+            prototype_normalized_utterances=tuple(
+                normalize_utterance(example.utterance) for example in examples
+            ),
             prototype_matrix=matrix,
         )
 
@@ -203,7 +209,14 @@ class FramePrototypeIndex:
         similarities = (query @ self.prototype_matrix.T).toarray().ravel()
         if similarities.size == 0:
             return FrameRetrievalResult()
-        sorted_indices = np.argsort(similarities)[::-1]
+        query_key = normalize_utterance(utterance)
+        for index, prototype_key in enumerate(self.prototype_normalized_utterances):
+            if prototype_key == query_key:
+                similarities[index] = -np.inf
+        finite_indices = np.flatnonzero(np.isfinite(similarities))
+        if finite_indices.size == 0:
+            return FrameRetrievalResult()
+        sorted_indices = finite_indices[np.argsort(similarities[finite_indices])[::-1]]
         top_index = int(sorted_indices[0])
         top_similarity = float(similarities[top_index])
         second_similarity = (
