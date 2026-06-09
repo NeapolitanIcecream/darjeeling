@@ -922,3 +922,60 @@ Interpretation:
 - The outer replay path should be treated as final evidence. Non-adopted
   candidate staging is acceptable only when manifest metadata makes that status
   explicit and the run is isolated.
+
+## Formal target outer-replay gate
+
+The hand analysis above was converted into a reusable CLI gate:
+
+```bash
+uv run edge-mvp l2 replay-target \
+  --run-dir <target-run-dir> \
+  --traces <target-run-dir>/traces.jsonl \
+  --out <target-run-dir>/reports/l2_target_outer_replay.json
+```
+
+The command writes `l2-target-outer-replay-v1` JSON. It compares the current
+target manifest against its parent manifest, includes the settings L1 Rust
+worker by default, and uses `accuracy_epsilon=0` unless overridden.
+
+Old adopted email-from target:
+
+```bash
+uv run edge-mvp l2 replay-target \
+  --run-dir runs/l2-target-postprocess-3k-r2 \
+  --traces runs/l2-target-postprocess-3k-r2/traces.jsonl \
+  --out runs/l2-target-postprocess-3k-r2/reports/l2_target_outer_replay.json
+```
+
+Result:
+
+- Baseline parent: `L0=577, L1=19, L2=0, L3=0, L4=2404`.
+- Candidate: `L0=577, L1=19, L2=21, L3=0, L4=2383`.
+- Candidate frame EM: `0.996333`.
+- L2 accepted accuracy: `0.476190`.
+- Decision: rejected, `accuracy regression exceeds epsilon`.
+
+Veto target:
+
+```bash
+uv run edge-mvp l2 replay-target \
+  --run-dir runs/l2-target-postprocess-veto-3k-r1 \
+  --traces runs/l2-target-postprocess-veto-3k-r1/traces.jsonl \
+  --out runs/l2-target-postprocess-veto-3k-r1/reports/l2_target_outer_replay.json
+```
+
+Result:
+
+- Baseline parent: `L0=577, L1=19, L2=0, L3=0, L4=2404`.
+- Candidate: `L0=577, L1=19, L2=10, L3=0, L4=2394`.
+- Candidate frame EM: `1.0`.
+- L2 accepted accuracy: `1.0`.
+- Decision: promoted, `objective improved within gates`.
+
+Interpretation:
+
+- This closes the immediate process gap: target candidates now have a formal
+  outer replay report instead of a one-off analysis script.
+- The strict target gate correctly rejects the earlier inner-adopted candidate
+  and accepts the later non-adopted-but-staged candidate, showing that inner
+  adoption is neither necessary nor sufficient for final e2e acceptance.

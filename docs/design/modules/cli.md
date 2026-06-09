@@ -87,6 +87,8 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `edge-mvp l2 promote-target --target-run <target-run> --run-dir <run>` 将一个 `adoption_decision.adopted=true` 的 target-evolve run 提升为 replay runtime artifact。该命令继承 `<run>/artifacts/manifest.current.json` 中已有 artifact paths，重新用 target workspace 的 visible train split 训练 `l2_student.joblib`，复制 `target/` 到 generation 目录，并写入 `artifact_paths["l2_target"]`。默认未通过 adoption gate 的 target run 会被拒绝；传 `--allow-non-adopted` 时只把 `best_round` 显式 stage 到 run manifest，用于外层 e2e replay 诊断，manifest 会记录 `l2_target_inner_adopted=false` 和 `l2_target_staged_for_outer_replay=true`。promotion 后普通 `edge-mvp run --compile-every <large>` 会自动加载 target wrapper。
 
+`edge-mvp l2 replay-target --run-dir <run> --traces <traces.jsonl> --out <report.json>` 是 target artifact 的正式 outer replay gate。它默认用 current manifest 作为 candidate、candidate 的 parent manifest 作为 baseline，在同一批 teacher-labeled traces 上跑 compiler offline replay，并输出 `l2-target-outer-replay-v1` JSON：baseline/candidate objective、layer counts、per-layer deltas 和 promotion decision。默认 `accuracy_epsilon=0`，因此 target candidate 不能用 frame exactness regression 换覆盖率；默认包含 settings 中的 L1 Rust worker，`--no-include-default-l1` 只用于轻量测试或隔离诊断。
+
 `no-guard` 是诊断性 ablation：它设置 `L2_GUARD_MODE=always_accept` 和 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能进入该隔离 experiment runtime，报告 threshold 移除后的真实错误率和时延。该配置不用于主线 evolution。
 
 `l2-mlp` 是确定性 MLP family 实验：它设置 `L2_INTENT_MODEL_FAMILY=mlp`，不要求 live L4 proposal，用于把 MLP candidate 与默认 `sgd_logreg` 在同一 replay/report 框架下比较。

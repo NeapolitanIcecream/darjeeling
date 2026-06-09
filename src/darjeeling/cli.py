@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -26,6 +27,13 @@ from darjeeling.compiler.l2_tuner import L2TuneSpec, tune_l2_student
 from darjeeling.compiler.l3_prompt_optimizer import (
     l3_prompt_artifact_hash,
     replay_l3_prompt_artifact,
+)
+from darjeeling.compiler.replay import (
+    OfflineReplayResult,
+    decide_artifact_set_promotion,
+    evaluate_offline_artifact_set,
+    layer_deltas,
+    load_offline_artifact_set,
 )
 from darjeeling.data.massive import prepare_massive_dataset
 from darjeeling.eval.experiments import (
@@ -63,6 +71,7 @@ from darjeeling.layers.l4_cloud_llm import (
     TaskSchema,
     require_live_or_cached_teacher,
 )
+from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.runtime.replay import (
     load_processed_records,
     run_replay,
@@ -937,6 +946,224 @@ def _promote_l2_target_run(
     )
     store.promote(manifest)
     return ArtifactStore(run_dir / "artifacts").load_current_manifest() or manifest
+
+
+@l2_app.command("replay-target")
+def l2_replay_target(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Replay run directory containing a staged L2 target manifest."),
+    ],
+    traces: Annotated[
+        Path,
+        typer.Option(help="Trace JSONL with teacher_frame labels for outer replay."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(help="Output JSON report path."),
+    ],
+    candidate_generation: Annotated[
+        int | None,
+        typer.Option(min=1, help="Candidate manifest generation; defaults to current."),
+    ] = None,
+    baseline_generation: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Baseline manifest generation; defaults to candidate parent.",
+        ),
+    ] = None,
+    accuracy_epsilon: Annotated[
+        float,
+        typer.Option(min=0.0, help="Allowed frame exactness regression."),
+    ] = 0.0,
+    max_wrong_accept_rate: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Override max target replay wrong-accept rate."),
+    ] = None,
+    include_default_l1: Annotated[
+        bool,
+        typer.Option(
+            "--include-default-l1/--no-include-default-l1",
+            help="Include settings L1 Rust worker when the manifest has no L1 artifact.",
+        ),
+    ] = True,
+) -> None:
+    """Compare a staged L2 target artifact against its parent manifest."""
+
+    try:
+        payload = _replay_l2_target_manifest(
+            run_dir=run_dir,
+            traces_path=traces,
+            candidate_generation=candidate_generation,
+            baseline_generation=baseline_generation,
+            accuracy_epsilon=accuracy_epsilon,
+            max_wrong_accept_rate=max_wrong_accept_rate,
+            include_default_l1=include_default_l1,
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        error_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    console.print_json(data=payload)
+
+
+def _replay_l2_target_manifest(
+    *,
+    run_dir: Path,
+    traces_path: Path,
+    candidate_generation: int | None,
+    baseline_generation: int | None,
+    accuracy_epsilon: float,
+    max_wrong_accept_rate: float | None,
+    include_default_l1: bool,
+) -> dict[str, Any]:
+    settings = _load_cli_settings()
+    store = ArtifactStore(run_dir / "artifacts")
+    candidate_manifest = _load_manifest_for_generation(store, candidate_generation)
+    if "l2_target" not in candidate_manifest.artifact_paths:
+        raise ValueError("candidate manifest does not contain an l2_target artifact")
+    if baseline_generation is None:
+        baseline_generation = _parent_generation(candidate_manifest)
+    baseline_manifest = _load_manifest_for_generation(store, baseline_generation)
+
+    trace_records = read_traces(traces_path)
+    teacher_traces = traces_to_teacher_view(trace_records)
+    if not any(trace.teacher_frame is not None for trace in teacher_traces):
+        raise ValueError("L2 target replay requires at least one teacher-labeled trace")
+
+    cost_model = replay_cost_model_from_settings(settings)
+    default_l1_crate_dir = settings.l1_rust_crate_dir if include_default_l1 else None
+    baseline_artifacts = load_offline_artifact_set(
+        store.root,
+        baseline_manifest,
+        default_l1_crate_dir=default_l1_crate_dir,
+        l1_worker_timeout_s=settings.l1_worker_timeout_s,
+    )
+    candidate_artifacts = load_offline_artifact_set(
+        store.root,
+        candidate_manifest,
+        default_l1_crate_dir=default_l1_crate_dir,
+        l1_worker_timeout_s=settings.l1_worker_timeout_s,
+    )
+    baseline_result = evaluate_offline_artifact_set(
+        teacher_traces,
+        baseline_artifacts,
+        cost_model=cost_model,
+    )
+    candidate_result = evaluate_offline_artifact_set(
+        teacher_traces,
+        candidate_artifacts,
+        cost_model=cost_model,
+    )
+    deltas = layer_deltas(baseline_result, candidate_result)
+    decision = decide_artifact_set_promotion(
+        baseline_result.objective,
+        candidate_result.objective,
+        per_layer_deltas=deltas,
+        accuracy_epsilon=accuracy_epsilon,
+        max_wrong_accept_rate=(
+            max_wrong_accept_rate
+            if max_wrong_accept_rate is not None
+            else settings.l2_max_wrong_accept_rate
+        ),
+    )
+    return {
+        "schema_version": "l2-target-outer-replay-v1",
+        "status": "success",
+        "run_dir": str(run_dir),
+        "traces": str(traces_path),
+        "baseline_generation": baseline_manifest.generation,
+        "baseline_artifact_set_id": baseline_manifest.artifact_set_id,
+        "candidate_generation": candidate_manifest.generation,
+        "candidate_artifact_set_id": candidate_manifest.artifact_set_id,
+        "candidate_inner_adopted": _target_inner_adopted(candidate_manifest),
+        "candidate_staged_for_outer_replay": _target_staged_for_outer_replay(
+            candidate_manifest
+        ),
+        "gates": {
+            "accuracy_epsilon": accuracy_epsilon,
+            "max_wrong_accept_rate": (
+                max_wrong_accept_rate
+                if max_wrong_accept_rate is not None
+                else settings.l2_max_wrong_accept_rate
+            ),
+            "include_default_l1": include_default_l1,
+        },
+        "baseline": _offline_replay_payload(baseline_result),
+        "candidate": _offline_replay_payload(candidate_result),
+        "per_layer_deltas": {
+            layer: delta.model_dump(mode="json") for layer, delta in deltas.items()
+        },
+        "decision": {
+            "promoted": decision.promoted,
+            "reason": decision.reason,
+            "current_score": decision.current_score,
+            "candidate_score": decision.candidate_score,
+            "promoted_with_layer_regression": decision.promoted_with_layer_regression,
+            "regressed_layers": decision.regressed_layers or [],
+        },
+    }
+
+
+def _load_manifest_for_generation(
+    store: ArtifactStore,
+    generation: int | None,
+) -> ArtifactManifest:
+    if generation is None:
+        manifest = store.load_current_manifest()
+        if manifest is None:
+            raise FileNotFoundError(f"current artifact manifest is missing: {store.root}")
+        return manifest
+    path = store.generation_dir(generation) / "manifest.json"
+    if not path.exists():
+        raise FileNotFoundError(f"artifact manifest is missing: {path}")
+    return ArtifactManifest.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _parent_generation(manifest: ArtifactManifest) -> int:
+    parent = manifest.parent_artifact_set_id
+    if parent:
+        parts = parent.split("_", 2)
+        if len(parts) >= 2 and parts[0] == "gen" and parts[1].isdigit():
+            return int(parts[1])
+    if manifest.generation > 1:
+        return manifest.generation - 1
+    raise ValueError("baseline generation is required when candidate has no parent")
+
+
+def _offline_replay_payload(result: OfflineReplayResult) -> dict[str, Any]:
+    return {
+        "requests": result.requests,
+        "objective": asdict(result.objective),
+        "layer_counts": result.layer_counts,
+        "layer_metrics": result.layer_metrics,
+    }
+
+
+def _target_inner_adopted(manifest: ArtifactManifest) -> bool | None:
+    metrics = manifest.candidate_metrics
+    value = metrics.get("l2_target_inner_adopted")
+    if isinstance(value, bool):
+        return value
+    adoption_decision = metrics.get("l2_target_adoption_decision")
+    if isinstance(adoption_decision, dict):
+        adopted = adoption_decision.get("adopted")
+        if isinstance(adopted, bool):
+            return adopted
+    return None
+
+
+def _target_staged_for_outer_replay(manifest: ArtifactManifest) -> bool | None:
+    metrics = manifest.candidate_metrics
+    value = metrics.get("l2_target_staged_for_outer_replay")
+    if isinstance(value, bool):
+        return value
+    inner_adopted = _target_inner_adopted(manifest)
+    if inner_adopted is not None:
+        return not inner_adopted
+    return None
 
 
 @experiments_app.command("main-evolution")

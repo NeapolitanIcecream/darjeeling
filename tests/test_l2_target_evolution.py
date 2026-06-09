@@ -4,6 +4,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 import darjeeling.compiler.l2_target_evolution as l2_target_evolution
+from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.cli import app
 from darjeeling.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
@@ -645,3 +646,143 @@ def postprocess_frame(utterance, frame, metadata):
     assert manifest["candidate_metrics"]["l2_target_staged_for_outer_replay"] is True
     assert manifest["candidate_metrics"]["l2_target_adopted_round"] is None
     assert manifest["candidate_metrics"]["l2_target_staged_round"] == 1
+
+
+def test_l2_replay_target_cli_compares_current_target_against_parent(
+    tmp_path: Path,
+) -> None:
+    target_run = tmp_path / "target-run"
+    workspace = target_run / "workspace" / "l2_target"
+    target_dir = workspace / "target"
+    data_dir = workspace / "data"
+    target_dir.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+    traces = _traces()
+    (data_dir / "train.jsonl").write_text(
+        "".join(
+            trace.model_dump_json() + "\n"
+            for trace in traces_to_teacher_view(traces)
+        ),
+        encoding="utf-8",
+    )
+    (target_dir / "target_l2.py").write_text(
+        """
+def config_overrides():
+    return {"accept_threshold": 0.0, "min_examples": 4}
+
+def postprocess_frame(utterance, frame, metadata):
+    del frame, metadata
+    if utterance == "alarm set example 0":
+        return {"intent": "alarm_set", "slots": {"time": "0 am"}}
+    return {"intent": "weather_query", "slots": {"location": "city 1"}}
+""",
+        encoding="utf-8",
+    )
+    (target_run / "summary.json").write_text(
+        json.dumps(
+            {
+                "mode": "dry-run",
+                "workspace": str(workspace),
+                "data_split": {
+                    "train": 8,
+                    "inner_validation": 2,
+                    "selection_holdout": 1,
+                    "promotion_holdout": 1,
+                },
+                "selection_decision": {"selected": True, "round": 1},
+                "adoption_decision": {"adopted": True, "round": 1},
+                "rounds": [
+                    {
+                        "round": 1,
+                        "inner_validation": {"accepted": 1, "wrong_accepts": 0},
+                        "selection_holdout": {"accepted": 1, "wrong_accepts": 0},
+                        "promotion_holdout": {"accepted": 1, "wrong_accepts": 0},
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "replay-run"
+    ArtifactStore(run_dir / "artifacts").promote(
+        ArtifactManifest(
+            artifact_set_id="gen_001_baseline",
+            generation=1,
+            promotion_reason="test fixture",
+        )
+    )
+    promote = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "promote-target",
+            "--target-run",
+            str(target_run),
+            "--run-dir",
+            str(run_dir),
+        ],
+    )
+    assert promote.exit_code == 0, promote.output
+    traces_path = tmp_path / "traces.jsonl"
+    traces_path.write_text(traces[0].model_dump_json() + "\n", encoding="utf-8")
+    out = tmp_path / "target-replay.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "replay-target",
+            "--run-dir",
+            str(run_dir),
+            "--traces",
+            str(traces_path),
+            "--out",
+            str(out),
+            "--no-include-default-l1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "l2-target-outer-replay-v1"
+    assert payload["status"] == "success"
+    assert payload["candidate_inner_adopted"] is True
+    assert payload["candidate_staged_for_outer_replay"] is False
+    assert payload["decision"]["promoted"] is True
+    assert payload["baseline"]["layer_counts"]["L4"] == 1
+    assert payload["candidate"]["layer_counts"]["L2"] == 1
+    assert payload["candidate"]["objective"]["frame_exact_match"] == 1.0
+    assert payload["per_layer_deltas"]["L2"]["layer_share_delta"] == 1.0
+    assert payload["per_layer_deltas"]["L4"]["layer_share_delta"] == -1.0
+
+
+def test_l2_replay_target_cli_requires_target_artifact(tmp_path: Path) -> None:
+    run_dir = tmp_path / "replay-run"
+    ArtifactStore(run_dir / "artifacts").promote(
+        ArtifactManifest(
+            artifact_set_id="gen_001_baseline",
+            generation=1,
+            promotion_reason="test fixture",
+        )
+    )
+    traces_path = tmp_path / "traces.jsonl"
+    traces_path.write_text(_traces()[0].model_dump_json() + "\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "replay-target",
+            "--run-dir",
+            str(run_dir),
+            "--traces",
+            str(traces_path),
+            "--out",
+            str(tmp_path / "target-replay.json"),
+            "--no-include-default-l1",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "does not contain an l2_target" in result.output
