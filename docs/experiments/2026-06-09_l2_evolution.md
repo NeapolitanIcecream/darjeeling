@@ -252,3 +252,48 @@ Conclusion:
 - This still does not solve the L2 quality bottleneck. The next quality-bearing
   experiment should run a real `codex-cli` target evolution job or apply a
   target-only patch that can beat the baseline under the same gates.
+
+## Target-evolution Codex smoke
+
+A one-round live Codex target-evolution job was run with GPT-5.5:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-codex-smoke-r1 \
+  --rounds 1 \
+  --mode codex-cli \
+  --max-traces 500 \
+  --inner-patience-rounds 1
+```
+
+Result:
+
+- Runtime: about 10 minutes for one Codex round.
+- Codex usage: 1,078,009 input tokens, 928,768 cached input tokens, 7,208 output
+  tokens, and 1,671 reasoning output tokens.
+- Baseline inner validation: 1 accepted / 1 correct / 0 wrong.
+- Baseline private promotion holdout: 0 accepted.
+- Agent changed only `target/target_l2.py`.
+- Agent-visible inner validation improved to 6 accepted / 6 correct / 0 wrong.
+- Private promotion holdout failed: 2 accepted / 1 correct / 1 wrong, accepted
+  accuracy 0.5, wrong accept rate 0.5.
+- The wrong holdout example was an `email_query` frame missing the `person`
+  slot: `do i have any emails from robert`.
+
+Interpretation:
+
+- The live target-evolution path works: Codex can read the workspace, edit
+  `target/`, and improve visible inner validation.
+- The candidate is not adoptable. It overfit the visible inner split by lowering
+  threshold / switching frame source and introduced a private holdout wrong
+  accept.
+- This motivated an explicit `adoption_decision`: `best_round` remains useful
+  diagnostically, but `best_adoptable_round` is `null` unless a round passes the
+  private promotion holdout gate.
+- The agent also reported dependency trouble with the generated `uv run`
+  command inside its sandbox and used `PYTHONPATH=system/darjeeling/src python`
+  instead. From the outer environment, after copying `README.md` into
+  `system/darjeeling/`, the documented `uv run --project system/darjeeling ...`
+  commands succeeded. Tool isolation should still be revisited before relying
+  on many live rounds.

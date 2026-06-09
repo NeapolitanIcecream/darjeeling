@@ -53,6 +53,8 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert summary["schema_version"] == "l2-target-evolution-v1"
     assert summary["rounds_completed"] == 3
     assert summary["stop_reason"] == "round_budget_exhausted"
+    assert summary["adoption_decision"]["adopted"] is False
+    assert summary["best_adoptable_round"] is None
     assert summary["target_code_scope"] == "target/"
     assert summary["baseline"]["label"] == "baseline"
     assert (workspace / "target" / "target_l2.py").exists()
@@ -139,6 +141,7 @@ def test_l2_target_evolution_stops_after_inner_patience(tmp_path: Path) -> None:
     assert summary["rounds_completed"] == 1
     assert summary["stop_reason"] == "inner_validation_patience_exhausted"
     assert summary["rounds"][0]["inner_improved"] is False
+    assert summary["rounds"][0]["passes_private_promotion_gate"] is False
 
 
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:

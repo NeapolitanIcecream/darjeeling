@@ -674,6 +674,10 @@ def l2_target_evolve(
         bool,
         typer.Option(help="Stop early when the private promotion holdout gate passes."),
     ] = True,
+    timeout_s: Annotated[
+        float | None,
+        typer.Option(min=0.1, help="Optional per-agent-round timeout override in seconds."),
+    ] = None,
 ) -> None:
     """Run an inner target-dependent L2 evolution loop over fixed trace splits."""
 
@@ -693,7 +697,7 @@ def l2_target_evolve(
             dry_run_patches=tuple(dry_run_patch or ()),
             codex_command=settings.l2_agent_codex_command,
             codex_model=settings.l2_agent_model,
-            timeout_s=settings.l2_agent_timeout_s,
+            timeout_s=timeout_s if timeout_s is not None else settings.l2_agent_timeout_s,
             sandbox=settings.l2_agent_sandbox,
             approval_policy=settings.l2_agent_approval_policy,
             ignore_user_config=settings.l2_agent_ignore_user_config,

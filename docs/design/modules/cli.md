@@ -83,7 +83,7 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `edge-mvp l2 target-evolve` 是新的 Inner L2 target-evolution loop 入口。它从一个 trace JSONL 中切出 `train`、`inner_validation` 和私有 `promotion_holdout`，创建 `workspace/l2_target/`，并在同一个 target workspace 内跑多轮快速 train/evaluate。`target/` 是唯一可写 target-dependent code；`system/darjeeling/` 是只读 core/evaluator copy。agent workspace 只包含 train 和 inner validation；promotion holdout 留在 outer job 私有目录，只由 outer gate 读取。该命令用于解耦 L2 evolve 轮数与 outer replay `compile_every` cadence。
 
-`target-evolve` 先评估 unmodified baseline，再执行 target rounds。`--rounds` 是最大轮数；默认 `--inner-patience-rounds 2`，连续两轮没有 inner validation improvement 会早停，`--inner-patience-rounds 0` 可禁用。默认 `--stop-on-promotion-gate` 会在 private promotion holdout 通过 gate 后停止，但不会把 holdout rows 或 aggregate feedback 写回 agent workspace。
+`target-evolve` 先评估 unmodified baseline，再执行 target rounds。`--rounds` 是最大轮数；默认 `--inner-patience-rounds 2`，连续两轮没有 inner validation improvement 会早停，`--inner-patience-rounds 0` 可禁用。默认 `--stop-on-promotion-gate` 会在 private promotion holdout 通过 gate 后停止，但不会把 holdout rows 或 aggregate feedback 写回 agent workspace。`--timeout-s` 可以覆盖单次 target-evolve 的每轮 agent timeout；默认仍继承 `L2_AGENT_TIMEOUT_S`。
 
 `no-guard` 是诊断性 ablation：它设置 `L2_GUARD_MODE=always_accept` 和 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能进入该隔离 experiment runtime，报告 threshold 移除后的真实错误率和时延。该配置不用于主线 evolution。
 

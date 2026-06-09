@@ -160,6 +160,7 @@ Outer/Inner loop 分工：
 - `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 使用；promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer gate 使用。
 - Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；outer harness 可以使用私有 holdout 做 gate/early stop，但不会把 holdout rows 或 holdout aggregate feedback 写回 workspace。
 - `rounds` 是最大 agent 轮数。默认 `inner_patience_rounds=2`，连续两轮没有 inner validation improvement 就停止，以免无收益地消耗 GPT-5.5 agent budget。
+- Inner validation improvement 只驱动继续探索；adoption 必须看 `adoption_decision`，它只在某个 target round 通过 private promotion holdout gate 时接受。
 
 职责：
 
@@ -226,7 +227,7 @@ Agent 权限：
 - `edge-mvp experiment l2-agent` 会开启 `L2_AGENT_MODE=codex-cli` 和 Optuna tuning，用于真实 L2 patch generation 实验。
 - 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。
 - 已新增 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve`，用于新的 target-dependent inner loop。该路径当前支持 dry-run 多轮、固定 split evaluator 和 target-only code scope；后续应把 Codex 多轮 evolve 作为主线实验入口，而不是继续依赖 outer `compile_every` cadence。
-- `target-evolve` 已加入 baseline-first evaluation、private holdout、visible objective/round-state files、promotion-gate early stop 和 inner-validation patience stop。下一步真实 L4 experiment 应优先走该路径，而不是 legacy `l2_research/candidate` patch harness。
+- `target-evolve` 已加入 baseline-first evaluation、private holdout、visible objective/round-state files、promotion-gate early stop、inner-validation patience stop 和 explicit adoption decision。下一步真实 L4 experiment 应优先走该路径，而不是 legacy `l2_research/candidate` patch harness。
 
 ## Direct API session 策略
 

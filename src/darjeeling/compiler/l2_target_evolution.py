@@ -152,6 +152,7 @@ def run_l2_target_evolution(
         round_payload = {
             "round": round_index,
             "inner_improved": inner_improved,
+            "passes_private_promotion_gate": bool(promotion_result["passes_gate"]),
             "inner_score": list(_inner_score(inner_result)),
             "inner_delta_vs_baseline": _metric_delta(
                 inner_result,
@@ -206,6 +207,8 @@ def run_l2_target_evolution(
         "baseline": baseline,
         "rounds": round_results,
         "best_round": _best_round(round_results),
+        "best_adoptable_round": _best_adoptable_round(round_results),
+        "adoption_decision": _adoption_decision(round_results),
         "target_code_scope": "target/",
         "core_code_scope": "system/darjeeling/ is read-only evaluator/core",
         "private_data_scope": "promotion holdout is stored outside the agent workspace",
@@ -806,3 +809,29 @@ def _best_round(rounds: list[dict[str, Any]]) -> dict[str, Any] | None:
             -item["promotion_holdout"]["wrong_accept_rate"],
         ),
     )
+
+
+def _best_adoptable_round(rounds: list[dict[str, Any]]) -> dict[str, Any] | None:
+    passing_rounds = [
+        round_result
+        for round_result in rounds
+        if round_result["promotion_holdout"]["passes_gate"]
+    ]
+    if not passing_rounds:
+        return None
+    return _best_round(passing_rounds)
+
+
+def _adoption_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
+    best_adoptable = _best_adoptable_round(rounds)
+    if best_adoptable is None:
+        return {
+            "adopted": False,
+            "round": None,
+            "reason": "no target round passed the private promotion holdout gate",
+        }
+    return {
+        "adopted": True,
+        "round": best_adoptable["round"],
+        "reason": "target round passed the private promotion holdout gate",
+    }

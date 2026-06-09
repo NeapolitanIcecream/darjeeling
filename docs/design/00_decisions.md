@@ -169,4 +169,5 @@ L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution loop。Darj
 - Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 target holdout/promotion 指标决定是否采用。
 - Inner loop 必须先评估 baseline，再评估 target rounds；可见 round history 只包含 inner validation 聚合，不包含 promotion holdout 聚合。
 - L4 agent budget 由 outer harness 控制：`rounds` 是最大轮数，默认连续两轮没有 inner validation improvement 就停止，promotion gate 通过也停止。
+- Inner validation improvement 不能直接触发采用；只有通过 private promotion holdout gate 的 target round 才能进入 `adoption_decision.adopted=true`。
 - 旧的 `L2_AGENT_MODE=codex-cli` patch harness 只能作为 legacy core-patch artifact 生成路径，不是 L2 evolve 主线。
