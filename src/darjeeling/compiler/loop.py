@@ -110,6 +110,7 @@ def run_compiler_generation(
         store.root,
         current_manifest,
         default_l1_crate_dir=settings.l1_rust_crate_dir,
+        l1_worker_timeout_s=settings.l1_worker_timeout_s,
     )
     current_artifacts = _apply_l2_ablation_to_offline_artifacts(current_artifacts, settings)
     generation = 1 if current_manifest is None else current_manifest.generation + 1
@@ -634,6 +635,7 @@ def run_compiler_generation(
     candidate_artifacts = OfflineArtifactSet(
         l0_cache=candidate_l0_cache,
         l1_crate_dir=candidate_l1_crate_dir,
+        l1_worker_timeout_s=settings.l1_worker_timeout_s,
         l2_bundle=candidate_l2_bundle,
     )
     evaluation_traces = (
@@ -761,6 +763,7 @@ def _apply_l2_ablation_to_offline_artifacts(
         return OfflineArtifactSet(
             l0_cache=artifacts.l0_cache,
             l1_crate_dir=artifacts.l1_crate_dir,
+            l1_worker_timeout_s=artifacts.l1_worker_timeout_s,
             l2_bundle=None,
         )
     if settings.l2_guard_mode == "always_accept" and artifacts.l2_bundle is not None:

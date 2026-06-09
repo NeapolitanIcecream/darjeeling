@@ -55,6 +55,7 @@ class TeacherReplaySplit:
 class OfflineArtifactSet:
     l0_cache: dict[str, Frame]
     l1_crate_dir: Path | None = None
+    l1_worker_timeout_s: float = 5.0
     l2_bundle: L2StudentBundle | None = None
 
     @property
@@ -149,9 +150,14 @@ def load_offline_artifact_set(
     manifest: ArtifactManifest | None,
     *,
     default_l1_crate_dir: Path | None = None,
+    l1_worker_timeout_s: float = 5.0,
 ) -> OfflineArtifactSet:
     if manifest is None:
-        return OfflineArtifactSet(l0_cache={}, l1_crate_dir=default_l1_crate_dir)
+        return OfflineArtifactSet(
+            l0_cache={},
+            l1_crate_dir=default_l1_crate_dir,
+            l1_worker_timeout_s=l1_worker_timeout_s,
+        )
 
     l0_cache: dict[str, Frame] = {}
     l0_path_text = manifest.artifact_paths.get("l0_cache")
@@ -178,6 +184,7 @@ def load_offline_artifact_set(
     return OfflineArtifactSet(
         l0_cache=l0_cache,
         l1_crate_dir=l1_crate_dir,
+        l1_worker_timeout_s=l1_worker_timeout_s,
         l2_bundle=l2_bundle,
     )
 
@@ -401,6 +408,6 @@ def _build_l1_worker(artifact_set: OfflineArtifactSet) -> RustL1Worker | None:
     if artifact_set.l1_crate_dir is None:
         return None
     binary_path = build_l1_binary(artifact_set.l1_crate_dir)
-    worker = RustL1Worker(binary_path, timeout_s=5.0)
+    worker = RustL1Worker(binary_path, timeout_s=artifact_set.l1_worker_timeout_s)
     worker.start()
     return worker

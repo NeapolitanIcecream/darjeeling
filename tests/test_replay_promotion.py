@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import darjeeling.compiler.replay as replay_module
 from darjeeling.artifacts.store import LayerDelta
 from darjeeling.compiler.objective import ObjectiveMetrics
 from darjeeling.compiler.replay import (
@@ -167,6 +170,48 @@ def test_offline_replay_counts_recorded_l3_accepts_and_wrong_accepts() -> None:
     assert result.objective.frame_exact_match == 0.5
     assert result.objective.wrong_accept_rate == 0.5
     assert result.layer_metrics["L3"]["accepted_accuracy"] == 0.5
+
+
+def test_offline_replay_uses_artifact_l1_worker_timeout(monkeypatch) -> None:
+    captured: dict[str, float] = {}
+
+    class FakeWorker:
+        def __init__(self, binary_path: Path, *, timeout_s: float) -> None:
+            captured["timeout_s"] = timeout_s
+
+        def start(self) -> None:
+            return None
+
+        def answer(self, utterance: str):
+            return type("FakeL1Response", (), {"accepted": False, "frame": None})()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(replay_module, "build_l1_binary", lambda crate_dir: crate_dir / "worker")
+    monkeypatch.setattr(replay_module, "RustL1Worker", FakeWorker)
+
+    result = evaluate_offline_artifact_set(
+        [
+            TeacherTrace(
+                request_id="r1",
+                utterance="unknown request",
+                teacher_frame=Frame(intent="music_play"),
+                chosen_layer="L4",
+                final_frame=Frame(intent="music_play"),
+                layer_results=[],
+                timestamp="2026-06-08T00:00:00Z",
+            )
+        ],
+        OfflineArtifactSet(
+            l0_cache={},
+            l1_crate_dir=Path("native/l1_programbank"),
+            l1_worker_timeout_s=12.5,
+        ),
+    )
+
+    assert captured["timeout_s"] == 12.5
+    assert result.layer_counts["L4"] == 1
 
 
 def test_offline_replay_uses_trace_l4_usage_for_cost() -> None:
