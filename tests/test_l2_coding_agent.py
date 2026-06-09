@@ -84,9 +84,15 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     assert "test_l2_agent_marker.py" in result.diff_path.read_text(encoding="utf-8")
     prompt_text = result.prompt_path.read_text(encoding="utf-8")
     workspace_context_dir = result.workspace_repo_dir / "agent_contexts"
+    assert "agent_contexts/agent_brief.md" in prompt_text
     assert "Workspace context directory" in prompt_text
     assert str(workspace_context_dir.resolve()) in prompt_text
+    assert (workspace_context_dir / "agent_brief.md").exists()
     assert (workspace_context_dir / "l2_context_families.json").exists()
+    agent_brief = (workspace_context_dir / "agent_brief.md").read_text(encoding="utf-8")
+    assert "bounded evolve job" in agent_brief
+    assert "l2_examples" in agent_brief
+    assert "alarm_set|time" in agent_brief
     context_families = json.loads(
         (result.context_dir / "l2_context_families.json").read_text(encoding="utf-8")
     )

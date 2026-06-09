@@ -225,13 +225,19 @@ def _write_context_files(
     objective: dict[str, Any],
 ) -> None:
     context_dir.mkdir(parents=True, exist_ok=True)
+    context_families = _context_families_payload(
+        teacher_train=teacher_train,
+        hard_cases=hard_cases,
+    )
     payloads = {
+        "agent_brief.md": _agent_brief_text(
+            context_families=context_families,
+            current_metrics=current_metrics,
+            objective=objective,
+        ),
         "teacher_train.jsonl": [trace.model_dump(mode="json") for trace in teacher_train],
         "hard_cases.jsonl": [trace.model_dump(mode="json") for trace in hard_cases],
-        "l2_context_families.json": _context_families_payload(
-            teacher_train=teacher_train,
-            hard_cases=hard_cases,
-        ),
+        "l2_context_families.json": context_families,
         "current_metrics.json": current_metrics,
         "objective.json": objective,
         "constraints.md": _constraints_text(),
@@ -263,12 +269,22 @@ def _build_l2_agent_prompt(
             "",
             "You are running as the L4 coding-agent compiler mode for L2.",
             "Edit only the isolated Darjeeling workspace provided for this job.",
-            "Use teacher-visible context files, current metrics, objective, constraints,",
-            "and the command guide. You may call Optuna through the existing CLI/tools.",
+            "Read `agent_contexts/agent_brief.md` first. Use teacher-visible context",
+            "files, current metrics, objective, constraints, and the command guide.",
+            "Optuna is available for targeted follow-up, but do not spend this job on",
+            "broad tuning before producing a patch.",
             "",
             "Primary goal: improve L2 residual-stream frame exact match while keeping",
             "wrong accepts within the replay gate. Pay special attention to slot quality,",
             "guard calibration, retrieval-vs-student frame selection, and search space.",
+            "",
+            "Bounded execution rules:",
+            "- Make one small L2-owned patch, then stop and report.",
+            "- Do not read Codex skill files or unrelated docs.",
+            "- Do not run leave-one-out loops, exhaustive sweeps, full experiments,",
+            "  or network commands.",
+            "- After a few short diagnostic commands, edit files rather than continuing",
+            "  open-ended analysis.",
             "",
             "Do not modify outer replay, promotion, teacher cache, data loading, or gold labels.",
             "This job produces an auditable patch. The compiler records it but does not",
@@ -284,6 +300,136 @@ def _build_l2_agent_prompt(
             "- Identify expected impact on L2 coverage, accuracy, latency, and risks.",
         ]
     )
+
+
+def _agent_brief_text(
+    *,
+    context_families: dict[str, Any],
+    current_metrics: dict[str, Any],
+    objective: dict[str, Any],
+) -> str:
+    lines = [
+        "# L2 agent brief",
+        "",
+        "Read this first. This is a bounded evolve job, not a broad research sweep.",
+        "Produce one small auditable L2-owned patch, run focused checks when possible,",
+        "then write the report.",
+        "",
+        "Stop rules:",
+        "- Use at most a few short diagnostics before editing.",
+        "- Do not run leave-one-out loops, exhaustive sweeps, full experiments,",
+        "  or network commands.",
+        "- Do not read Codex skill files; this brief is the job-specific guide.",
+        "- If evidence is weak, prefer a conservative abstention-safe change and",
+        "  record follow-up tuning needs in the report.",
+        "",
+        "Suggested first pass:",
+        "1. Inspect this brief, `agent_contexts/l2_context_families.json`, and the",
+        "   L2 student/guard code.",
+        "2. Choose one small change around retrieval-vs-student selection, slot",
+        "   quality, guard calibration, or L2 search-space plumbing.",
+        "3. Add or update a focused L2 test.",
+        "4. Run the smallest relevant pytest/ruff commands from `agent_contexts/commands.md`.",
+        "",
+        "Objective:",
+        _compact_json(objective),
+        "",
+        "Current metrics summary:",
+    ]
+    lines.extend(f"- {line}" for line in _l2_metric_summary_lines(current_metrics))
+    lines.extend(["", "Top visible context families:"])
+    for family in context_families.get("families", [])[:8]:
+        examples = family.get("examples") or []
+        sample = examples[0] if examples else {}
+        sample_frame = sample.get("teacher_frame") if isinstance(sample, dict) else None
+        sample_utterance = sample.get("utterance") if isinstance(sample, dict) else None
+        lines.append(
+            "- "
+            f"{family.get('family_id')}: support={family.get('support')}, "
+            f"hard_case_support={family.get('hard_case_support')}, "
+            f"outcomes={_compact_json(family.get('l2_outcome_counts', {}))}, "
+            f"sample={sample_utterance!r} -> {_compact_json(sample_frame)}"
+        )
+    return "\n".join(lines)
+
+
+def _l2_metric_summary_lines(metrics: dict[str, Any]) -> list[str]:
+    config = metrics.get("l2_config") if isinstance(metrics.get("l2_config"), dict) else {}
+    calibration = (
+        metrics.get("l2_guard_calibration")
+        if isinstance(metrics.get("l2_guard_calibration"), dict)
+        else {}
+    )
+    unguarded_calibration = (
+        metrics.get("l2_unguarded_guard_calibration")
+        if isinstance(metrics.get("l2_unguarded_guard_calibration"), dict)
+        else {}
+    )
+    unguarded_train = (
+        metrics.get("l2_unguarded_train")
+        if isinstance(metrics.get("l2_unguarded_train"), dict)
+        else {}
+    )
+    search = (
+        metrics.get("l2_guard_search")
+        if isinstance(metrics.get("l2_guard_search"), dict)
+        else {}
+    )
+    lines = [
+        f"teacher_traces_seen={metrics.get('teacher_traces_seen')}",
+        f"teacher_train_size={metrics.get('teacher_train_size')}",
+        f"l2_examples={metrics.get('l2_examples')}",
+        f"l2_training_scope={metrics.get('l2_training_scope')}",
+        f"l2_tuning_mode={metrics.get('l2_tuning_mode')}",
+        f"l2_guard_threshold={metrics.get('l2_guard_threshold')}",
+        "l2_config="
+        + _compact_json(
+            {
+                key: config.get(key)
+                for key in [
+                    "frame_source",
+                    "intent_model_family",
+                    "slot_model_family",
+                    "max_features",
+                    "max_iter",
+                    "min_examples",
+                ]
+            }
+        ),
+        "guard_calibration="
+        + _compact_json(
+            {
+                key: calibration.get(key)
+                for key in [
+                    "source",
+                    "train_size",
+                    "validation_size",
+                    "validation_residual_size",
+                    "fallback_reason",
+                ]
+            }
+        ),
+        "unguarded_residual="
+        + _compact_json(
+            {
+                key: unguarded_calibration.get(key)
+                for key in ["accepted", "correct_accepts", "wrong_accepts", "wrong_accept_rate"]
+            }
+        ),
+        "unguarded_train="
+        + _compact_json(
+            {
+                key: unguarded_train.get(key)
+                for key in ["accepted", "correct_accepts", "wrong_accepts", "wrong_accept_rate"]
+            }
+        ),
+        "guard_search_selected=" + _compact_json(search.get("selected")),
+    ]
+    return lines
+
+
+def _compact_json(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _context_families_payload(
