@@ -185,6 +185,11 @@ Workspace layout：
 - `tools/inspect_context.py` 是无项目依赖的轻量脚本，标准入口为 `python3 tools/inspect_context.py`，避免只查看 context 时受 `uv --project system/darjeeling`、cache 或系统依赖状态影响。
 - `tools/run_checks.py` 会优先在当前 Python 环境中调用 pytest/ruff；若当前环境缺少模块，则回退到 `uv run pytest/ruff`，避免有可用 venv 时仍强制嵌套 `uv run`。
 
+Target workspace 工具隔离：
+
+- `workspace/l2_target/tools/inspect_context.py` 同样只依赖 Python 标准库，标准入口为 `python3 tools/inspect_context.py`。
+- `workspace_manifest.json.commands` 记录 `inspect_context`、visible validation evaluate、train-audit evaluate 和 local-search 入口。只有 evaluate/search 需要 Darjeeling 依赖；它们默认使用 `uv run --project system/darjeeling ...`，并在 `data/commands.md` 里提供 `PYTHONPATH=system/darjeeling/src python ...` fallback。
+
 Prompt/cache 策略：
 
 - Codex stdin prompt 保持极短且稳定：只要求读取当前 workspace 的 `program.md` 并完成一次 bounded L2 research iteration。

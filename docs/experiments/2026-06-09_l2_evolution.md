@@ -2041,3 +2041,41 @@ local-search run already showed that `trials * folds * rounds` can dominate
 wall-clock time. The next live-agent smoke should use `--max-agent-rounds 1`,
 an explicit small target budget, and the cross-audit backlogs as workspace
 context; it should not start with an unconstrained fixed-inner run.
+
+## Target workspace tooling isolation smoke
+
+The target workspace manifest now records standard tool commands, including a
+plain-Python context inspector:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-tooling-isolation-smoke-r1 \
+  --budget-profile smoke \
+  --rounds 1 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --max-traces 100
+
+cd runs/l2-target-tooling-isolation-smoke-r1/workspace/l2_target
+python3 tools/inspect_context.py > ../../inspect_context.stdout.txt
+```
+
+Result:
+
+- `workspace_manifest.json.commands.inspect_context` is
+  `python3 tools/inspect_context.py`.
+- Evaluate/search commands remain explicit `uv run --project system/darjeeling`
+  entries, with fallback commands documented in `data/commands.md`.
+- `inspect_context.py` ran successfully without `uv`, project imports, or
+  dependency cache access.
+- Its output listed `commands.md`, visible train/validation JSONL, visible state
+  files, and `target_l2.py`; it did not expose private selection or promotion
+  holdout files.
+
+Interpretation:
+
+- The prior tooling-isolation concern is resolved for context inspection in
+  both legacy `l2_research` and target `l2_target` workspaces.
+- Evaluation and local-search still intentionally need Darjeeling dependencies;
+  they remain isolated by workspace boundaries and documented fallback commands.

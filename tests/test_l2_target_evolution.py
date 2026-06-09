@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -151,6 +153,10 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "round_state.json",
         "target_diagnostics.json",
     }
+    assert manifest["commands"]["inspect_context"] == "python3 tools/inspect_context.py"
+    assert "uv run --project system/darjeeling" in manifest["commands"][
+        "evaluate_visible_validation"
+    ]
     assert (workspace / "data" / "objective.json").exists()
     assert (workspace / "data" / "target_diagnostics.json").exists()
     round_state = json.loads((workspace / "data" / "round_state.json").read_text())
@@ -241,6 +247,19 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "private_holdout_evidence" not in round_state
     assert "not a" in program_text
     assert "Darjeeling-core dataset-independence violation" in program_text
+    inspect_result = subprocess.run(
+        [sys.executable, "tools/inspect_context.py"],
+        cwd=workspace,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert inspect_result.returncode == 0, inspect_result.stderr
+    assert "inner_validation.jsonl" in inspect_result.stdout
+    assert "train.jsonl" in inspect_result.stdout
+    assert "target_l2.py" in inspect_result.stdout
+    assert "selection_holdout" not in inspect_result.stdout
+    assert "promotion_holdout" not in inspect_result.stdout
 
 
 def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:

@@ -665,6 +665,22 @@ def prepare_l2_target_workspace(
             "target_diagnostics.json",
             "commands.md",
         ],
+        "commands": {
+            "inspect_context": "python3 tools/inspect_context.py",
+            "evaluate_visible_validation": (
+                "uv run --project system/darjeeling python tools/evaluate.py "
+                "--split visible_validation --out runs/visible_validation.json"
+            ),
+            "evaluate_train_audit": (
+                "uv run --project system/darjeeling python tools/evaluate.py "
+                "--split train_audit --out runs/train_audit.json"
+            ),
+            "search_config": (
+                "uv run --project system/darjeeling python tools/search_config.py "
+                f"--trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} "
+                "--out runs/local_search.json"
+            ),
+        },
     }
     (workspace_root / "workspace_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
