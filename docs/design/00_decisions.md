@@ -167,9 +167,9 @@ L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution loop。Darj
 - `target/` 是唯一可写 target-dependent code 区域；`system/darjeeling/` 是只读 core/evaluator copy。
 - `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 读；selection holdout 和 promotion holdout 存在 outer job 的私有目录，不进入 agent workspace。
 - 调参不应占用 L4 coding-agent round。Inner loop 先在固定 target data 上通过 `local-search`/Optuna 做大量 cheap trials，搜索结果只写 `target/config.json`；L4 coding agent 主要负责修改 `target/` 中真正需要设计判断的代码、特征、后处理和 search space。
-- Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 target holdout/promotion 指标决定是否采用。
+- Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 visible inner、target holdout/promotion 指标和 outer replay 决定是否采用；不能仅因为它是 target-dependent 就拒绝。Darjeeling core 仍必须保持 dataset-independent。
 - Inner loop 必须先评估 baseline，再评估 target rounds；可见 round history 只包含 inner validation 聚合，不包含 selection/promotion holdout 聚合。
-- L4 agent budget 由 outer harness 控制：`rounds` 是最大 target round 数，不是数据收集次数；默认不会因为 private selection gate 通过而中止 inner loop，selection/promotion 只参与最终 candidate selection/adoption。若做 smoke 或节省 live LLM cost，可显式打开 selection-gate early stop。
+- L4 agent budget 由 outer harness 控制：`rounds` 是最大 target round 数，不是数据收集次数；默认不会因为 private selection gate 通过而中止 inner loop，selection/promotion 只参与最终 candidate selection/adoption。真实固定 snapshot 探索使用 `fixed-inner` budget profile；若做 smoke 或节省 live LLM cost，可使用 `smoke` profile 或显式打开 selection-gate early stop。
 - Candidate selection gate 要求 visible inner validation gate 和 private selection holdout gate 同时通过；private selection 不能掩盖 visible inner regression。
 - Inner validation improvement 不能直接触发采用；通过 candidate selection gate 的 target round 只表示可被选中，只有同时通过 private promotion holdout gate 才能进入 `adoption_decision.adopted=true`。
 - 旧的 `L2_AGENT_MODE=codex-cli` patch harness 只能作为 legacy core-patch artifact 生成路径，不是 L2 evolve 主线。

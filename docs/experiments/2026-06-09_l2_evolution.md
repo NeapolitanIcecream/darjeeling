@@ -979,3 +979,98 @@ Interpretation:
 - The strict target gate correctly rejects the earlier inner-adopted candidate
   and accepts the later non-adopted-but-staged candidate, showing that inner
   adoption is neither necessary nor sufficient for final e2e acceptance.
+
+## Fixed-inner budget profile and audio target extension
+
+The next design issue was that previous target-evolve experiments looked like
+only one to three rounds because most runs were smoke/dry-run jobs, and one
+12-round job stopped after inner-validation patience. The implementation now
+records the inner-loop cadence explicitly and exposes a `fixed-inner` budget
+profile:
+
+- `loop_cadence.kind = fixed_trace_snapshot_inner_loop`.
+- `loop_cadence.outer_replay_cadence_bound = false`.
+- `budget_policy.profile = fixed-inner`.
+- `fixed-inner` defaults to `rounds=48`, `inner_patience_rounds=0`, and
+  `local_search_trials=256`, unless explicit flags override them.
+- `target_code_policy` records that Darjeeling core remains
+  dataset-independent, while visible-data-derived target-specific code is
+  legal inside `target/`.
+
+Patch:
+
+```text
+docs/experiments/patches/l2_target_email_audio_veto_r3.patch
+```
+
+500-row fixed-inner target-evolve command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-email-audio-veto-r2 \
+  --budget-profile fixed-inner \
+  --rounds 3 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_email_audio_veto_r3.patch \
+  --max-traces 500
+```
+
+Result:
+
+- Requested/completed rounds: 3 / 3.
+- Stop reason: `round_budget_exhausted`.
+- Inner validation: 2 accepted / 2 correct / 0 wrong.
+- Private selection: 0 accepted / 0 wrong.
+- Private promotion: 1 accepted / 1 correct / 0 wrong.
+- `adoption_decision.adopted=false` because no round passed both visible inner
+  and private selection gates.
+
+This run proves the corrected cadence: after applying the patch in round 1, the
+same fixed target workspace was evaluated through rounds 2 and 3 without
+collecting another stream prefix or waiting for outer replay.
+
+The non-adopted best round was staged for an isolated 3k outer replay:
+
+```bash
+uv run edge-mvp l2 promote-target \
+  --target-run runs/l2-target-evolve-email-audio-veto-r2 \
+  --run-dir runs/l2-target-email-audio-veto-3k-r1 \
+  --allow-non-adopted
+
+uv run edge-mvp run \
+  --run-dir runs/l2-target-email-audio-veto-3k-r1 \
+  --max-requests 3000 \
+  --compile-every 999999 \
+  --teacher cache \
+  --data-dir data/processed/massive_en_us
+
+uv run edge-mvp l2 replay-target \
+  --run-dir runs/l2-target-email-audio-veto-3k-r1 \
+  --traces runs/l2-target-email-audio-veto-3k-r1/traces.jsonl \
+  --out runs/l2-target-email-audio-veto-3k-r1/reports/l2_target_outer_replay.json
+```
+
+Outer replay result:
+
+- Baseline parent: `L0=577, L1=19, L2=0, L3=0, L4=2404`.
+- Candidate: `L0=577, L1=19, L2=12, L3=0, L4=2392`.
+- Candidate frame EM: `1.0`.
+- L2 accepted accuracy: `1.0`.
+- L2 wrong accept rate: `0.0`.
+- Decision: promoted, `objective improved within gates`.
+- Manifest records `l2_target_inner_adopted=false`,
+  `l2_target_staged_for_outer_replay=true`, `l2_target_loop_cadence`, and
+  `l2_target_code_policy`.
+
+Interpretation:
+
+- The audio extension is safe on this 3k replay but still very narrow: it saves
+  12 L4 calls instead of the previous 10.
+- The selection holdout remains brittle for narrow target candidates. A zero
+  selection accept should block automatic inner adoption, but it should not
+  prevent explicit outer replay diagnostics when the manifest labels the
+  candidate as non-adopted.
+- The target-specific lexical/state-machine boundary is now explicit: such code
+  is allowed in `target/`; only Darjeeling core must remain
+  dataset-independent.

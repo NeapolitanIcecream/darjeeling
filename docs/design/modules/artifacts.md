@@ -78,6 +78,8 @@ runs/<id>/artifacts/
 
 Runtime replay 和 compiler offline replay 都必须在加载 `l2_student` 后检查 `l2_target`。若存在，L2 运行时使用 target wrapper：先执行 bundle prediction，再执行 `postprocess_frame(...)`，再应用 guard accept，最后允许 `accept_prediction(...)` veto。`l2_target` 不进入 Darjeeling core；它是 target-dependent artifact。
 
+Promoted manifest 必须保留 `candidate_metrics["l2_target_loop_cadence"]` 和 `candidate_metrics["l2_target_code_policy"]`。前者证明 target rounds 运行在固定 trace snapshot 上，不等待新的 outer stream prefix；后者证明 target-specific code 的合法边界是 `target/` + visible train/inner validation，而不是 Darjeeling core 的 dataset-independent 规则。
+
 ## Hard buffer artifact
 
 `hard_buffer.jsonl` 使用 `hard-buffer-v1` schema。每条 hard case 必须包含 `visibility`：

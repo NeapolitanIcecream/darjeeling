@@ -24,6 +24,7 @@ from darjeeling.schemas import TeacherTrace
 
 L2TargetEvolutionMode = Literal["dry-run", "codex-cli", "local-search"]
 L2TargetSearchSpace = Literal["compact", "wide"]
+L2TargetBudgetProfile = Literal["standard", "fixed-inner", "smoke"]
 
 DEFAULT_TARGET_EVOLVE_ROUNDS = 12
 DEFAULT_TARGET_LOCAL_SEARCH_TRIALS = 96
@@ -43,6 +44,7 @@ class L2TargetEvolutionConfig:
     local_search_trials: int = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS
     local_search_timeout_s: float | None = None
     local_search_space: L2TargetSearchSpace = "compact"
+    budget_profile: L2TargetBudgetProfile = "standard"
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
     ignore_user_config: bool = True
@@ -279,6 +281,18 @@ def run_l2_target_evolution(
             "local_search_trials": config.local_search_trials,
             "local_search_timeout_s": config.local_search_timeout_s,
             "local_search_space": config.local_search_space,
+            "profile": config.budget_profile,
+        },
+        "loop_cadence": {
+            "kind": "fixed_trace_snapshot_inner_loop",
+            "outer_replay_cadence_bound": False,
+            "teacher_labeled_traces": sum(
+                1 for trace in traces if trace.teacher_frame is not None
+            ),
+            "note": (
+                "target rounds reuse this fixed split; collecting another stream prefix "
+                "is not part of the inner loop"
+            ),
         },
         "workspace": str(workspace_root),
         "data_split": {key: len(value) for key, value in split.items()},
@@ -291,6 +305,7 @@ def run_l2_target_evolution(
         "adoption_decision": _adoption_decision(round_results),
         "target_code_scope": "target/",
         "core_code_scope": "system/darjeeling/ is read-only evaluator/core",
+        "target_code_policy": _target_code_policy_payload(),
         "private_data_scope": (
             "selection and promotion holdouts are stored outside the agent workspace"
         ),
@@ -615,6 +630,24 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
             "near_miss_examples-driven mechanisms that still pass visible inner gate",
             "target-specific lexical or state-machine rules derived from visible target data",
         ],
+    }
+
+
+def _target_code_policy_payload() -> dict[str, Any]:
+    return {
+        "core_must_remain_dataset_independent": True,
+        "target_dependent_code_allowed_in": "target/",
+        "target_specific_code_is_not_rejected_for_dataset_dependence": True,
+        "target_code_visibility_rule": (
+            "target code may be derived from data/train.jsonl and "
+            "data/inner_validation.jsonl only"
+        ),
+        "private_holdout_visibility": (
+            "selection/promotion holdouts remain outside the agent workspace"
+        ),
+        "adoption_authority": (
+            "visible inner gate, private selection/promotion gates, and final outer replay"
+        ),
     }
 
 
@@ -1194,8 +1227,10 @@ def _target_program_text() -> str:
             "directories to inspect them.",
             "",
             "It is acceptable for `target/` to contain target-dependent code derived",
-            "from visible train and inner-validation data. Do not hardcode behavior",
-            "from MASSIVE or any external dataset knowledge that is not visible here.",
+            "from visible train and inner-validation data. This is not a",
+            "Darjeeling-core dataset-independence violation. It becomes invalid only",
+            "if it moves into core code, uses private holdout rows or aggregates, or",
+            "uses MASSIVE/external dataset knowledge that is not visible here.",
             "Use local config search for cheap tuning; reserve code edits for changes",
             "that require target-specific design judgment.",
             "Do not move target-specific code into core.",

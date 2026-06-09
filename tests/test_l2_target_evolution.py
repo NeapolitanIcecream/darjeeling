@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 
 import darjeeling.compiler.l2_target_evolution as l2_target_evolution
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.cli import app
+from darjeeling.cli import _resolve_l2_target_budget, app
 from darjeeling.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
     _adoption_decision,
@@ -60,6 +60,31 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert summary["schema_version"] == "l2-target-evolution-v1"
     assert summary["rounds_completed"] == 3
     assert summary["stop_reason"] == "round_budget_exhausted"
+    assert summary["budget_policy"]["profile"] == "standard"
+    assert summary["loop_cadence"] == {
+        "kind": "fixed_trace_snapshot_inner_loop",
+        "outer_replay_cadence_bound": False,
+        "teacher_labeled_traces": 12,
+        "note": (
+            "target rounds reuse this fixed split; collecting another stream prefix "
+            "is not part of the inner loop"
+        ),
+    }
+    assert summary["target_code_policy"] == {
+        "core_must_remain_dataset_independent": True,
+        "target_dependent_code_allowed_in": "target/",
+        "target_specific_code_is_not_rejected_for_dataset_dependence": True,
+        "target_code_visibility_rule": (
+            "target code may be derived from data/train.jsonl and "
+            "data/inner_validation.jsonl only"
+        ),
+        "private_holdout_visibility": (
+            "selection/promotion holdouts remain outside the agent workspace"
+        ),
+        "adoption_authority": (
+            "visible inner gate, private selection/promotion gates, and final outer replay"
+        ),
+    }
     assert summary["adoption_decision"]["adopted"] is False
     assert summary["best_adoptable_round"] is None
     assert summary["target_code_scope"] == "target/"
@@ -121,6 +146,8 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "outer selection signal" in program_text
     assert "inner-loop early-stop signal" in program_text
     assert "near_miss_examples" in program_text
+    assert "not a" in program_text
+    assert "Darjeeling-core dataset-independence violation" in program_text
 
 
 def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Path) -> None:
@@ -279,6 +306,27 @@ def test_l2_target_evolution_local_search_uses_visible_workspace_only(
     assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
 
 
+def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> None:
+    assert _resolve_l2_target_budget(
+        budget_profile="standard",
+        rounds=None,
+        inner_patience_rounds=None,
+        local_search_trials=None,
+    ) == (12, 4, 96)
+    assert _resolve_l2_target_budget(
+        budget_profile="fixed-inner",
+        rounds=None,
+        inner_patience_rounds=None,
+        local_search_trials=None,
+    ) == (48, 0, 256)
+    assert _resolve_l2_target_budget(
+        budget_profile="fixed-inner",
+        rounds=3,
+        inner_patience_rounds=2,
+        local_search_trials=5,
+    ) == (3, 2, 5)
+
+
 def test_l2_target_accept_hook_can_veto_guard_accepts(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     prepare_l2_target_workspace(
@@ -418,13 +466,17 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
             str(tmp_path / "target-run"),
             "--rounds",
             "2",
+            "--budget-profile",
+            "fixed-inner",
         ],
     )
 
     assert result.exit_code == 0, result.output
     summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
     assert summary["rounds_completed"] == 2
-    assert summary["budget_policy"]["inner_patience_rounds"] == 4
+    assert summary["budget_policy"]["profile"] == "fixed-inner"
+    assert summary["budget_policy"]["inner_patience_rounds"] == 0
+    assert summary["budget_policy"]["local_search_trials"] == 256
     assert summary["budget_policy"]["stop_on_selection_gate"] is False
     assert summary["data_split"]["train"] > 0
 
@@ -498,6 +550,15 @@ def postprocess_frame(utterance, frame, metadata):
                 },
                 "selection_decision": {"selected": True, "round": 1},
                 "adoption_decision": {"adopted": True, "round": 1},
+                "loop_cadence": {
+                    "kind": "fixed_trace_snapshot_inner_loop",
+                    "outer_replay_cadence_bound": False,
+                },
+                "target_code_policy": {
+                    "core_must_remain_dataset_independent": True,
+                    "target_dependent_code_allowed_in": "target/",
+                    "target_specific_code_is_not_rejected_for_dataset_dependence": True,
+                },
                 "rounds": [
                     {
                         "round": 1,
@@ -541,6 +602,15 @@ def postprocess_frame(utterance, frame, metadata):
     assert manifest["candidate_metrics"]["l2_target_runtime_promoted"] is True
     assert manifest["candidate_metrics"]["l2_target_inner_adopted"] is True
     assert manifest["candidate_metrics"]["l2_target_staged_for_outer_replay"] is False
+    assert manifest["candidate_metrics"]["l2_target_loop_cadence"] == {
+        "kind": "fixed_trace_snapshot_inner_loop",
+        "outer_replay_cadence_bound": False,
+    }
+    assert manifest["candidate_metrics"]["l2_target_code_policy"] == {
+        "core_must_remain_dataset_independent": True,
+        "target_dependent_code_allowed_in": "target/",
+        "target_specific_code_is_not_rejected_for_dataset_dependence": True,
+    }
     assert manifest["candidate_metrics"]["l2_target_training_traces"] == 12
     assert manifest["candidate_metrics"]["l2_training_scope"] == "l2_target_workspace_train"
     assert manifest["candidate_metrics"]["l2_training_traces"] == 12

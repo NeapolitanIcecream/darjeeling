@@ -159,7 +159,7 @@ Outer/Inner loop 分工：
 - Inner loop 不等待新的 stream prefix，也不把 target-specific code 回写到 Darjeeling core。
 - `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 使用；selection/promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer harness 使用。
 - Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；outer harness 使用 visible inner gate + private selection holdout 做 candidate selection，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。Private selection 默认不是 early-stop 信号。
-- `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial；`codex-cli` round 才消耗 GPT-5.5 agent budget。默认 `rounds=12`、`inner_patience_rounds=4`、`local_search_trials=96`；连续四轮没有 inner validation improvement 就停止。`--stop-on-selection-gate` 是显式 opt-in 的 smoke/cost-control 开关。
+- `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial；`codex-cli` round 才消耗 GPT-5.5 agent budget。`standard` profile 默认 `rounds=12`、`inner_patience_rounds=4`、`local_search_trials=96`；`fixed-inner` profile 用于真实固定 snapshot 探索，默认 `rounds=48`、`inner_patience_rounds=0`、`local_search_trials=256`。`--stop-on-selection-gate` 是显式 opt-in 的 smoke/cost-control 开关。
 - Inner validation improvement 只驱动继续探索；visible inner gate 是 selection 的必要条件，但不是充分条件。Adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 visible inner、private selection 和 private promotion gates 时接受。
 
 职责：
@@ -187,7 +187,7 @@ Prompt/cache 策略：
 - 稳定 prompt 最大化 provider/server-side KV cache 机会，也避免每轮把大量代码或样本直接塞入上下文。
 - 是否读取某个 data file 是 coding agent 的局部决策；harness 只提供可见边界和审计 artifact。
 - Agent objective 必须以 replay/promotion success 为目标；不能为了 raw L2 coverage 牺牲 frame exactness 或 wrong-accept safety。
-- 在 legacy `candidate/` core-patch path 中，dataset-specific intent/slot hardcoding 默认不接受。新的 target-evolution path 不走这个限制：target-specific code 可以写在 `target/`，但不能进入 Darjeeling core，也不能读取 private holdout。
+- 在 legacy `candidate/` core-patch path 中，dataset-specific intent/slot hardcoding 默认不接受。新的 target-evolution path 不走这个限制：visible-data-derived target-specific code 可以写在 `target/`，且不应仅因为 dataset dependence 被拒绝；拒绝条件是越界进入 Darjeeling core、读取 private holdout、使用 workspace 外部 dataset 知识，或未通过 inner/holdout/outer replay gates。
 
 Agent 可见范围：
 

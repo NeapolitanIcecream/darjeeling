@@ -19,6 +19,7 @@ from darjeeling.compiler.l2_target_evolution import (
     DEFAULT_TARGET_EVOLVE_ROUNDS,
     DEFAULT_TARGET_INNER_PATIENCE_ROUNDS,
     DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
+    L2TargetBudgetProfile,
     L2TargetEvolutionConfig,
     L2TargetEvolutionMode,
     run_l2_target_evolution,
@@ -664,13 +665,23 @@ def l2_target_evolve(
     traces: Annotated[Path, typer.Option(help="Trace JSONL file with teacher_frame labels.")],
     out_dir: Annotated[Path, typer.Option(help="Output directory for target evolution artifacts.")],
     rounds: Annotated[
-        int,
+        int | None,
         typer.Option(min=1, help="Maximum inner target-evolution rounds."),
-    ] = DEFAULT_TARGET_EVOLVE_ROUNDS,
+    ] = None,
     mode: Annotated[
         str,
         typer.Option(help="Evolution mode: dry-run, local-search, or codex-cli."),
     ] = "dry-run",
+    budget_profile: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Budget profile: standard, fixed-inner, or smoke. fixed-inner "
+                "uses a fixed trace snapshot for a longer inner loop unless "
+                "overridden by explicit budget flags."
+            ),
+        ),
+    ] = "standard",
     dry_run_patch: Annotated[
         list[Path] | None,
         typer.Option(help="Patch to apply before a dry-run round; repeatable."),
@@ -680,12 +691,12 @@ def l2_target_evolve(
         typer.Option(min=1, help="Optional prefix of traces to use for the target split."),
     ] = None,
     inner_patience_rounds: Annotated[
-        int,
+        int | None,
         typer.Option(
             min=0,
             help="Stop after this many non-improving inner-validation rounds; 0 disables.",
         ),
-    ] = DEFAULT_TARGET_INNER_PATIENCE_ROUNDS,
+    ] = None,
     stop_on_selection_gate: Annotated[
         bool,
         typer.Option(
@@ -700,9 +711,9 @@ def l2_target_evolve(
         typer.Option(min=0.1, help="Optional per-agent-round timeout override in seconds."),
     ] = None,
     local_search_trials: Annotated[
-        int,
+        int | None,
         typer.Option(min=1, help="Optuna trials per local-search target round."),
-    ] = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
+    ] = None,
     local_search_space: Annotated[
         str,
         typer.Option(help="Local search space: compact or wide."),
@@ -716,9 +727,20 @@ def l2_target_evolve(
 
     if mode not in {"dry-run", "local-search", "codex-cli"}:
         raise typer.BadParameter("mode must be dry-run, local-search, or codex-cli")
+    if budget_profile not in {"standard", "fixed-inner", "smoke"}:
+        raise typer.BadParameter("budget_profile must be standard, fixed-inner, or smoke")
     if local_search_space not in {"compact", "wide"}:
         raise typer.BadParameter("local_search_space must be compact or wide")
     evolution_mode: L2TargetEvolutionMode = mode  # type: ignore[assignment]
+    resolved_budget_profile: L2TargetBudgetProfile = budget_profile  # type: ignore[assignment]
+    resolved_rounds, resolved_inner_patience, resolved_local_search_trials = (
+        _resolve_l2_target_budget(
+            budget_profile=resolved_budget_profile,
+            rounds=rounds,
+            inner_patience_rounds=inner_patience_rounds,
+            local_search_trials=local_search_trials,
+        )
+    )
     settings = _load_cli_settings()
     trace_records = read_traces(traces)
     if max_traces is not None:
@@ -727,15 +749,16 @@ def l2_target_evolve(
         config=L2TargetEvolutionConfig(
             source_repo_dir=Path.cwd(),
             job_dir=out_dir,
-            rounds=rounds,
+            rounds=resolved_rounds,
             mode=evolution_mode,
             dry_run_patches=tuple(dry_run_patch or ()),
             codex_command=settings.l2_agent_codex_command,
             codex_model=settings.l2_agent_model,
             timeout_s=timeout_s if timeout_s is not None else settings.l2_agent_timeout_s,
-            local_search_trials=local_search_trials,
+            local_search_trials=resolved_local_search_trials,
             local_search_space=local_search_space,  # type: ignore[arg-type]
             local_search_timeout_s=local_search_timeout_s,
+            budget_profile=resolved_budget_profile,
             sandbox=settings.l2_agent_sandbox,
             approval_policy=settings.l2_agent_approval_policy,
             ignore_user_config=settings.l2_agent_ignore_user_config,
@@ -743,12 +766,46 @@ def l2_target_evolve(
             ephemeral=settings.l2_agent_ephemeral,
             min_accepted_accuracy=settings.l2_min_guarded_accuracy,
             max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
-            inner_patience_rounds=inner_patience_rounds,
+            inner_patience_rounds=resolved_inner_patience,
             stop_on_selection_gate=stop_on_selection_gate,
         ),
         traces=traces_to_teacher_view(trace_records),
     )
     console.print_json(data=summary)
+
+
+def _resolve_l2_target_budget(
+    *,
+    budget_profile: L2TargetBudgetProfile,
+    rounds: int | None,
+    inner_patience_rounds: int | None,
+    local_search_trials: int | None,
+) -> tuple[int, int, int]:
+    if budget_profile == "standard":
+        default_rounds = DEFAULT_TARGET_EVOLVE_ROUNDS
+        default_inner_patience = DEFAULT_TARGET_INNER_PATIENCE_ROUNDS
+        default_local_search_trials = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS
+    elif budget_profile == "fixed-inner":
+        default_rounds = 48
+        default_inner_patience = 0
+        default_local_search_trials = 256
+    else:
+        default_rounds = 1
+        default_inner_patience = 0
+        default_local_search_trials = 2
+    return (
+        rounds if rounds is not None else default_rounds,
+        (
+            inner_patience_rounds
+            if inner_patience_rounds is not None
+            else default_inner_patience
+        ),
+        (
+            local_search_trials
+            if local_search_trials is not None
+            else default_local_search_trials
+        ),
+    )
 
 
 @l2_app.command("promote-target")
@@ -884,6 +941,8 @@ def _promote_l2_target_run(
             "l2_target_staged_round": selected_round,
             "l2_target_mode": summary.get("mode"),
             "l2_target_data_split": summary.get("data_split"),
+            "l2_target_loop_cadence": summary.get("loop_cadence"),
+            "l2_target_code_policy": summary.get("target_code_policy"),
             "l2_target_selection_decision": summary.get("selection_decision"),
             "l2_target_adoption_decision": adoption_decision,
             "l2_target_training_traces": len(train_traces),
