@@ -89,8 +89,18 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     }
     assert (workspace / "data" / "objective.json").exists()
     round_state = json.loads((workspace / "data" / "round_state.json").read_text())
-    assert "promotion_holdout" not in json.dumps(round_state)
-    assert "selection_holdout" not in json.dumps(round_state)
+    round_state_text = json.dumps(round_state)
+    assert "promotion_holdout" not in round_state_text
+    assert "selection_holdout" not in round_state_text
+    private_rows = [
+        json.loads(line)
+        for path in [
+            tmp_path / "job" / "private" / "selection_holdout.jsonl",
+            tmp_path / "job" / "private" / "promotion_holdout.jsonl",
+        ]
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert all(row["request_id"] not in round_state_text for row in private_rows)
 
 
 def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Path) -> None:
@@ -240,6 +250,52 @@ def test_l2_target_accept_hook_can_veto_guard_accepts(tmp_path: Path) -> None:
     assert result["vetoed_accepts"] == result["validation_size"]
     assert len(result["veto_examples"]) == result["validation_size"]
     assert result["veto_examples"][0]["predicted_frame"]
+
+
+def test_l2_target_evaluator_reports_guard_near_misses(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    prepare_l2_target_workspace(
+        source_repo_dir=Path.cwd(),
+        workspace_root=workspace,
+        split=split_l2_target_traces(traces_to_teacher_view(_traces())),
+    )
+    (workspace / "target" / "target_l2.py").write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "",
+                "from typing import Any",
+                "",
+                "",
+                "def config_overrides() -> dict[str, Any]:",
+                "    return {'accept_threshold': 1.1}",
+                "",
+                "",
+                "def postprocess_frame(",
+                "    utterance: str,",
+                "    frame: dict[str, Any],",
+                "    metadata: dict[str, Any],",
+                ") -> dict[str, Any]:",
+                "    del utterance, metadata",
+                "    return frame",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_target_workspace(
+        workspace_root=workspace,
+        split="inner_validation",
+    )
+
+    assert result["accepted"] == 0
+    assert 0 < len(result["near_miss_examples"]) <= 8
+    probabilities = [
+        example["guard_probability"] for example in result["near_miss_examples"]
+    ]
+    assert probabilities == sorted(probabilities, reverse=True)
+    assert all("would_be_correct" in example for example in result["near_miss_examples"])
 
 
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:

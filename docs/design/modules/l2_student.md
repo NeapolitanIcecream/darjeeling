@@ -208,6 +208,7 @@ Inner L2 target-evolution path：
 - `local-search` round 是 cheap tuning round，不是 LLM round。它在固定 target data 上跑多次 trial，选择 visible inner validation 更优的配置；若没有超过当前 target，则回滚 `target/config.json`。Outer harness 随后私下评估 selection/promotion holdout，local-search 不能自证 adoption。
 - 默认 `compact` search space 只搜索低成本、保守的 `sgd_logreg + token_sgd` 配置和 guard/feature 参数；MLP 与 `slot_model_family=none` 留在 `wide` space 或 L4 agent 明确设计后的实验中，避免默认 tuner 用高成本 trial 或 slotless shortcut 制造 frame exactness 风险。
 - `target/target_l2.py` 暴露 `accept_prediction(...)` veto hook。它只能把 core guard 原本会接收的 prediction 改为 abstain，不能强行接收 core guard 已拒绝的 prediction；metrics 记录 `vetoed_accepts` 和最多 8 条 visible `veto_examples`，让 agent 能区分“安全拒绝”与“过度保守”。
+- Evaluator 还记录最多 8 条按 guard probability 排序的 `near_miss_examples`，即 core guard 拒绝但接近阈值的 predictions，并标记 `would_be_correct`。这些 examples 在 agent-visible `round_state.json` 中只来自 inner validation，用于指导 coverage 改进；selection/promotion 的 near-miss 只属于 outer summary，不写回 workspace。
 - L4 coding agent round 应优先用于 `target/` 中的结构性改动：新特征、模型 family、校准方法、postprocess、abstain 机制和 search-space 设计。超参搜索本身交给 `tools/search_config.py` 或 `--mode local-search`，避免把 GPT-5.5 token 用在手工猜参数上。
 - 每个 job 先评估 unmodified baseline，再评估后续 target rounds。Inner improvement 的排序把 wrong accepts 放在 coverage 之前：提高 raw coverage 但引入 frame exactness regression 不算进步。
 - 默认预算策略是 `inner_patience_rounds=2` 和 `stop_on_selection_gate=true`。连续两轮没有 inner validation improvement 会提前停止；private selection holdout 通过 gate 也会停止。

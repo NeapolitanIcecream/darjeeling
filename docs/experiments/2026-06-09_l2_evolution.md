@@ -554,3 +554,48 @@ Interpretation:
 - The useful pattern is methodological: target-owned veto code can safely bound
   risky higher-coverage configs, but L2 still needs a mechanism that improves
   private coverage, not only one that suppresses regressions.
+
+## Near-miss diagnostics smoke
+
+The next implementation added `near_miss_examples` to target evaluation
+metrics. A near miss is a prediction rejected by the core guard; examples are
+sorted by guard probability and capped at 8 rows. Each example records whether
+the predicted frame would have exactly matched the teacher frame.
+
+Command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-near-miss-r1 \
+  --rounds 1 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_email_from_veto_r1.patch \
+  --max-traces 500 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Runtime: about 4 seconds.
+- The narrow email-from veto behavior was unchanged: inner validation stayed
+  4 accepted / 4 correct / 0 wrong; private selection stayed 0 accepted; private
+  promotion stayed 0 accepted with 1 vetoed accept.
+- Agent-visible `round_state.json` now contains 8 inner-validation near misses.
+- The top inner near misses show why simply lowering threshold is unsafe:
+  several high-probability rejects were slotless predictions for slot-bearing
+  teacher frames, for example `add grocery shopping to my to do list` and
+  `show me what alarm times i've set for the week`.
+- The same list also exposed a possible safe coverage case:
+  `the available lists` was a rejected exact-correct `lists_query` prediction.
+- A workspace scan confirmed private selection/promotion near-miss rows were
+  not written into the agent workspace; they remain only in the outer summary.
+
+Interpretation:
+
+- `near_miss_examples` are useful target-agent feedback because they show both
+  safe coverage opportunities and high-risk rejects using only visible inner
+  validation.
+- The next target-code evolution attempt should use these examples to design a
+  more selective accept/veto policy, especially for slotless exact-intent cases,
+  instead of lowering the threshold globally.

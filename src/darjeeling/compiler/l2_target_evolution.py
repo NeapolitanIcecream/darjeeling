@@ -387,6 +387,7 @@ def evaluate_target_workspace(
     vetoed_accepts = 0
     examples: list[dict[str, Any]] = []
     veto_examples: list[dict[str, Any]] = []
+    near_miss_examples: list[dict[str, Any]] = []
     for trace in validation_traces:
         if trace.teacher_frame is None:
             continue
@@ -421,6 +422,17 @@ def evaluate_target_workspace(
                         "guard_probability": prediction.guard_probability,
                     }
                 )
+        if not default_accept:
+            near_miss_examples.append(
+                {
+                    "request_id": trace.request_id,
+                    "utterance": trace.utterance,
+                    "teacher_frame": trace.teacher_frame.model_dump(mode="json"),
+                    "predicted_frame": frame.model_dump(mode="json"),
+                    "guard_probability": prediction.guard_probability,
+                    "would_be_correct": frame == trace.teacher_frame,
+                }
+            )
         if should_accept:
             accepted += 1
             if frame == trace.teacher_frame:
@@ -462,6 +474,7 @@ def evaluate_target_workspace(
         "config": bundle.config.model_dump(mode="json"),
         "wrong_examples": examples,
         "veto_examples": veto_examples,
+        "near_miss_examples": _top_guard_examples(near_miss_examples),
     }
 
 
@@ -638,6 +651,7 @@ def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
         "wrong_accept_rate": metric["wrong_accept_rate"],
         "passes_gate": metric["passes_gate"],
         "veto_examples": metric.get("veto_examples", []),
+        "near_miss_examples": metric.get("near_miss_examples", []),
     }
 
 
@@ -654,6 +668,14 @@ def _metric_delta(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str
         ),
         "wrong_accept_rate": current["wrong_accept_rate"] - baseline["wrong_accept_rate"],
     }
+
+
+def _top_guard_examples(examples: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
+    return sorted(
+        examples,
+        key=lambda example: float(example["guard_probability"]),
+        reverse=True,
+    )[:limit]
 
 
 def _optional_float_delta(current: float | None, baseline: float | None) -> float | None:

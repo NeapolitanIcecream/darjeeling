@@ -230,6 +230,7 @@ Agent 权限：
 - `target-evolve` 已加入 baseline-first evaluation、private selection/promotion holdouts、visible objective/round-state files、selection-gate early stop、inner-validation patience stop、explicit adoption decision 和 `local-search` Optuna tuning mode。下一步真实 L4 experiment 应优先走该路径，而不是 legacy `l2_research/candidate` patch harness。
 - `local-search` 不消耗 LLM tokens；它只优化可见 train/inner validation，并把 best visible config 写入 `target/config.json`。L4 coding agent 应在此基础上改 target-owned code/search-space，而不是手工猜 threshold、ngram 或模型 family。
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
+- Target evaluator 在 visible inner validation 上暴露 `near_miss_examples`，帮助 L4 agent 找到高 guard probability 但被拒绝的 coverage 机会。Private selection/promotion 的 near-miss 只能留在 outer artifact 中用于人类/outer harness 分析，不进入 agent workspace。
 
 ## Direct API session 策略
 
