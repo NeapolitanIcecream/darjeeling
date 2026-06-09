@@ -482,6 +482,53 @@ def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -
     assert metric_lookup[("l2_unguarded", "predicted_intent_similarity_p50")] == "0.5"
 
 
+def test_generate_run_report_includes_l2_tuning_summary(tmp_path: Path) -> None:
+    (tmp_path / "traces.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "settings.json").write_text("{}\n", encoding="utf-8")
+    manifest = ArtifactManifest(
+        artifact_set_id="gen_001_candidate",
+        generation=1,
+        artifact_paths={"l2_tuning": "generations/gen_001/l2/l2_tuning.json"},
+        candidate_metrics={
+            "l2_config": {
+                "intent_model_family": "mlp",
+                "slot_model_family": "none",
+                "max_features": 10000,
+                "word_ngram_range": [1, 3],
+                "char_ngram_range": [3, 3],
+            },
+            "l2_tuning": {
+                "schema_version": "l2-tune-v1",
+                "train_size": 58,
+                "validation_size": 20,
+                "n_trials_requested": 12,
+                "n_trials_completed": 12,
+                "best_trial_number": 5,
+                "best_value": 1.49,
+                "best_metrics": {
+                    "unguarded": {"accepted_accuracy": 0.75},
+                    "guarded": {
+                        "coverage": 0.75,
+                        "accepted_accuracy": 1.0,
+                        "wrong_accept_rate": 0.0,
+                    },
+                },
+            },
+        },
+    )
+    ArtifactStore(tmp_path / "artifacts").promote(manifest)
+
+    result = generate_run_report(tmp_path)
+
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "## L2 Tuning" in summary
+    assert "- trials completed/requested: 12/12" in summary
+    assert "- selected intent model: mlp" in summary
+    assert "- tuning validation unguarded accuracy: 0.750" in summary
+    assert "- tuning validation guarded coverage/accuracy/wrong rate: 0.750/1.000/0.000" in summary
+    assert "- tuning artifact: `generations/gen_001/l2/l2_tuning.json`" in summary
+
+
 def test_generate_run_report_includes_evolution_and_artifact_summary_tables(
     tmp_path: Path,
 ) -> None:

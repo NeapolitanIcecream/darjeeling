@@ -380,6 +380,7 @@ def _write_summary_md(
         "- `hard_cases.jsonl`\n\n"
         f"{_layer_summary_section(traces)}\n\n"
         f"{_l2_unguarded_section(traces)}\n\n"
+        f"{_l2_tuning_section(current_manifest)}\n\n"
         f"{_evolution_summary_section(promotion_records)}\n\n"
         f"{
             _artifact_summary_section(
@@ -621,6 +622,59 @@ def _l2_unguarded_section(traces: list[TraceRecord]) -> str:
             ),
         ]
     )
+    return "\n".join(lines)
+
+
+def _l2_tuning_section(current_manifest: ArtifactManifest | None) -> str:
+    lines = ["## L2 Tuning", ""]
+    if current_manifest is None:
+        lines.append("No current artifact manifest found.")
+        return "\n".join(lines)
+    tuning = current_manifest.candidate_metrics.get("l2_tuning")
+    if not isinstance(tuning, dict):
+        lines.append("No L2 tuning report recorded.")
+        return "\n".join(lines)
+    config = current_manifest.candidate_metrics.get("l2_config")
+    best_metrics = tuning.get("best_metrics")
+    guarded = best_metrics.get("guarded") if isinstance(best_metrics, dict) else None
+    unguarded = best_metrics.get("unguarded") if isinstance(best_metrics, dict) else None
+    lines.extend(
+        [
+            f"- trials completed/requested: {tuning.get('n_trials_completed')}/"
+            f"{tuning.get('n_trials_requested')}",
+            f"- train/validation size: {tuning.get('train_size')}/{tuning.get('validation_size')}",
+            f"- best trial/value: {tuning.get('best_trial_number')}/{tuning.get('best_value')}",
+        ]
+    )
+    if isinstance(config, dict):
+        lines.extend(
+            [
+                f"- selected intent model: {config.get('intent_model_family')}",
+                f"- selected slot model: {config.get('slot_model_family')}",
+                f"- selected max_features: {config.get('max_features')}",
+                f"- selected word ngram: {config.get('word_ngram_range')}",
+                f"- selected char ngram: {config.get('char_ngram_range')}",
+            ]
+        )
+    if isinstance(unguarded, dict):
+        unguarded_accuracy = _format_layer_summary_value(
+            "accepted_accuracy",
+            unguarded.get("accepted_accuracy"),
+        )
+        lines.append(
+            "- tuning validation unguarded accuracy: "
+            f"{unguarded_accuracy}"
+        )
+    if isinstance(guarded, dict):
+        lines.append(
+            "- tuning validation guarded coverage/accuracy/wrong rate: "
+            f"{_format_layer_summary_value('coverage', guarded.get('coverage'))}/"
+            f"{_format_layer_summary_value('accepted_accuracy', guarded.get('accepted_accuracy'))}/"
+            f"{_format_layer_summary_value('wrong_accept_rate', guarded.get('wrong_accept_rate'))}"
+        )
+    artifact_path = current_manifest.artifact_paths.get("l2_tuning")
+    if artifact_path:
+        lines.append(f"- tuning artifact: `{artifact_path}`")
     return "\n".join(lines)
 
 
