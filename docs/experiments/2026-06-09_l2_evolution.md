@@ -82,3 +82,73 @@ Final run summary:
 - Continue treating artifact promotion as an open issue: whole-artifact
   promotion can hide single-layer regressions.
 - Keep L1 hardware/runtime timeout configurable in future experiment commands.
+
+## Autoresearch-style L2 workspace follow-up
+
+Later on 2026-06-09, the L2 agent harness was redesigned around an
+autoresearch-style isolated workspace:
+
+- `a6f36b7` introduced `workspace/l2_research/` with stable `program.md`,
+  editable `candidate/`, fixed `system/darjeeling/`, dynamic teacher-visible
+  `data/`, local `tools/`, and `workspace_manifest.json`.
+- The Codex stdin prompt is now the stable one-line instruction to read
+  `program.md`; trace/context/metrics/objective files are no longer embedded
+  in prompt text.
+- `L2_AGENT_MODEL` now defaults to `gpt-5.5`, `L2_AGENT_TIMEOUT_S` defaults to
+  `7200`, and Codex runs with `--ignore-user-config`, `--ignore-rules`,
+  `--ephemeral`, and `--skip-git-repo-check`.
+- A dry-run validation smoke confirmed that generated `tools/run_checks.py`
+  overlays `candidate/` into `system/darjeeling/` and runs focused L2
+  pytest/ruff successfully.
+
+All follow-up runs used `--max-requests 500 --compile-every 500 --teacher cache`
+with a copied oracle teacher cache. They were smoke runs intended to validate
+the new harness and patch-adoption loop, not final 3k/10k quality claims.
+
+| run | repo state evaluated | candidate L2 accepts | candidate frame EM | candidate wrong accept | promotion | agent patch |
+| --- | --- | ---: | ---: | ---: | --- | --- |
+| `runs/l2-agent-research-workspace-smoke-r1` | new workspace harness only | 12 | 0.986486 | 0.013514 | rejected: objective did not improve | lower safe threshold tie-break |
+| `runs/l2-agent-research-workspace-smoke-r2` | lower-threshold patch applied | 16 | 0.977064 | 0.022936 | rejected: accuracy regression exceeds epsilon | utterance length guard feature |
+| `runs/l2-agent-research-workspace-smoke-r3` | length-bucket feature applied, lower-threshold reverted | 18 | 0.977273 | 0.022727 | rejected: accuracy regression exceeds epsilon | QA slot lexical fallback |
+
+Agent/provenance observations:
+
+- r1 Codex job succeeded with 885,689 input tokens, 821,504 cached input tokens,
+  7,852 output tokens, and 1,752 reasoning output tokens.
+- r2 Codex job succeeded with 1,494,176 input tokens, 1,345,664 cached input
+  tokens, 10,538 output tokens, and 2,813 reasoning output tokens.
+- r3 Codex job succeeded with 1,271,731 input tokens, 1,182,080 cached input
+  tokens, 11,006 output tokens, and 2,118 reasoning output tokens.
+- The short prompt plus workspace files made the jobs complete reliably and
+  gave high cached-input ratios, but each real GPT-5.5 job still took several
+  minutes and substantial tokens.
+
+Patch-adoption outcome:
+
+- `75647e0` applied the r1 lower-threshold patch, then `e7a8d66` reverted it
+  after r2 showed worse replay accuracy.
+- `df1e4e6` applied the r2 utterance-length guard feature, then `e082923`
+  reverted it after r3 still failed promotion with accuracy regression.
+- The r3 QA lexical fallback was not applied. It hardcodes MASSIVE-specific
+  QA intent/slot names and would move L2 toward dataset-specific rules without
+  replay evidence that it fixes the current promotion failure.
+- After the smoke runs, the generated `program.md` rules were tightened to make
+  replay/promotion success explicit and to reject raw-coverage trades or
+  dataset-specific slot hardcoding by default.
+- `tools/run_checks.py` was adjusted to prefer pytest/ruff from the current
+  Python environment, falling back to `uv run` only when those modules are
+  unavailable. This keeps outer validation compatible while giving sandboxed
+  agents a path around dependency-cache misses when a usable venv is available.
+
+Conclusion for this follow-up:
+
+- The redesigned L2 coding-agent harness works as intended: it isolates
+  workspace writes, keeps prompt stable, records auditable artifacts, validates
+  generated patches, and supports apply-commit-rerun evaluation.
+- The L2 quality bottleneck remains unsolved in these 500-request smoke runs.
+  Simple guard-threshold or single-feature changes trade accuracy for coverage
+  and fail the promotion gate.
+- Further L2 evolution should make the agent objective more explicit: prefer
+  frame exactness and promotion success over raw L2 coverage, reject
+  dataset-specific lexical patches by default, and consider a bounded agent
+  budget/stop policy before spending another GPT-5.5 job.

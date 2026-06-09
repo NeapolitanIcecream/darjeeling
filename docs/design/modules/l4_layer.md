@@ -167,6 +167,7 @@ Workspace layout：
 - `data/` 存放动态 teacher-visible 资料：`teacher_train.jsonl`、`hard_cases.jsonl`、`l2_context_families.json`、`slot_error_summary.json`、`current_metrics.json`、`objective.json`、`constraints.md` 和 `commands.md`。
 - `tools/` 提供本地入口：`inspect_context.py` 查看 data，`run_checks.py` 将 candidate overlay 到 system copy 后运行 focused pytest/ruff。
 - `workspace_manifest.json` 记录 workspace schema、candidate/data 路径和标准命令。
+- `tools/run_checks.py` 会优先在当前 Python 环境中调用 pytest/ruff；若当前环境缺少模块，则回退到 `uv run pytest/ruff`，避免有可用 venv 时仍强制嵌套 `uv run`。
 
 Prompt/cache 策略：
 
@@ -174,6 +175,8 @@ Prompt/cache 策略：
 - 动态 trace、hard cases、metrics、objective 和 slot error summary 不进 prompt；它们作为文件放在 `data/`。
 - 稳定 prompt 最大化 provider/server-side KV cache 机会，也避免每轮把大量代码或样本直接塞入上下文。
 - 是否读取某个 data file 是 coding agent 的局部决策；harness 只提供可见边界和审计 artifact。
+- Agent objective 必须以 replay/promotion success 为目标；不能为了 raw L2 coverage 牺牲 frame exactness 或 wrong-accept safety。
+- Dataset-specific intent/slot hardcoding 默认不接受，除非有 teacher-visible hard case 支撑，且改动能表达为可复用机制。
 
 Agent 可见范围：
 

@@ -904,6 +904,11 @@ def _l2_research_program_text() -> str:
             "- Do not read MASSIVE gold labels, promotion holdout, future stream data,",
             "  teacher cache internals, or files outside this workspace.",
             "- Produce one small L2-owned patch, then stop.",
+            "- Optimize for replay/promotion success, not raw L2 coverage. Do not trade",
+            "  frame exactness or wrong-accept safety for a larger accept set.",
+            "- Avoid dataset-specific intent/slot hardcoding unless the change is",
+            "  clearly justified by teacher-visible hard cases and expressed as a",
+            "  reusable mechanism.",
             "- Prefer Optuna or local deterministic tools for numeric tuning; use your",
             "  reasoning for code, feature, model-family, calibration, or search-space changes.",
             "",
@@ -958,6 +963,7 @@ if __name__ == "__main__":
 def _run_checks_tool_text() -> str:
     return """from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -983,12 +989,16 @@ def run(command: list[str]) -> int:
     return int(completed.returncode)
 
 
+def module_command(module: str, fallback: list[str]) -> list[str]:
+    if importlib.util.find_spec(module) is not None:
+        return [sys.executable, "-m", module]
+    return fallback
+
+
 def main() -> int:
     sync_candidate()
     test_command = [
-        "uv",
-        "run",
-        "pytest",
+        *module_command("pytest", ["uv", "run", "pytest"]),
         "tests/test_l2_student_training.py",
         "tests/test_l2_tuner.py",
         "tests/test_l2_guard.py",
@@ -1001,9 +1011,7 @@ def main() -> int:
         str(path.relative_to(SYSTEM)) for path in (SYSTEM / "tests").glob("test_l2_*.py")
     )
     ruff_command = [
-        "uv",
-        "run",
-        "ruff",
+        *module_command("ruff", ["uv", "run", "ruff"]),
         "check",
         "src/darjeeling/layers/l2_student.py",
         "src/darjeeling/compiler/l2_tuner.py",

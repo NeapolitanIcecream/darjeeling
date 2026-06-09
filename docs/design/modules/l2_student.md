@@ -182,6 +182,8 @@ L2 coding-agent path：
 - Prompt stdin 保持稳定短前缀，只要求 agent 读取 `program.md`。动态 context 不进入 prompt，而是作为 `data/` 文件由 agent 自主读取，以减少上下文膨胀并最大化 KV cache 复用机会。
 - `data/slot_error_summary.json` 从 teacher-visible train/hard cases 中汇总 L2 wrong accept，尤其标出 intent 正确但 slot 缺失、多余或值错误的样本。该 summary 用于把下一轮 L2 evolve 的焦点放在 frame exactness，而不是只扩大 coverage。
 - 调参由 Optuna 或本地 deterministic tuner 负责；L4 coding agent 负责真正需要 generalized intelligence 的代码、特征、模型 family、calibration、accept policy、验证协议和 search-space 设计。
+- Agent patch adoption 以 replay/promotion success 为准；提高 raw L2 coverage 但引入 frame exactness regression 的 patch 必须撤回。
+- Dataset-specific intent/slot lexical patch 默认不纳入主线，除非 replay-backed hard case 证明必要，且实现方式可泛化。
 - 当前 compiler 只记录 agent patch artifact，不在同一 Python 进程中热加载 patch：`candidate_metrics["l2_agent_patch_runtime_applied"] = false`。真实采用 patch 必须由外层开发循环应用、提交 Git、重启实验。
 
 Optuna tuning path：
