@@ -670,9 +670,9 @@ def l2_target_evolve(
             help="Stop after this many non-improving inner-validation rounds; 0 disables.",
         ),
     ] = 2,
-    stop_on_promotion_gate: Annotated[
+    stop_on_selection_gate: Annotated[
         bool,
-        typer.Option(help="Stop early when the private promotion holdout gate passes."),
+        typer.Option(help="Stop early when the private selection holdout gate passes."),
     ] = True,
     timeout_s: Annotated[
         float | None,
@@ -706,7 +706,7 @@ def l2_target_evolve(
             min_accepted_accuracy=settings.l2_min_guarded_accuracy,
             max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
             inner_patience_rounds=inner_patience_rounds,
-            stop_on_promotion_gate=stop_on_promotion_gate,
+            stop_on_selection_gate=stop_on_selection_gate,
         ),
         traces=traces_to_teacher_view(trace_records),
     )

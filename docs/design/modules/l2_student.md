@@ -200,12 +200,12 @@ Inner L2 target-evolution path：
   - `data/objective.json` 可读，定义 gates、优化顺序和无效策略。
   - `data/round_state.json` 可读，只包含 baseline 和历史轮次的 inner validation 聚合，不包含 promotion holdout 聚合。
   - `data/commands.md` 可读，提供本地 evaluate/inspect 命令。
-  - promotion holdout 不进入 agent workspace，存放在 outer job 的私有目录，只由 outer gate 读取。
-  - `tools/evaluate.py` 在固定 split 上训练 core L2 bundle，加载 `target/target_l2.py`，然后评估 inner validation；outer harness 使用同一 evaluator 加载私有 holdout 做 gate。
+  - selection holdout 和 promotion holdout 不进入 agent workspace，存放在 outer job 的私有目录，只由 outer harness 读取。
+  - `tools/evaluate.py` 在固定 split 上训练 core L2 bundle，加载 `target/target_l2.py`，然后评估 inner validation；outer harness 使用同一 evaluator 加载私有 selection/promotion holdout 做 gate。
 - Inner loop 可以在同一批 target data 上连续跑多轮，不再受 `compile_every` 或 replay stream 速度限制；`rounds` 是最大轮数，不是必须烧满的轮数。
 - 每个 job 先评估 unmodified baseline，再评估后续 target rounds。Inner improvement 的排序把 wrong accepts 放在 coverage 之前：提高 raw coverage 但引入 frame exactness regression 不算进步。
-- 默认预算策略是 `inner_patience_rounds=2` 和 `stop_on_promotion_gate=true`。连续两轮没有 inner validation improvement 会提前停止；private promotion holdout 通过 gate 也会停止。
-- Summary 同时记录 diagnostic `best_round` 和 adoption-oriented `best_adoptable_round` / `adoption_decision`。即使某轮 inner validation 变好，只要 private promotion holdout 不过 gate，就不能被视为可采用 target candidate。
+- 默认预算策略是 `inner_patience_rounds=2` 和 `stop_on_selection_gate=true`。连续两轮没有 inner validation improvement 会提前停止；private selection holdout 通过 gate 也会停止。
+- Summary 同时记录 diagnostic `best_round`、`best_selection_round`、`selection_decision` 和 adoption-oriented `best_adoptable_round` / `adoption_decision`。即使某轮 inner validation 变好，只要 private selection/promotion holdout 不过 gate，就不能被视为可采用 target candidate。
 - target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/inner validation 数据推导，不能依赖 MASSIVE 或外部 dataset 知识。是否采用由 holdout/promotion 指标决定，而不是由 dataset-independent core 规则决定。
 - 当前实现状态：已支持 baseline-first `dry-run`/`codex-cli` 多轮、target workspace evaluator、private holdout gate 和 inner-validation patience stop；`codex-cli` 多轮入口已预留在 harness 中，但尚未作为主实验默认使用。
 

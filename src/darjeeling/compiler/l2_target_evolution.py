@@ -39,7 +39,7 @@ class L2TargetEvolutionConfig:
     min_accepted_accuracy: float = 0.93
     max_wrong_accept_rate: float = 0.05
     inner_patience_rounds: int = 2
-    stop_on_promotion_gate: bool = True
+    stop_on_selection_gate: bool = True
 
 
 def run_l2_target_evolution(
@@ -64,11 +64,15 @@ def run_l2_target_evolution(
     private_dir.mkdir(parents=True, exist_ok=True)
 
     split = split_l2_target_traces(traces)
-    holdout_path = private_dir / "promotion_holdout.jsonl"
-    _write_jsonl(
-        holdout_path,
-        [trace.model_dump(mode="json") for trace in split["promotion_holdout"]],
-    )
+    private_paths = {
+        "selection_holdout": private_dir / "selection_holdout.jsonl",
+        "promotion_holdout": private_dir / "promotion_holdout.jsonl",
+    }
+    for split_name, path in private_paths.items():
+        _write_jsonl(
+            path,
+            [trace.model_dump(mode="json") for trace in split[split_name]],
+        )
     prepare_l2_target_workspace(
         source_repo_dir=config.source_repo_dir,
         workspace_root=workspace_root,
@@ -77,7 +81,7 @@ def run_l2_target_evolution(
 
     baseline = _evaluate_target_candidate(
         workspace_root=workspace_root,
-        holdout_path=holdout_path,
+        private_paths=private_paths,
         config=config,
         label="baseline",
     )
@@ -91,8 +95,8 @@ def run_l2_target_evolution(
     best_inner = baseline["inner_validation"]
     no_inner_improvement_rounds = 0
     stop_reason = "round_budget_exhausted"
-    if config.stop_on_promotion_gate and baseline["promotion_holdout"]["passes_gate"]:
-        stop_reason = "baseline_promotion_gate_passed"
+    if config.stop_on_selection_gate and baseline["selection_holdout"]["passes_gate"]:
+        stop_reason = "baseline_selection_gate_passed"
 
     for round_index in range(1, config.rounds + 1):
         if stop_reason != "round_budget_exhausted":
@@ -137,11 +141,12 @@ def run_l2_target_evolution(
 
         candidate = _evaluate_target_candidate(
             workspace_root=workspace_root,
-            holdout_path=holdout_path,
+            private_paths=private_paths,
             config=config,
             label=f"round_{round_index:03d}",
         )
         inner_result = candidate["inner_validation"]
+        selection_result = candidate["selection_holdout"]
         promotion_result = candidate["promotion_holdout"]
         inner_improved = _is_inner_improvement(inner_result, best_inner)
         if inner_improved:
@@ -152,6 +157,7 @@ def run_l2_target_evolution(
         round_payload = {
             "round": round_index,
             "inner_improved": inner_improved,
+            "passes_private_selection_gate": bool(selection_result["passes_gate"]),
             "passes_private_promotion_gate": bool(promotion_result["passes_gate"]),
             "inner_score": list(_inner_score(inner_result)),
             "inner_delta_vs_baseline": _metric_delta(
@@ -159,6 +165,11 @@ def run_l2_target_evolution(
                 baseline["inner_validation"],
             ),
             "inner_validation": inner_result,
+            "selection_delta_vs_baseline": _metric_delta(
+                selection_result,
+                baseline["selection_holdout"],
+            ),
+            "selection_holdout": selection_result,
             "promotion_delta_vs_baseline": _metric_delta(
                 promotion_result,
                 baseline["promotion_holdout"],
@@ -170,8 +181,8 @@ def run_l2_target_evolution(
             encoding="utf-8",
         )
         round_results.append(round_payload)
-        if config.stop_on_promotion_gate and promotion_result["passes_gate"]:
-            stop_reason = "promotion_gate_passed"
+        if config.stop_on_selection_gate and selection_result["passes_gate"]:
+            stop_reason = "selection_gate_passed"
             break
         if (
             round_index < config.rounds
@@ -200,18 +211,22 @@ def run_l2_target_evolution(
         "stop_reason": stop_reason,
         "budget_policy": {
             "inner_patience_rounds": config.inner_patience_rounds,
-            "stop_on_promotion_gate": config.stop_on_promotion_gate,
+            "stop_on_selection_gate": config.stop_on_selection_gate,
         },
         "workspace": str(workspace_root),
         "data_split": {key: len(value) for key, value in split.items()},
         "baseline": baseline,
         "rounds": round_results,
         "best_round": _best_round(round_results),
+        "best_selection_round": _best_selection_round(round_results),
         "best_adoptable_round": _best_adoptable_round(round_results),
+        "selection_decision": _selection_decision(round_results),
         "adoption_decision": _adoption_decision(round_results),
         "target_code_scope": "target/",
         "core_code_scope": "system/darjeeling/ is read-only evaluator/core",
-        "private_data_scope": "promotion holdout is stored outside the agent workspace",
+        "private_data_scope": (
+            "selection and promotion holdouts are stored outside the agent workspace"
+        ),
     }
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
@@ -223,15 +238,18 @@ def run_l2_target_evolution(
 
 def split_l2_target_traces(traces: list[TeacherTrace]) -> dict[str, list[TeacherTrace]]:
     labeled = [trace for trace in traces if trace.teacher_frame is not None]
-    if len(labeled) < 6:
-        raise ValueError("target evolution requires at least 6 teacher-labeled traces")
+    if len(labeled) < 10:
+        raise ValueError("target evolution requires at least 10 teacher-labeled traces")
     train_end = max(4, int(len(labeled) * 0.60))
     inner_end = max(train_end + 1, int(len(labeled) * 0.80))
-    inner_end = min(inner_end, len(labeled) - 1)
+    selection_end = max(inner_end + 1, int(len(labeled) * 0.90))
+    selection_end = min(selection_end, len(labeled) - 1)
+    inner_end = min(inner_end, selection_end - 1)
     return {
         "train": labeled[:train_end],
         "inner_validation": labeled[train_end:inner_end],
-        "promotion_holdout": labeled[inner_end:],
+        "selection_holdout": labeled[inner_end:selection_end],
+        "promotion_holdout": labeled[selection_end:],
     }
 
 
@@ -274,7 +292,10 @@ def prepare_l2_target_workspace(
         "data_dir": "data",
         "tools_dir": "tools",
         "data_files": sorted(path.name for path in (workspace_root / "data").iterdir()),
-        "private_data_files_not_in_workspace": ["promotion_holdout.jsonl"],
+        "private_data_files_not_in_workspace": [
+            "selection_holdout.jsonl",
+            "promotion_holdout.jsonl",
+        ],
         "visible_state_files": [
             "objective.json",
             "round_state.json",
@@ -290,15 +311,15 @@ def prepare_l2_target_workspace(
 def evaluate_target_workspace(
     *,
     workspace_root: Path,
-    split: Literal["inner_validation", "promotion_holdout"],
+    split: Literal["inner_validation", "selection_holdout", "promotion_holdout"],
     holdout_path: Path | None = None,
     min_accepted_accuracy: float = 0.93,
     max_wrong_accept_rate: float = 0.05,
 ) -> dict[str, Any]:
     train_traces = _read_teacher_jsonl(workspace_root / "data" / "train.jsonl")
-    if split == "promotion_holdout":
+    if split in {"selection_holdout", "promotion_holdout"}:
         if holdout_path is None:
-            raise ValueError("promotion_holdout evaluation requires a private holdout_path")
+            raise ValueError(f"{split} evaluation requires a private holdout_path")
         validation_path = holdout_path
     else:
         validation_path = workspace_root / "data" / f"{split}.jsonl"
@@ -371,7 +392,7 @@ def evaluate_target_workspace(
 def _evaluate_target_candidate(
     *,
     workspace_root: Path,
-    holdout_path: Path,
+    private_paths: dict[str, Path],
     config: L2TargetEvolutionConfig,
     label: str,
 ) -> dict[str, Any]:
@@ -381,17 +402,20 @@ def _evaluate_target_candidate(
         min_accepted_accuracy=config.min_accepted_accuracy,
         max_wrong_accept_rate=config.max_wrong_accept_rate,
     )
-    promotion_result = evaluate_target_workspace(
-        workspace_root=workspace_root,
-        split="promotion_holdout",
-        holdout_path=holdout_path,
-        min_accepted_accuracy=config.min_accepted_accuracy,
-        max_wrong_accept_rate=config.max_wrong_accept_rate,
-    )
+    private_results = {
+        split_name: evaluate_target_workspace(
+            workspace_root=workspace_root,
+            split=split_name,  # type: ignore[arg-type]
+            holdout_path=path,
+            min_accepted_accuracy=config.min_accepted_accuracy,
+            max_wrong_accept_rate=config.max_wrong_accept_rate,
+        )
+        for split_name, path in private_paths.items()
+    }
     return {
         "label": label,
         "inner_validation": inner_result,
-        "promotion_holdout": promotion_result,
+        **private_results,
     }
 
 
@@ -415,11 +439,13 @@ def _write_target_state_files(
         "no_inner_improvement_rounds": no_inner_improvement_rounds,
         "budget_policy": {
             "inner_patience_rounds": config.inner_patience_rounds,
-            "stop_on_promotion_gate": config.stop_on_promotion_gate,
+            "stop_on_selection_gate": config.stop_on_selection_gate,
         },
         "baseline_inner_validation": _visible_metric_summary(baseline["inner_validation"]),
         "round_history": [_visible_round_summary(round_result) for round_result in round_results],
-        "private_holdout_visibility": "not available in this workspace",
+        "private_holdout_visibility": (
+            "selection and promotion holdouts are not available in this workspace"
+        ),
     }
     (data_dir / "objective.json").write_text(
         json.dumps(objective, indent=2, sort_keys=True) + "\n",
@@ -449,7 +475,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
         "invalid_strategies": [
             "raw coverage increase with lower frame exactness",
             "changes outside target/",
-            "using promotion holdout rows or aggregate feedback",
+            "using private holdout rows or aggregate feedback",
             "hardcoding MASSIVE-specific behavior from outside visible data",
         ],
         "allowed_strategies": [
@@ -474,10 +500,18 @@ def _target_commands_text() -> str:
             "  --out runs/inner_validation.json",
             "```",
             "",
+            "If `uv` cannot use its dependency cache but a Python >=3.11 environment",
+            "with Darjeeling dependencies is already active, use:",
+            "",
+            "```bash",
+            "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=system/darjeeling/src \\",
+            "  python tools/evaluate.py --split inner_validation --out runs/inner_validation.json",
+            "```",
+            "",
             "Inspect visible workspace context:",
             "",
             "```bash",
-            "uv run --project system/darjeeling python tools/inspect_context.py",
+            "python3 tools/inspect_context.py",
             "```",
             "",
             "Only edit files under `target/`.",
@@ -634,8 +668,9 @@ def _target_program_text() -> str:
             "Optimize generalization from the visible train and inner-validation data.",
             "Wrong accepts are worse than abstentions. A raw coverage increase is not",
             "useful if frame exactness or wrong-accept safety gets worse.",
-            "Promotion holdout is outside this workspace and only the outer harness can",
-            "read it; do not try to access parent directories to inspect it.",
+            "Private selection and promotion holdouts are outside this workspace and",
+            "only the outer harness can read them; do not try to access parent",
+            "directories to inspect them.",
             "",
             "It is acceptable for `target/` to contain target-dependent code derived",
             "from visible train and inner-validation data. Do not hardcode behavior",
@@ -667,11 +702,13 @@ def _inspect_tool_text() -> str:
 
 ROOT = Path(__file__).resolve().parents[1]
 for path in sorted((ROOT / "data").iterdir()):
-    print(f"{path.name}: {path.stat().st_size} bytes")
+    if path.is_file():
+        print(f"{path.name}: {path.stat().st_size} bytes")
 print("")
 print("Editable target files:")
 for path in sorted((ROOT / "target").iterdir()):
-    print(f"{path.name}: {path.stat().st_size} bytes")
+    if path.is_file():
+        print(f"{path.name}: {path.stat().st_size} bytes")
 """
 
 
@@ -798,40 +835,82 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _best_round(rounds: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return _best_round_for_split(rounds, "selection_holdout")
+
+
+def _best_round_for_split(rounds: list[dict[str, Any]], split: str) -> dict[str, Any] | None:
     if not rounds:
         return None
     return max(
         rounds,
         key=lambda item: (
-            bool(item["promotion_holdout"]["passes_gate"]),
-            item["promotion_holdout"]["coverage"],
-            item["promotion_holdout"]["accepted_accuracy"] or 0.0,
-            -item["promotion_holdout"]["wrong_accept_rate"],
+            bool(item[split]["passes_gate"]),
+            item[split]["coverage"],
+            item[split]["accepted_accuracy"] or 0.0,
+            -item[split]["wrong_accept_rate"],
         ),
     )
+
+
+def _best_selection_round(rounds: list[dict[str, Any]]) -> dict[str, Any] | None:
+    passing_rounds = [
+        round_result
+        for round_result in rounds
+        if round_result["selection_holdout"]["passes_gate"]
+    ]
+    if not passing_rounds:
+        return None
+    return _best_round_for_split(passing_rounds, "selection_holdout")
 
 
 def _best_adoptable_round(rounds: list[dict[str, Any]]) -> dict[str, Any] | None:
     passing_rounds = [
         round_result
         for round_result in rounds
-        if round_result["promotion_holdout"]["passes_gate"]
+        if (
+            round_result["selection_holdout"]["passes_gate"]
+            and round_result["promotion_holdout"]["passes_gate"]
+        )
     ]
     if not passing_rounds:
         return None
-    return _best_round(passing_rounds)
+    return _best_round_for_split(passing_rounds, "promotion_holdout")
+
+
+def _selection_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
+    best_selection = _best_selection_round(rounds)
+    if best_selection is None:
+        return {
+            "selected": False,
+            "round": None,
+            "reason": "no target round passed the private selection holdout gate",
+        }
+    return {
+        "selected": True,
+        "round": best_selection["round"],
+        "reason": "target round passed the private selection holdout gate",
+    }
 
 
 def _adoption_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
+    selection = _selection_decision(rounds)
+    if not selection["selected"]:
+        return {
+            "adopted": False,
+            "round": None,
+            "reason": "no target round passed the private selection holdout gate",
+        }
     best_adoptable = _best_adoptable_round(rounds)
     if best_adoptable is None:
         return {
             "adopted": False,
-            "round": None,
-            "reason": "no target round passed the private promotion holdout gate",
+            "round": selection["round"],
+            "reason": (
+                "best selected target round failed the private promotion holdout gate"
+            ),
         }
     return {
         "adopted": True,
         "round": best_adoptable["round"],
-        "reason": "target round passed the private promotion holdout gate",
+        "reason": "target round passed both private selection and promotion gates",
     }

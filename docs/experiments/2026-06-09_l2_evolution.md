@@ -297,3 +297,71 @@ Interpretation:
   `system/darjeeling/`, the documented `uv run --project system/darjeeling ...`
   commands succeeded. Tool isolation should still be revisited before relying
   on many live rounds.
+
+## Selection/promotion split follow-up
+
+The next design iteration split the private target data into two private
+subsets:
+
+- `selection_holdout`: used by the outer harness for candidate selection and
+  early stop.
+- `promotion_holdout`: used as a final private check after selection.
+
+Both remain outside the agent workspace. The agent-visible state still contains
+only train/inner-validation rows and inner-validation aggregates.
+
+Dry-run smoke:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-split-smoke-r1 \
+  --rounds 3 \
+  --max-traces 500
+```
+
+Dry-run result:
+
+- Split: train 300, inner validation 100, selection holdout 50, promotion
+  holdout 50.
+- Completed 2/3 rounds and stopped by `inner_validation_patience_exhausted`.
+- No round passed selection or promotion.
+
+Live Codex smoke:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-selection-codex-smoke-r1 \
+  --rounds 1 \
+  --mode codex-cli \
+  --max-traces 500 \
+  --inner-patience-rounds 1 \
+  --timeout-s 900
+```
+
+Live result:
+
+- Runtime: about 4.5 minutes for one Codex round.
+- Codex usage: 754,201 input tokens, 681,600 cached input tokens, 6,836 output
+  tokens, and 1,202 reasoning output tokens.
+- Agent changed only `target/target_l2.py`.
+- Agent-visible inner validation improved from 1 accepted / 1 correct / 0 wrong
+  to 3 accepted / 3 correct / 0 wrong.
+- Private selection holdout: 0 accepted.
+- Private promotion holdout: 0 accepted.
+- `selection_decision.selected=false` and `adoption_decision.adopted=false`.
+
+Interpretation:
+
+- The split prevents an inner-only improvement from being selected when it does
+  not carry to private selection traffic.
+- This is safer than the previous single private holdout setup, where one
+  private set was doing both repeated selection and final proof.
+- It still does not solve L2 quality. The agent learned another narrow
+  inner-validation improvement but did not find a candidate that absorbs
+  private target traffic.
+- Tool isolation improved for lightweight inspection: generated
+  `tools/inspect_context.py` now runs with plain `python3` and no project env.
+  `tools/evaluate.py` still requires either `uv --project system/darjeeling` or
+  an already-active Python >=3.11 environment with dependencies.
