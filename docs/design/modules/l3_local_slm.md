@@ -45,6 +45,7 @@ Qwen/Qwen2.5-0.5B-Instruct
 - `calibrate_l3_confidence_threshold` 已实现 recorded shadow/guard trace 上的第一版 threshold recommendation：在 wrong-accept 上限内最大化 would-accept coverage，并把 recommended threshold、coverage 和 wrong-accept rate 写入 report metrics。
 - `edge-mvp l3 bench --out <path>` 已实现显式本地硬件/model benchmark，输出 `l3-benchmark-v1` JSON，记录 config、backend status、actual device、load/generation latency、parse failure、repair、would-accept 和 throughput。
 - `edge-mvp report` 会读取已有 `reports/l3_benchmark.json` 并展示在 summary、metrics 和 curves；report 不会自动加载模型。
+- `edge-mvp experiment preflight` 不加载本地模型，只读取 settings 和可选 `reports/l3_benchmark.json`。`LOCAL_SLM_MODE=disabled` 是 non-blocking pass；`shadow` 缺少成功 benchmark 是 warn；`guarded` 缺少成功 benchmark 是 fail，因为 guarded L3 会进入主路由且模型加载失败会 fail fast。
 - offline promotion replay 使用 trace 中 recorded L3 accepted result 计入 L3 correctness、latency 和 wrong accept；compiler 不在 replay 阶段重新加载本地模型。
 - `L4_PROPOSAL_MODE=live` 时，compiler 可以生成 `l3_prompt_candidate` artifact。Few-shot examples 只从 teacher-visible trace IDs 展开，不读取 gold labels。
 - `edge-mvp l3 replay-prompt --prompt <candidate> --traces <trace.jsonl> --out <replay.json>` 已实现显式重新生成式 replay。该命令强制以 `shadow` 语义运行本地 SLM，输出 `l3-prompt-replay-v1`，记录 prompt hash、would-accept、accepted accuracy、wrong accept、parse/repair、latency 和 backend status。
@@ -78,6 +79,7 @@ guarded
 ## 硬件适配遗留问题
 
 L3 local SLM 受硬件影响很大。MVP 不把本地硬件适配作为主 demo 阻塞项。
+默认 `disabled` 不加载模型；需要评估 L3 时先显式运行 `l3 bench` 记录硬件/model 状态，再决定是否用 `shadow` 收集 trace 或用 `guarded` 进入主路由。
 
 需要记录：
 

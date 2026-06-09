@@ -2014,23 +2014,77 @@ def _preflight_l2_agent_check(*, settings) -> dict:
 
 
 def _preflight_l3_check(*, run_dir: Path, settings) -> dict:
+    benchmark_path = run_dir / "reports" / "l3_benchmark.json"
+    base = {
+        "name": "l3.local_slm",
+        "mode": settings.local_slm_mode,
+        "model_name": settings.local_slm_model,
+        "device_policy": settings.local_slm_device_policy,
+        "benchmark_path": str(benchmark_path),
+        "model_load_attempted": False,
+        "runtime_blocking": settings.local_slm_mode == "guarded",
+    }
     if settings.local_slm_mode == "disabled":
         return {
-            "name": "l3.local_slm",
+            **base,
             "status": "pass",
             "message": "local SLM disabled",
+            "readiness": "disabled_nonblocking",
+            "benchmark_required": False,
+            "benchmark_status": "not_required",
         }
-    benchmark_path = run_dir / "reports" / "l3_benchmark.json"
-    if benchmark_path.exists():
+
+    if not benchmark_path.exists():
+        status = "fail" if settings.local_slm_mode == "guarded" else "warn"
         return {
-            "name": "l3.local_slm",
-            "status": "pass",
-            "message": f"found L3 benchmark artifact: {benchmark_path}",
+            **base,
+            "status": status,
+            "message": f"run `edge-mvp l3 bench --out {benchmark_path}` before relying on L3",
+            "readiness": "benchmark_missing",
+            "benchmark_required": True,
+            "benchmark_status": "missing",
         }
+
+    try:
+        benchmark_payload = json.loads(benchmark_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        status = "fail" if settings.local_slm_mode == "guarded" else "warn"
+        return {
+            **base,
+            "status": status,
+            "message": f"L3 benchmark artifact is unreadable: {benchmark_path}",
+            "readiness": "benchmark_unreadable",
+            "benchmark_required": True,
+            "benchmark_status": "unreadable",
+            "error": str(exc),
+        }
+
+    benchmark_status = str(benchmark_payload.get("status", "unknown"))
+    if benchmark_status != "success":
+        status = "fail" if settings.local_slm_mode == "guarded" else "warn"
+        return {
+            **base,
+            "status": status,
+            "message": f"L3 benchmark did not succeed: {benchmark_status}",
+            "readiness": "benchmark_failed",
+            "benchmark_required": True,
+            "benchmark_status": benchmark_status,
+            "benchmark_error": benchmark_payload.get("error"),
+        }
+
+    backend = benchmark_payload.get("backend")
+    actual_device = backend.get("actual_device") if isinstance(backend, dict) else None
     return {
-        "name": "l3.local_slm",
-        "status": "warn",
-        "message": f"run `edge-mvp l3 bench --out {benchmark_path}` before relying on L3",
+        **base,
+        "status": "pass",
+        "message": f"found successful L3 benchmark artifact: {benchmark_path}",
+        "readiness": "benchmark_success",
+        "benchmark_required": True,
+        "benchmark_status": "success",
+        "actual_device": actual_device,
+        "requests": benchmark_payload.get("requests"),
+        "generation_p50_ms": benchmark_payload.get("generation_p50_ms"),
+        "generation_p95_ms": benchmark_payload.get("generation_p95_ms"),
     }
 
 

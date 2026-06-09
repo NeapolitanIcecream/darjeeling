@@ -8,6 +8,7 @@ from darjeeling.artifacts.store import ArtifactStore
 from darjeeling.cli import (
     _execute_experiment_run,
     _experiment_preflight_payload,
+    _preflight_l3_check,
     _promote_l3_prompt_artifact,
     _run_settings_payload,
 )
@@ -169,6 +170,11 @@ def test_experiment_preflight_passes_with_data_cache_and_l1_crate(tmp_path: Path
         "l2.agent": "warn",
         "l3.local_slm": "pass",
     }
+    l3_check = next(check for check in payload["checks"] if check["name"] == "l3.local_slm")
+    assert l3_check["readiness"] == "disabled_nonblocking"
+    assert l3_check["model_load_attempted"] is False
+    assert l3_check["runtime_blocking"] is False
+    assert l3_check["benchmark_required"] is False
 
 
 def test_experiment_preflight_fails_when_required_inputs_are_missing(tmp_path: Path) -> None:
@@ -183,6 +189,81 @@ def test_experiment_preflight_fails_when_required_inputs_are_missing(tmp_path: P
     checks = {check["name"]: check for check in payload["checks"]}
     assert checks["data.train_split"]["status"] == "fail"
     assert checks["teacher"]["status"] == "fail"
+
+
+def test_l3_preflight_shadow_missing_benchmark_warns_without_blocking(
+    tmp_path: Path,
+) -> None:
+    settings = load_settings().model_copy(update={"local_slm_mode": "shadow"})
+
+    check = _preflight_l3_check(run_dir=tmp_path / "run", settings=settings)
+
+    assert check["status"] == "warn"
+    assert check["readiness"] == "benchmark_missing"
+    assert check["benchmark_status"] == "missing"
+    assert check["benchmark_required"] is True
+    assert check["model_load_attempted"] is False
+    assert check["runtime_blocking"] is False
+
+
+def test_l3_preflight_guarded_missing_benchmark_fails(tmp_path: Path) -> None:
+    settings = load_settings().model_copy(update={"local_slm_mode": "guarded"})
+
+    check = _preflight_l3_check(run_dir=tmp_path / "run", settings=settings)
+
+    assert check["status"] == "fail"
+    assert check["readiness"] == "benchmark_missing"
+    assert check["runtime_blocking"] is True
+
+
+def test_l3_preflight_interprets_benchmark_artifact_by_mode(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    report_dir = run_dir / "reports"
+    report_dir.mkdir(parents=True)
+    benchmark_path = report_dir / "l3_benchmark.json"
+    benchmark_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "l3-benchmark-v1",
+                "status": "error",
+                "error": "MPS device requested but unavailable",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    shadow_settings = load_settings().model_copy(update={"local_slm_mode": "shadow"})
+    guarded_settings = load_settings().model_copy(update={"local_slm_mode": "guarded"})
+    shadow_check = _preflight_l3_check(run_dir=run_dir, settings=shadow_settings)
+    guarded_check = _preflight_l3_check(run_dir=run_dir, settings=guarded_settings)
+
+    assert shadow_check["status"] == "warn"
+    assert shadow_check["readiness"] == "benchmark_failed"
+    assert guarded_check["status"] == "fail"
+    assert guarded_check["benchmark_error"] == "MPS device requested but unavailable"
+
+    benchmark_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "l3-benchmark-v1",
+                "status": "success",
+                "requests": 3,
+                "generation_p50_ms": 12.5,
+                "generation_p95_ms": 30.0,
+                "backend": {"actual_device": "mps:0"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    success_check = _preflight_l3_check(run_dir=run_dir, settings=guarded_settings)
+
+    assert success_check["status"] == "pass"
+    assert success_check["readiness"] == "benchmark_success"
+    assert success_check["actual_device"] == "mps:0"
+    assert success_check["generation_p95_ms"] == 30.0
 
 
 def test_l3_prompt_promotion_requires_successful_replay_artifact(tmp_path: Path) -> None:

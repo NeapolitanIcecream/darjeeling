@@ -103,7 +103,7 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `experiment compare` 不重新执行实验，只读取已有 run dir。输入可以是重复传入的 `--run`，也可以是 `--root` 下递归发现的 `traces.jsonl` 所在目录。输出 `comparison.csv` 和 `comparison.html`。
 
-`experiment preflight` 是实验前只读检查入口，输出 `experiment-preflight-v1` JSON。它检查 processed train split、teacher cache/API key 可用性、L1 Rust crate、L1/L2 agent 配置和 L3 benchmark artifact。默认不下载数据、不调用 OpenAI、不加载本地 SLM；`--check-l1-build` 才会构建 L1。
+`experiment preflight` 是实验前只读检查入口，输出 `experiment-preflight-v1` JSON。它检查 processed train split、teacher cache/API key 可用性、L1 Rust crate、L1/L2 agent 配置和 L3 benchmark artifact。默认不下载数据、不调用 OpenAI、不加载本地 SLM；`--check-l1-build` 才会构建 L1。L3 check 会记录 `mode`、model、device policy、benchmark path、readiness、是否 runtime-blocking 和 benchmark latency/device 摘要。`disabled` 是 non-blocking pass；`shadow` 缺成功 benchmark 是 warn；`guarded` 缺成功 benchmark 是 fail。
 
 `L1_AGENT_MODE=disabled` 在 preflight 中是 warn，不是 fail。它允许用户跑 smoke/replay 实验，但明确说明这不是完整 L1 evolution；真实 L1 evolution 实验必须显式设置 `L1_AGENT_MODE=codex-cli` 并保证 `codex` 命令可用。
 
@@ -115,7 +115,7 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 - `teacher=cache` 且 cache miss：fail fast。
 - `experiment preflight` 若有 fail check：fail fast；warn check 只进入 JSON，不导致非零退出。
 - L1 promoted artifact 缺失或 Rust worker 启动失败：fail fast。
-- L3 enabled 且模型加载失败：如果 mode 是 `guarded`，当前 run fail fast；如果 mode 是 `shadow`，记录错误并自动降级为 disabled。
+- L3 enabled 且模型加载失败：如果 mode 是 `guarded`，当前 run fail fast；如果 mode 是 `shadow`，记录错误并自动降级为 disabled。Preflight 不加载模型，但会用最近的 `reports/l3_benchmark.json` 把 guarded 缺失/失败 benchmark 提升为 fail，避免主路由实验在没有硬件证据时继续。
 
 ## 输出要求
 
