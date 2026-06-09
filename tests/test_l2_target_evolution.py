@@ -6,6 +6,8 @@ from typer.testing import CliRunner
 from darjeeling.cli import app
 from darjeeling.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
+    _adoption_decision,
+    _selection_decision,
     evaluate_target_workspace,
     prepare_l2_target_workspace,
     run_l2_target_evolution,
@@ -296,6 +298,28 @@ def test_l2_target_evaluator_reports_guard_near_misses(tmp_path: Path) -> None:
     ]
     assert probabilities == sorted(probabilities, reverse=True)
     assert all("would_be_correct" in example for example in result["near_miss_examples"])
+
+
+def test_l2_target_selection_requires_visible_inner_gate() -> None:
+    round_result = {
+        "round": 1,
+        "inner_validation": {"passes_gate": False},
+        "selection_holdout": {
+            "passes_gate": True,
+            "coverage": 0.1,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+        },
+        "promotion_holdout": {
+            "passes_gate": True,
+            "coverage": 0.1,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+        },
+    }
+
+    assert _selection_decision([round_result])["selected"] is False
+    assert _adoption_decision([round_result])["adopted"] is False
 
 
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:

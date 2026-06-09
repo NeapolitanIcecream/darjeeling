@@ -101,7 +101,11 @@ def run_l2_target_evolution(
     best_inner = baseline["inner_validation"]
     no_inner_improvement_rounds = 0
     stop_reason = "round_budget_exhausted"
-    if config.stop_on_selection_gate and baseline["selection_holdout"]["passes_gate"]:
+    if (
+        config.stop_on_selection_gate
+        and baseline["inner_validation"]["passes_gate"]
+        and baseline["selection_holdout"]["passes_gate"]
+    ):
         stop_reason = "baseline_selection_gate_passed"
 
     for round_index in range(1, config.rounds + 1):
@@ -198,6 +202,9 @@ def run_l2_target_evolution(
         round_payload = {
             "round": round_index,
             "inner_improved": inner_improved,
+            "passes_candidate_selection_gate": bool(
+                inner_result["passes_gate"] and selection_result["passes_gate"]
+            ),
             "passes_private_selection_gate": bool(selection_result["passes_gate"]),
             "passes_private_promotion_gate": bool(promotion_result["passes_gate"]),
             "inner_score": list(_inner_score(inner_result)),
@@ -226,7 +233,11 @@ def run_l2_target_evolution(
             encoding="utf-8",
         )
         round_results.append(round_payload)
-        if config.stop_on_selection_gate and selection_result["passes_gate"]:
+        if (
+            config.stop_on_selection_gate
+            and inner_result["passes_gate"]
+            and selection_result["passes_gate"]
+        ):
             stop_reason = "selection_gate_passed"
             break
         if (
@@ -631,6 +642,7 @@ def _visible_round_summary(round_result: dict[str, Any]) -> dict[str, Any]:
     return {
         "round": round_result["round"],
         "inner_improved": round_result["inner_improved"],
+        "passes_candidate_selection_gate": round_result["passes_candidate_selection_gate"],
         "inner_score": round_result["inner_score"],
         "inner_delta_vs_baseline": round_result["inner_delta_vs_baseline"],
         "inner_validation": _visible_metric_summary(round_result["inner_validation"]),
@@ -1368,7 +1380,10 @@ def _best_selection_round(rounds: list[dict[str, Any]]) -> dict[str, Any] | None
     passing_rounds = [
         round_result
         for round_result in rounds
-        if round_result["selection_holdout"]["passes_gate"]
+        if (
+            round_result["inner_validation"]["passes_gate"]
+            and round_result["selection_holdout"]["passes_gate"]
+        )
     ]
     if not passing_rounds:
         return None
@@ -1380,7 +1395,8 @@ def _best_adoptable_round(rounds: list[dict[str, Any]]) -> dict[str, Any] | None
         round_result
         for round_result in rounds
         if (
-            round_result["selection_holdout"]["passes_gate"]
+            round_result["inner_validation"]["passes_gate"]
+            and round_result["selection_holdout"]["passes_gate"]
             and round_result["promotion_holdout"]["passes_gate"]
         )
     ]
@@ -1395,12 +1411,14 @@ def _selection_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "selected": False,
             "round": None,
-            "reason": "no target round passed the private selection holdout gate",
+            "reason": (
+                "no target round passed both visible inner and private selection gates"
+            ),
         }
     return {
         "selected": True,
         "round": best_selection["round"],
-        "reason": "target round passed the private selection holdout gate",
+        "reason": "target round passed both visible inner and private selection gates",
     }
 
 
@@ -1410,7 +1428,9 @@ def _adoption_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "adopted": False,
             "round": None,
-            "reason": "no target round passed the private selection holdout gate",
+            "reason": (
+                "no target round passed both visible inner and private selection gates"
+            ),
         }
     best_adoptable = _best_adoptable_round(rounds)
     if best_adoptable is None:

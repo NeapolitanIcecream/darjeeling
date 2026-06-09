@@ -599,3 +599,49 @@ Interpretation:
 - The next target-code evolution attempt should use these examples to design a
   more selective accept/veto policy, especially for slotless exact-intent cases,
   instead of lowering the threshold globally.
+
+## Slotless threshold 0.75 veto smoke
+
+The next target-only dry-run patch lowered the threshold to 0.75 and added
+visible-data-derived vetoes for slotless high-risk patterns. The patch is:
+
+```text
+docs/experiments/patches/l2_target_slotless_threshold075_r1.patch
+```
+
+Command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-slotless-threshold075-r2 \
+  --rounds 1 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_slotless_threshold075_r1.patch \
+  --max-traces 500 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Runtime: about 4 seconds.
+- Patched inner validation: 6 accepted / 4 correct / 2 wrong, so visible inner
+  gate failed.
+- Raw private selection holdout: 2 accepted / 2 correct / 0 wrong, with one
+  vetoed risky email query.
+- Private promotion holdout: 0 accepted, with one vetoed risky email query.
+- The run therefore set `passes_private_selection_gate=true` but
+  `passes_candidate_selection_gate=false`.
+- `selection_decision.selected=false`, because candidate selection now requires
+  both visible inner gate and private selection gate.
+
+Design correction:
+
+- The first run of this patch exposed a selection-policy bug: raw private
+  selection could mark a candidate selected even when visible inner validation
+  had obvious wrong accepts.
+- The policy is now corrected. Private selection is necessary but not sufficient;
+  visible inner safety must pass before a target round can become selected.
+- This prevents private selection from masking an agent-visible regression and
+  keeps the split roles clean: inner validation blocks known visible failures,
+  private selection checks transfer, and private promotion remains final proof.

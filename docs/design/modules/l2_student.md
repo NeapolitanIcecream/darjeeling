@@ -211,8 +211,9 @@ Inner L2 target-evolution path：
 - Evaluator 还记录最多 8 条按 guard probability 排序的 `near_miss_examples`，即 core guard 拒绝但接近阈值的 predictions，并标记 `would_be_correct`。这些 examples 在 agent-visible `round_state.json` 中只来自 inner validation，用于指导 coverage 改进；selection/promotion 的 near-miss 只属于 outer summary，不写回 workspace。
 - L4 coding agent round 应优先用于 `target/` 中的结构性改动：新特征、模型 family、校准方法、postprocess、abstain 机制和 search-space 设计。超参搜索本身交给 `tools/search_config.py` 或 `--mode local-search`，避免把 GPT-5.5 token 用在手工猜参数上。
 - 每个 job 先评估 unmodified baseline，再评估后续 target rounds。Inner improvement 的排序把 wrong accepts 放在 coverage 之前：提高 raw coverage 但引入 frame exactness regression 不算进步。
-- 默认预算策略是 `inner_patience_rounds=2` 和 `stop_on_selection_gate=true`。连续两轮没有 inner validation improvement 会提前停止；private selection holdout 通过 gate 也会停止。
-- Summary 同时记录 diagnostic `best_round`、`best_selection_round`、`selection_decision` 和 adoption-oriented `best_adoptable_round` / `adoption_decision`。即使某轮 inner validation 变好，只要 private selection/promotion holdout 不过 gate，就不能被视为可采用 target candidate。
+- 默认预算策略是 `inner_patience_rounds=2` 和 `stop_on_selection_gate=true`。连续两轮没有 inner validation improvement 会提前停止；candidate selection gate 通过也会停止。
+- Candidate selection gate 要求 visible inner validation gate 和 private selection holdout gate 同时通过；raw private selection 通过但 visible inner 失败时只能作为诊断信号，不能成为 selected candidate。
+- Summary 同时记录 diagnostic `best_round`、`best_selection_round`、`selection_decision` 和 adoption-oriented `best_adoptable_round` / `adoption_decision`。即使某轮 inner validation 变好，只要 candidate selection/promotion holdout 不过 gate，就不能被视为可采用 target candidate。
 - target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/inner validation 数据推导，不能依赖 MASSIVE 或外部 dataset 知识。是否采用由 holdout/promotion 指标决定，而不是由 dataset-independent core 规则决定。
 - 当前实现状态：已支持 baseline-first `dry-run`/`local-search`/`codex-cli` 多轮、target workspace evaluator、private holdout gate、inner-validation patience stop、visible `tools/search_config.py` 和 local-search trial report；`codex-cli` 多轮入口已预留在 harness 中，但尚未作为主实验默认使用。
 

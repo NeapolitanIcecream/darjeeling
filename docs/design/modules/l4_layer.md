@@ -158,9 +158,9 @@ Outer/Inner loop 分工：
 - Inner L2 target-evolution loop 在固定 target workspace 内多轮运行：L4 coding agent 改 `target/`，本地 evaluator 训练/验证 L2，直到 inner validation 收敛或预算耗尽。
 - Inner loop 不等待新的 stream prefix，也不把 target-specific code 回写到 Darjeeling core。
 - `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 使用；selection/promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer harness 使用。
-- Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；outer harness 使用 private selection holdout 做 candidate selection/early stop，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。
-- `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial；`codex-cli` round 才消耗 GPT-5.5 agent budget。默认 `inner_patience_rounds=2`，连续两轮没有 inner validation improvement 就停止；private selection gate 通过也会停止。
-- Inner validation improvement 只驱动继续探索；adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 private selection 和 promotion gates 时接受。
+- Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 inner validation 历史；outer harness 使用 visible inner gate + private selection holdout 做 candidate selection/early stop，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。
+- `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial；`codex-cli` round 才消耗 GPT-5.5 agent budget。默认 `inner_patience_rounds=2`，连续两轮没有 inner validation improvement 就停止；candidate selection gate 通过也会停止。
+- Inner validation improvement 只驱动继续探索；visible inner gate 是 selection 的必要条件，但不是充分条件。Adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 visible inner、private selection 和 private promotion gates 时接受。
 
 职责：
 
