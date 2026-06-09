@@ -490,6 +490,10 @@ def test_generate_run_report_includes_l2_tuning_summary(tmp_path: Path) -> None:
         generation=1,
         artifact_paths={"l2_tuning": "generations/gen_001/l2/l2_tuning.json"},
         candidate_metrics={
+            "l2_training_scope": "lower_miss",
+            "l2_teacher_train_traces": 100,
+            "l2_lower_miss_train_traces": 40,
+            "l2_training_traces": 40,
             "l2_config": {
                 "intent_model_family": "mlp",
                 "slot_model_family": "none",
@@ -522,6 +526,8 @@ def test_generate_run_report_includes_l2_tuning_summary(tmp_path: Path) -> None:
 
     summary = result.summary_path.read_text(encoding="utf-8")
     assert "## L2 Tuning" in summary
+    assert "- training scope: lower_miss" in summary
+    assert "- teacher/lower-miss/target traces: 100/40/40" in summary
     assert "- trials completed/requested: 12/12" in summary
     assert "- selected intent model: mlp" in summary
     assert "- tuning validation unguarded accuracy: 0.750" in summary

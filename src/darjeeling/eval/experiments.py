@@ -46,9 +46,21 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         settings_overrides={
             "l2_tuning_mode": "optuna",
             "l2_tuning_trials": 12,
+            "l2_tuning_min_examples": 200,
             "l2_tuning_search_space": "compact",
         },
         description="Run Optuna-tuned L2 hyperparameters before replay promotion.",
+    ),
+    "l2-tuned-lower-miss": ExperimentSpec(
+        name="l2-tuned-lower-miss",
+        settings_overrides={
+            "l2_training_scope": "lower_miss",
+            "l2_tuning_mode": "optuna",
+            "l2_tuning_trials": 12,
+            "l2_tuning_min_examples": 200,
+            "l2_tuning_search_space": "compact",
+        },
+        description="Tune and train L2 on observed L0/L1 miss traces.",
     ),
     "no-guard": ExperimentSpec(
         name="no-guard",

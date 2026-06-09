@@ -87,6 +87,8 @@ Replay/promotion：
 - `L2_TUNING_VALIDATION_FRACTION`
 - `L2_TUNING_SEARCH_SPACE`
 - `L2_TUNING_LATENCY_WEIGHT`
+- `L2_TRAINING_SCOPE`: `teacher_train | lower_miss`
+- `L2_TUNING_MIN_EXAMPLES`
 - `L2_MIN_RUNTIME_EXAMPLES`
 - objective weights
 - wrong accept limits

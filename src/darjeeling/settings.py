@@ -107,6 +107,10 @@ class Settings(BaseSettings):
         default="token_sgd",
         validation_alias="L2_SLOT_MODEL_FAMILY",
     )
+    l2_training_scope: Literal["teacher_train", "lower_miss"] = Field(
+        default="teacher_train",
+        validation_alias="L2_TRAINING_SCOPE",
+    )
     l2_max_features: int = Field(default=50_000, validation_alias="L2_MAX_FEATURES")
     l2_max_iter: int = Field(default=1000, validation_alias="L2_MAX_ITER")
     l2_mlp_hidden_layer_sizes: tuple[int, ...] = Field(
@@ -123,6 +127,10 @@ class Settings(BaseSettings):
         validation_alias="L2_TUNING_MODE",
     )
     l2_tuning_trials: int = Field(default=16, validation_alias="L2_TUNING_TRIALS")
+    l2_tuning_min_examples: int = Field(
+        default=200,
+        validation_alias="L2_TUNING_MIN_EXAMPLES",
+    )
     l2_tuning_timeout_s: float | None = Field(
         default=None,
         validation_alias="L2_TUNING_TIMEOUT_S",

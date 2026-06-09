@@ -141,6 +141,43 @@ def test_l2_tuned_experiment_command_dispatches_spec(
     assert captured["kwargs"]["teacher"] == "cache"
 
 
+def test_l2_tuned_lower_miss_experiment_command_dispatches_spec(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_run_single_experiment(experiment_name, **kwargs):
+        captured["experiment_name"] = experiment_name
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(cli, "_run_single_experiment", fake_run_single_experiment)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "experiment",
+            "l2-tuned-lower-miss",
+            "--run-dir",
+            str(tmp_path),
+            "--max-requests",
+            "12",
+            "--compile-every",
+            "6",
+            "--teacher",
+            "cache",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["experiment_name"] == "l2-tuned-lower-miss"
+    assert captured["kwargs"]["run_dir"] == tmp_path
+    assert captured["kwargs"]["max_requests"] == 12
+    assert captured["kwargs"]["compile_every"] == 6
+    assert captured["kwargs"]["teacher"] == "cache"
+
+
 def test_l2_tune_cli_writes_optuna_report(
     tmp_path: Path,
     monkeypatch,

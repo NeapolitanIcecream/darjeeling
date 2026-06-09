@@ -73,6 +73,7 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 - `l2-family`
 - `l2-mlp`
 - `l2-tuned`
+- `l2-tuned-lower-miss`
 - `no-guard`
 - `no-l2`
 - `workload-locality`
@@ -83,6 +84,8 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 `l2-mlp` 是确定性 MLP family 实验：它设置 `L2_INTENT_MODEL_FAMILY=mlp`，不要求 live L4 proposal，用于把 MLP candidate 与默认 `sgd_logreg` 在同一 replay/report 框架下比较。
 
 `l2-tuned` 是 Optuna tuning 实验：它设置 `L2_TUNING_MODE=optuna`，compiler 只用 `teacher_train` 内部切分做调参，写出 `l2/l2_tuning.json`，再用 best config 训练最终 L2 candidate。
+
+`l2-tuned-lower-miss` 是分布对齐诊断实验：它设置 `L2_TRAINING_SCOPE=lower_miss` 和 `L2_TUNING_MODE=optuna`，让 tuning 与训练只看当前 `teacher_train` 中 L0/L1 未接收的样本。该实验用于检验 L2 在真实低层 miss 分布上的吸收改善，不取代默认 `teacher_train` 主线。
 
 `workload-locality` 会在同一个 experiment root 下分别运行 `uniform`、`zipf-mild` 和 `zipf-heavy` 子目录。
 

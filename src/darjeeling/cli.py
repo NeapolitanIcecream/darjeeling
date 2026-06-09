@@ -776,6 +776,35 @@ def experiment_l2_tuned(
     )
 
 
+@experiments_app.command("l2-tuned-lower-miss")
+def experiment_l2_tuned_lower_miss(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Experiment run directory."),
+    ] = Path("runs/l2-tuned-lower-miss"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
+    ] = Path("data/processed/massive_en_us"),
+) -> None:
+    _run_single_experiment(
+        "l2-tuned-lower-miss",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
 @experiments_app.command("no-guard")
 def experiment_no_guard(
     run_dir: Annotated[

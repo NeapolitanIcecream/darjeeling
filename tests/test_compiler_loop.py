@@ -179,6 +179,7 @@ def test_compiler_generation_uses_optuna_l2_tuning_when_enabled(
         update={
             "l2_tuning_mode": "optuna",
             "l2_tuning_trials": 3,
+            "l2_tuning_min_examples": 2,
             "l2_tuning_search_space": "wide",
         }
     )
@@ -210,6 +211,63 @@ def test_compiler_generation_uses_optuna_l2_tuning_when_enabled(
     assert metrics["l2_config"]["slot_model_family"] == "none"
     assert metrics["l2_config"]["max_features"] == 1234
     assert "l2_tuning" in result.manifest.artifact_paths
+
+
+def test_compiler_generation_can_train_l2_on_observed_lower_misses(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_tune_l2_student(traces, *, base_config, spec):
+        captured["trace_ids"] = [trace.request_id for trace in traces]
+        return L2TuneResult(
+            train_size=4,
+            validation_size=2,
+            n_trials_requested=spec.n_trials,
+            n_trials_completed=1,
+            best_trial_number=0,
+            best_value=1.0,
+            best_config=base_config.model_dump(mode="json"),
+            best_metrics={"unguarded": {"accepted_accuracy": 1.0}},
+            trials=[],
+        )
+
+    monkeypatch.setattr("darjeeling.compiler.loop.tune_l2_student", fake_tune_l2_student)
+    settings = load_settings().model_copy(
+        update={
+            "l2_training_scope": "lower_miss",
+            "l2_tuning_mode": "optuna",
+            "l2_tuning_trials": 2,
+            "l2_tuning_min_examples": 2,
+        }
+    )
+    traces = [
+        _trace_with_lower_result("m0", "play cached jazz", "music_play", lower_layer="L0"),
+        _trace_with_lower_result("a0", "cached alarm", "alarm_set", lower_layer="L1"),
+        _trace_with_lower_result("m1", "play jazz", "music_play", lower_layer=None),
+        _trace_with_lower_result("m2", "play music", "music_play", lower_layer=None),
+        _trace_with_lower_result("a1", "set alarm for seven", "alarm_set", lower_layer=None),
+        _trace_with_lower_result("a2", "wake me at eight", "alarm_set", lower_layer=None),
+        _trace_with_lower_result("m3", "start playlist", "music_play", lower_layer=None),
+        _trace_with_lower_result("a3", "alarm at nine", "alarm_set", lower_layer=None),
+    ]
+
+    result = run_compiler_generation(
+        run_dir=tmp_path,
+        traces=traces,
+        settings=settings,
+    )
+
+    assert result.manifest is not None
+    metrics = result.manifest.candidate_metrics
+    assert captured["trace_ids"] == ["m1", "m2", "a1", "a2"]
+    assert metrics["l2_training_scope"] == "lower_miss"
+    assert metrics["l2_teacher_train_traces"] == 6
+    assert metrics["l2_lower_miss_train_traces"] == 4
+    assert metrics["l2_training_traces"] == 4
+    assert metrics["l2_examples"] == 4
+    assert "l2_unguarded_teacher_train" in metrics
 
 
 def test_compiler_generation_uses_live_l4_l2_proposal_when_enabled(
@@ -605,6 +663,58 @@ def _music_l1_patch() -> str:
             " }",
             "",
         ]
+    )
+
+
+def _trace_with_lower_result(
+    request_id: str,
+    utterance: str,
+    intent: str,
+    *,
+    lower_layer: str | None,
+) -> TraceRecord:
+    frame = Frame(intent=intent)
+    layer_results = []
+    if lower_layer is not None:
+        layer_results.append(
+            LayerResult(
+                layer=lower_layer,
+                accepted=True,
+                frame=frame,
+                latency_ms=1.0,
+            )
+        )
+    else:
+        layer_results.extend(
+            [
+                LayerResult(
+                    layer="L0",
+                    accepted=False,
+                    frame=None,
+                    latency_ms=1.0,
+                ),
+                LayerResult(
+                    layer="L1",
+                    accepted=False,
+                    frame=None,
+                    latency_ms=1.0,
+                ),
+                LayerResult(
+                    layer="L4",
+                    accepted=True,
+                    frame=frame,
+                    latency_ms=1.0,
+                ),
+            ]
+        )
+    return TraceRecord(
+        request_id=request_id,
+        utterance=utterance,
+        gold_frame=frame,
+        teacher_frame=frame,
+        chosen_layer=lower_layer or "L4",
+        final_frame=frame,
+        layer_results=layer_results,
     )
 
 

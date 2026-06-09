@@ -178,11 +178,21 @@ def run_compiler_generation(
 
     candidate_l2_bundle = current_artifacts.l2_bundle
     candidate_l1_crate_dir = current_artifacts.l1_crate_dir
-    l2_examples = training_examples_from_teacher_traces(split.teacher_train)
+    lower_miss_train_traces = _l2_lower_miss_traces(split.teacher_train)
+    l2_training_traces = _l2_training_traces_for_scope(
+        split.teacher_train,
+        scope=settings.l2_training_scope,
+    )
+    l2_examples = training_examples_from_teacher_traces(l2_training_traces)
+    candidate_metrics["l2_training_scope"] = settings.l2_training_scope
+    candidate_metrics["l2_teacher_train_traces"] = len(split.teacher_train)
+    candidate_metrics["l2_lower_miss_train_traces"] = len(lower_miss_train_traces)
+    candidate_metrics["l2_training_traces"] = len(l2_training_traces)
     candidate_metrics["l2_examples"] = len(l2_examples)
     candidate_metrics["l2_enabled"] = settings.l2_enabled
     candidate_metrics["l2_guard_mode"] = settings.l2_guard_mode
     candidate_metrics["l2_tuning_mode"] = settings.l2_tuning_mode
+    candidate_metrics["l2_tuning_min_examples"] = settings.l2_tuning_min_examples
     candidate_metrics["l4_proposal_mode"] = settings.l4_proposal_mode
     l2_config = l2_config_from_settings(settings)
     guard_search_spec = GuardSearchSpec(
@@ -197,8 +207,8 @@ def run_compiler_generation(
         try:
             l2_proposal_result = L4ProposalAdapter(settings).propose(
                 role="l2",
-                task_schema=_task_schema_from_teacher_traces(split.teacher_train),
-                traces=split.teacher_train,
+                task_schema=_task_schema_from_teacher_traces(l2_training_traces),
+                traces=l2_training_traces,
                 output_schema=L2_CONFIG_PROPOSAL_SCHEMA,
                 current_artifact_summary=_artifact_summary(current_manifest),
                 metrics=candidate_metrics,
@@ -223,8 +233,8 @@ def run_compiler_generation(
         try:
             guard_proposal_result = L4ProposalAdapter(settings).propose(
                 role="guard",
-                task_schema=_task_schema_from_teacher_traces(split.teacher_train),
-                traces=split.teacher_train,
+                task_schema=_task_schema_from_teacher_traces(l2_training_traces),
+                traces=l2_training_traces,
                 output_schema=GUARD_PROPOSAL_SCHEMA,
                 current_artifact_summary=_artifact_summary(current_manifest),
                 metrics=candidate_metrics,
@@ -256,41 +266,47 @@ def run_compiler_generation(
             generated_artifacts = True
     if settings.l2_enabled and settings.l2_tuning_mode == "optuna" and l2_examples:
         try:
-            tune_spec = L2TuneSpec(
-                n_trials=settings.l2_tuning_trials,
-                timeout_s=settings.l2_tuning_timeout_s,
-                validation_fraction=settings.l2_tuning_validation_fraction,
-                random_state=l2_config.random_state,
-                search_space=settings.l2_tuning_search_space,
-                max_wrong_accept_rate=guard_search_spec.max_wrong_accept_rate,
-                min_accepted_accuracy=settings.l2_min_guarded_accuracy,
-                latency_weight=settings.l2_tuning_latency_weight,
-            )
-            tune_result = tune_l2_student(
-                split.teacher_train,
-                base_config=l2_config,
-                spec=tune_spec,
-            )
-            tune_path = store.write_generation_json(
-                generation,
-                "l2/l2_tuning.json",
-                tune_result.model_dump(mode="json"),
-            )
-            artifact_paths["l2_tuning"] = _artifact_relative_path(store.root, tune_path)
-            candidate_metrics["l2_tuning_succeeded"] = tune_result.best_config is not None
-            candidate_metrics["l2_tuning"] = {
-                "schema_version": tune_result.schema_version,
-                "train_size": tune_result.train_size,
-                "validation_size": tune_result.validation_size,
-                "n_trials_requested": tune_result.n_trials_requested,
-                "n_trials_completed": tune_result.n_trials_completed,
-                "best_trial_number": tune_result.best_trial_number,
-                "best_value": tune_result.best_value,
-                "best_metrics": tune_result.best_metrics,
-            }
-            generated_artifacts = True
-            if tune_result.best_config is not None:
-                l2_config = L2StudentConfig.model_validate(tune_result.best_config)
+            if len(l2_examples) < settings.l2_tuning_min_examples:
+                candidate_metrics["l2_tuning_succeeded"] = False
+                candidate_metrics["l2_tuning_skipped_reason"] = (
+                    f"requires at least {settings.l2_tuning_min_examples} examples"
+                )
+            else:
+                tune_spec = L2TuneSpec(
+                    n_trials=settings.l2_tuning_trials,
+                    timeout_s=settings.l2_tuning_timeout_s,
+                    validation_fraction=settings.l2_tuning_validation_fraction,
+                    random_state=l2_config.random_state,
+                    search_space=settings.l2_tuning_search_space,
+                    max_wrong_accept_rate=guard_search_spec.max_wrong_accept_rate,
+                    min_accepted_accuracy=settings.l2_min_guarded_accuracy,
+                    latency_weight=settings.l2_tuning_latency_weight,
+                )
+                tune_result = tune_l2_student(
+                    l2_training_traces,
+                    base_config=l2_config,
+                    spec=tune_spec,
+                )
+                tune_path = store.write_generation_json(
+                    generation,
+                    "l2/l2_tuning.json",
+                    tune_result.model_dump(mode="json"),
+                )
+                artifact_paths["l2_tuning"] = _artifact_relative_path(store.root, tune_path)
+                candidate_metrics["l2_tuning_succeeded"] = tune_result.best_config is not None
+                candidate_metrics["l2_tuning"] = {
+                    "schema_version": tune_result.schema_version,
+                    "train_size": tune_result.train_size,
+                    "validation_size": tune_result.validation_size,
+                    "n_trials_requested": tune_result.n_trials_requested,
+                    "n_trials_completed": tune_result.n_trials_completed,
+                    "best_trial_number": tune_result.best_trial_number,
+                    "best_value": tune_result.best_value,
+                    "best_metrics": tune_result.best_metrics,
+                }
+                generated_artifacts = True
+                if tune_result.best_config is not None:
+                    l2_config = L2StudentConfig.model_validate(tune_result.best_config)
         except (ImportError, ValueError) as exc:
             candidate_metrics["l2_tuning_succeeded"] = False
             candidate_metrics["l2_tuning_error"] = str(exc)
@@ -302,10 +318,16 @@ def run_compiler_generation(
             candidate_metrics["l2_trained"] = False
             candidate_metrics["l2_training_error"] = str(exc)
         else:
-            unguarded_evaluation = evaluate_l2_unguarded(l2_bundle, split.teacher_train)
+            unguarded_evaluation = evaluate_l2_unguarded(l2_bundle, l2_training_traces)
             candidate_metrics["l2_unguarded_train"] = _threshold_evaluation_payload(
                 unguarded_evaluation
             )
+            if settings.l2_training_scope != "teacher_train":
+                candidate_metrics["l2_unguarded_teacher_train"] = (
+                    _threshold_evaluation_payload(
+                        evaluate_l2_unguarded(l2_bundle, split.teacher_train),
+                    )
+                )
             if settings.l2_guard_mode == "always_accept":
                 l2_bundle.config.runtime_enabled = True
                 l2_bundle.config.accept_threshold = 0.0
@@ -328,7 +350,7 @@ def run_compiler_generation(
             else:
                 threshold_selection = select_l2_accept_threshold(
                     l2_bundle,
-                    split.teacher_train,
+                    l2_training_traces,
                     grid=guard_search_spec.grid,
                     max_wrong_accept_rate=guard_search_spec.max_wrong_accept_rate,
                     min_accepted_accuracy=settings.l2_min_guarded_accuracy,
@@ -649,6 +671,33 @@ def _dedupe_teacher_traces(traces: list[TeacherTrace]) -> list[TeacherTrace]:
         seen.add(trace.request_id)
         deduped.append(trace)
     return deduped
+
+
+def _l2_training_traces_for_scope(
+    traces: list[TeacherTrace],
+    *,
+    scope: str,
+) -> list[TeacherTrace]:
+    if scope == "teacher_train":
+        return traces
+    if scope == "lower_miss":
+        return _l2_lower_miss_traces(traces)
+    raise ValueError(f"unsupported L2 training scope: {scope}")
+
+
+def _l2_lower_miss_traces(traces: list[TeacherTrace]) -> list[TeacherTrace]:
+    return [
+        trace
+        for trace in traces
+        if trace.teacher_frame is not None and not _lower_layer_accepted(trace)
+    ]
+
+
+def _lower_layer_accepted(trace: TeacherTrace) -> bool:
+    return any(
+        result.layer in {"L0", "L1"} and result.accepted and result.frame is not None
+        for result in trace.layer_results
+    )
 
 
 def _task_schema_from_teacher_traces(traces: list[TeacherTrace]) -> TaskSchema:

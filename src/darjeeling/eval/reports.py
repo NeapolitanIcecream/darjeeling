@@ -631,8 +631,22 @@ def _l2_tuning_section(current_manifest: ArtifactManifest | None) -> str:
         lines.append("No current artifact manifest found.")
         return "\n".join(lines)
     tuning = current_manifest.candidate_metrics.get("l2_tuning")
+    training_scope = current_manifest.candidate_metrics.get("l2_training_scope")
+    if training_scope is not None:
+        lines.append(f"- training scope: {training_scope}")
+    if "l2_training_traces" in current_manifest.candidate_metrics:
+        lines.append(
+            "- teacher/lower-miss/target traces: "
+            f"{current_manifest.candidate_metrics.get('l2_teacher_train_traces')}/"
+            f"{current_manifest.candidate_metrics.get('l2_lower_miss_train_traces')}/"
+            f"{current_manifest.candidate_metrics.get('l2_training_traces')}"
+        )
     if not isinstance(tuning, dict):
-        lines.append("No L2 tuning report recorded.")
+        skipped_reason = current_manifest.candidate_metrics.get("l2_tuning_skipped_reason")
+        if skipped_reason:
+            lines.append(f"L2 tuning skipped: {skipped_reason}.")
+        else:
+            lines.append("No L2 tuning report recorded.")
         return "\n".join(lines)
     config = current_manifest.candidate_metrics.get("l2_config")
     best_metrics = tuning.get("best_metrics")

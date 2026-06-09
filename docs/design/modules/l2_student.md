@@ -130,11 +130,20 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 Optuna tuning path：
 
 - `edge-mvp l2 tune --traces <trace.jsonl> --out <report.json>` 是 L4 coding agent 可调用的本地工具接口。
-- `L2_TUNING_MODE=optuna` 时，compiler 在每个 generation 中先对 `teacher_train` 做内部 train/validation split，再运行 Optuna search，最后用 best config 训练 runtime candidate。
+- `L2_TUNING_MODE=optuna` 时，compiler 在每个 generation 中先对 L2 training scope 做内部 train/validation split，再运行 Optuna search，最后用 best config 训练 runtime candidate。
 - Tuning report 使用 `l2-tune-v1`，记录每个 trial 的 params、最终 `L2StudentConfig`、validation unguarded/guarded metrics 和 p95 latency。
 - Optuna 不能读取 promotion holdout、MASSIVE gold、final eval 或 future stream；它只优化 teacher-visible train window 的内部 validation。
 - `candidate_metrics["l2_tuning"]` 记录 trial 数、best value、best metrics；`artifact_paths["l2_tuning"]` 指向完整 tuning report。
 - Compact search 和小样本窗口默认不启用 MLP `early_stopping`，因为 sklearn 会在过小 validation split 上拒绝训练，浪费 trial budget。
+- `L2_TUNING_MIN_EXAMPLES` 是 tuning 的硬门槛；样本不足时 compiler 仍训练 deterministic L2 candidate，但跳过 Optuna 并记录 skip reason，避免用几十个样本制造虚假的 tuning 结论。
+
+L2 training scope 是显式实验开关：
+
+- `L2_TRAINING_SCOPE=teacher_train` 是默认值。它让 L2 继续学习完整 teacher-visible 分布，满足“L(N) 应比 L(N-1) 有更高泛化性，只是更慢”的层级假设。
+- `L2_TRAINING_SCOPE=lower_miss` 只使用当前 train window 中 L0/L1 未接收、需要更高层处理的 teacher traces。它用于验证“tuning validation 与真实 L0/L1 miss 分布对齐”是否能提升 promoted L2 的实际吸收率。
+- `lower_miss` 不是默认主线，因为它有设计风险：若 L2 只学习低层 miss 分布，可能退化为补丁层，而不是对 L1 更泛化的一层。实验报告必须同时记录 full teacher train count、lower-miss count 和实际 target count。
+- 无论 scope 如何，promotion holdout、regression sample 和 final eval 都不能进入 tuning 或训练；scope 只改变 candidate-generation 可见的 `teacher_train` 子集。
+- 当 scope 不是 `teacher_train` 时，compiler 额外记录 full `teacher_train` 上的 unguarded diagnostics，用来观察 specialization 是否牺牲总体泛化。
 
 ## MLP evolve path
 

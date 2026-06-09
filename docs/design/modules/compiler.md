@@ -42,7 +42,8 @@
 - `L2_ENABLED=false` 时，compiler 不训练、不写入 L2 candidate artifact，并从 candidate manifest 中移除 inherited `l2_student`。
 - `L2_GUARD_MODE=always_accept` 时，compiler 仍训练 L2 student，但跳过 learned-threshold search，将 threshold 固定为 0。`experiment no-guard` 是隔离的诊断性 ablation，会设置 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能实际进入 runtime 并暴露真实错误率；主实验不使用这个设置。
 - `L4_PROPOSAL_MODE=live` 时，compiler 请求 bounded guard search proposal，写入 `guard/guard_candidate.json`，并用 proposal 中的 threshold grid 与 wrong-accept 上限驱动 deterministic local search。
-- L2 训练后在 `teacher_train` 上执行 deterministic guard threshold grid search，选择满足 wrong-accept 上限且覆盖率最高的 threshold，并写入 L2 artifact 与 candidate metrics。
+- L2 训练 scope 由 `L2_TRAINING_SCOPE` 决定：默认 `teacher_train`，实验开关 `lower_miss` 只使用本轮 `teacher_train` 中 L0/L1 未接收的 traces。Guard threshold search 与 Optuna internal validation 使用同一个 L2 training scope；promotion replay 仍使用独立 holdout/regression/hard buffer。
+- L2 训练后在 L2 training scope 上执行 deterministic guard threshold grid search，选择满足 wrong-accept 上限且覆盖率最高的 threshold，并写入 L2 artifact 与 candidate metrics。
 - `L4_PROPOSAL_MODE=live` 时，compiler 也会请求 bounded L3 prompt proposal，展开 teacher-visible few-shot trace IDs，并写入 `l3/l3_prompt.candidate.json`。该 candidate 记录为 `l3_prompt_candidate`，不会自动成为 runtime `l3_prompt`。
 - 用 `teacher_promotion_holdout + teacher_regression_sample + hard_buffer` 对 current artifact set 与 candidate artifact set 做离线 replay；hard buffer 包含 `train_visible` 与 `replay_only` 两类 replay pressure，但不能替代独立 holdout，若没有 holdout/regression 覆盖则拒绝 promotion。
 - promotion 使用 `decide_artifact_set_promotion`，检查 objective、accuracy epsilon 和 wrong-accept 上限。
@@ -125,16 +126,18 @@ L2 Optuna tuning 在 compiler 中是显式开关：
 
 ```text
 L2_TUNING_MODE=optuna
-teacher_train
+teacher_train or lower_miss subset
 -> internal train/validation split
 -> Optuna trials over L2StudentConfig
 -> l2/l2_tuning.json
--> train final L2 candidate on full teacher_train with best config
+-> train final L2 candidate on selected L2 training scope with best config
 -> deterministic guard search
 -> outer replay promotion gate
 ```
 
 Optuna tuning 不能读取 `teacher_promotion_holdout`、gold eval 或 future stream。它产出的 best config 仍只是 candidate 输入，不能绕过外层 replay。
+
+`L2_TUNING_MIN_EXAMPLES` 控制 Optuna 的最低样本数。样本不足时 compiler 跳过 tuning、记录 `l2_tuning_skipped_reason`，但仍按 deterministic config 训练 L2 candidate，以保证 generation 继续产生可比较 artifact。
 
 ## Objective
 

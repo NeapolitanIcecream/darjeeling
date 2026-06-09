@@ -54,8 +54,10 @@ def test_default_prompt_cache_retention_matches_live_provider_requirement() -> N
     settings = load_settings()
 
     assert settings.prompt_cache_retention == "24h"
+    assert settings.l2_training_scope == "teacher_train"
     assert settings.l2_tuning_mode == "disabled"
     assert settings.l2_tuning_trials == 16
+    assert settings.l2_tuning_min_examples == 200
     assert settings.l2_tuning_search_space == "compact"
 
 
