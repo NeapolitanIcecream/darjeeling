@@ -12,6 +12,7 @@ from darjeeling.compiler.guard_optimizer import (
     evaluate_l2_unguarded,
     select_l2_accept_threshold,
 )
+from darjeeling.data.frames import normalize_utterance
 from darjeeling.layers.l2_student import (
     L2StudentBundle,
     L2StudentConfig,
@@ -49,6 +50,9 @@ class L2TuneResult(BaseModel):
     schema_version: str = "l2-tune-v1"
     train_size: int
     validation_size: int
+    validation_residual_size: int = 0
+    objective_validation_size: int = 0
+    objective_validation_source: Literal["residual", "validation_fallback"] = "residual"
     split_policy: str
     n_trials_requested: int
     n_trials_completed: int
@@ -75,6 +79,16 @@ def tune_l2_student(
         split_policy=spec.split_policy,
         random_state=spec.random_state,
     )
+    residual_validation_traces = residual_l2_validation_traces(
+        train_traces,
+        validation_traces,
+    )
+    objective_validation_source: Literal["residual", "validation_fallback"] = "residual"
+    objective_validation_traces = (
+        residual_validation_traces if residual_validation_traces else validation_traces
+    )
+    if not residual_validation_traces:
+        objective_validation_source = "validation_fallback"
     train_examples = training_examples_from_teacher_traces(train_traces)
     if len(train_examples) < base_config.min_examples:
         raise ValueError(
@@ -97,15 +111,15 @@ def tune_l2_student(
         )
         try:
             bundle = train_l2_student(train_examples, config)
-            unguarded = evaluate_l2_unguarded(bundle, validation_traces)
+            unguarded = evaluate_l2_unguarded(bundle, objective_validation_traces)
             selection = select_l2_accept_threshold(
                 bundle,
-                validation_traces,
+                objective_validation_traces,
                 max_wrong_accept_rate=spec.max_wrong_accept_rate,
                 min_accepted_accuracy=spec.min_accepted_accuracy,
             )
             guarded = selection.evaluation if selection is not None else None
-            p95_latency_ms = _p95_prediction_latency_ms(bundle, validation_traces)
+            p95_latency_ms = _p95_prediction_latency_ms(bundle, objective_validation_traces)
             value = _l2_tune_objective(
                 unguarded=unguarded,
                 guarded=guarded,
@@ -163,6 +177,11 @@ def tune_l2_student(
     return L2TuneResult(
         train_size=len(train_examples),
         validation_size=len(training_examples_from_teacher_traces(validation_traces)),
+        validation_residual_size=len(training_examples_from_teacher_traces(residual_validation_traces)),
+        objective_validation_size=len(
+            training_examples_from_teacher_traces(objective_validation_traces),
+        ),
+        objective_validation_source=objective_validation_source,
         split_policy=spec.split_policy,
         n_trials_requested=spec.n_trials,
         n_trials_completed=len(completed_reports),
@@ -231,6 +250,43 @@ def split_l2_tune_traces(
     if not validation:
         raise ValueError("L2 tuning validation split is empty")
     return train, validation
+
+
+def residual_l2_validation_traces(
+    train_traces: list[TeacherTrace],
+    validation_traces: list[TeacherTrace],
+    *,
+    exclude_recorded_lower_accepts: bool = True,
+) -> list[TeacherTrace]:
+    """Return validation traces that would still reach L2 after lower layers.
+
+    The train prefix models the L0 exact cache available to the future validation
+    window. Recorded L0/L1 accepts are also excluded because those requests were
+    already handled below L2 in the observed run.
+    """
+
+    seen_l0_keys = {
+        normalize_utterance(trace.utterance)
+        for trace in train_traces
+        if trace.teacher_frame is not None
+    }
+    residual: list[TeacherTrace] = []
+    for trace in validation_traces:
+        if trace.teacher_frame is None:
+            continue
+        if normalize_utterance(trace.utterance) in seen_l0_keys:
+            continue
+        if exclude_recorded_lower_accepts and _recorded_lower_layer_accepted(trace):
+            continue
+        residual.append(trace)
+    return residual
+
+
+def _recorded_lower_layer_accepted(trace: TeacherTrace) -> bool:
+    return any(
+        result.layer in {"L0", "L1"} and result.accepted and result.frame is not None
+        for result in trace.layer_results
+    )
 
 
 def _sample_l2_config(

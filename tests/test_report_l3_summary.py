@@ -505,6 +505,9 @@ def test_generate_run_report_includes_l2_tuning_summary(tmp_path: Path) -> None:
                 "schema_version": "l2-tune-v1",
                 "train_size": 58,
                 "validation_size": 20,
+                "validation_residual_size": 12,
+                "objective_validation_size": 12,
+                "objective_validation_source": "residual",
                 "n_trials_requested": 12,
                 "n_trials_completed": 12,
                 "best_trial_number": 5,
@@ -529,6 +532,7 @@ def test_generate_run_report_includes_l2_tuning_summary(tmp_path: Path) -> None:
     assert "- training scope: lower_miss" in summary
     assert "- teacher/lower-miss/target traces: 100/40/40" in summary
     assert "- trials completed/requested: 12/12" in summary
+    assert "- residual/objective validation size: 12/12 (residual)" in summary
     assert "- selected intent model: mlp" in summary
     assert "- tuning validation unguarded accuracy: 0.750" in summary
     assert "- tuning validation guarded coverage/accuracy/wrong rate: 0.750/1.000/0.000" in summary

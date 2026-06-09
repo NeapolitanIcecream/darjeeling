@@ -42,8 +42,9 @@
 - `L2_ENABLED=false` 时，compiler 不训练、不写入 L2 candidate artifact，并从 candidate manifest 中移除 inherited `l2_student`。
 - `L2_GUARD_MODE=always_accept` 时，compiler 仍训练 L2 student，但跳过 learned-threshold search，将 threshold 固定为 0。`experiment no-guard` 是隔离的诊断性 ablation，会设置 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能实际进入 runtime 并暴露真实错误率；主实验不使用这个设置。
 - `L4_PROPOSAL_MODE=live` 时，compiler 请求 bounded guard search proposal，写入 `guard/guard_candidate.json`，并用 proposal 中的 threshold grid 与 wrong-accept 上限驱动 deterministic local search。
-- L2 训练 scope 由 `L2_TRAINING_SCOPE` 决定：默认 `teacher_train`，实验开关 `lower_miss` 只使用本轮 `teacher_train` 中 L0/L1 未接收的 traces。Guard threshold search 与 Optuna internal validation 使用同一个 L2 training scope；promotion replay 仍使用独立 holdout/regression/hard buffer。
-- L2 训练后在 L2 training scope 上执行 deterministic guard threshold grid search，选择满足 wrong-accept 上限且覆盖率最高的 threshold，并写入 L2 artifact 与 candidate metrics。
+- L2 训练 scope 由 `L2_TRAINING_SCOPE` 决定：默认 `teacher_train`，实验开关 `lower_miss` 只使用本轮 `teacher_train` 中 L0/L1 未接收的 traces。Scope 定义 L2 可见训练分布，不等同于最终 validation 口径。
+- Optuna internal validation 和 final guard calibration 都优先使用 residual validation：从 train window 中做内部 split，用 train prefix 模拟 L0 exact cache，并过滤 validation 中 exact repeat 与已记录 L0/L1 accepted 请求。这样 tuning/threshold 优化的是“真实会到达 L2 的 future residual”，而不是 L2-only 或 already-covered 样本。
+- L2 训练后执行 deterministic guard threshold grid search，选择满足 wrong-accept 上限且覆盖率最高的 threshold，并写入 L2 artifact 与 candidate metrics。若 residual calibration 不可用，compiler 回退到 training-scope search 并记录 `l2_guard_calibration.fallback_reason`。
 - `L4_PROPOSAL_MODE=live` 时，compiler 也会请求 bounded L3 prompt proposal，展开 teacher-visible few-shot trace IDs，并写入 `l3/l3_prompt.candidate.json`。该 candidate 记录为 `l3_prompt_candidate`，不会自动成为 runtime `l3_prompt`。
 - 用 `teacher_promotion_holdout + teacher_regression_sample + hard_buffer` 对 current artifact set 与 candidate artifact set 做离线 replay；hard buffer 包含 `train_visible` 与 `replay_only` 两类 replay pressure，但不能替代独立 holdout，若没有 holdout/regression 覆盖则拒绝 promotion。
 - promotion 使用 `decide_artifact_set_promotion`，检查 objective、accuracy epsilon 和 wrong-accept 上限。

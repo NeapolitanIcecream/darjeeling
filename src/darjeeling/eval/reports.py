@@ -657,6 +657,10 @@ def _l2_tuning_section(current_manifest: ArtifactManifest | None) -> str:
             f"- trials completed/requested: {tuning.get('n_trials_completed')}/"
             f"{tuning.get('n_trials_requested')}",
             f"- train/validation size: {tuning.get('train_size')}/{tuning.get('validation_size')}",
+            "- residual/objective validation size: "
+            f"{tuning.get('validation_residual_size', 'n/a')}/"
+            f"{tuning.get('objective_validation_size', 'n/a')} "
+            f"({tuning.get('objective_validation_source', 'unknown')})",
             f"- split policy: {tuning.get('split_policy')}",
             f"- best trial/value: {tuning.get('best_trial_number')}/{tuning.get('best_value')}",
         ]

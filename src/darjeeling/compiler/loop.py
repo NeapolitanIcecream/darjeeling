@@ -21,7 +21,12 @@ from darjeeling.compiler.l2_distiller import (
     l2_config_from_proposal,
     l2_config_from_settings,
 )
-from darjeeling.compiler.l2_tuner import L2TuneSpec, tune_l2_student
+from darjeeling.compiler.l2_tuner import (
+    L2TuneSpec,
+    residual_l2_validation_traces,
+    split_l2_tune_traces,
+    tune_l2_student,
+)
 from darjeeling.compiler.l3_prompt_optimizer import (
     L3_PROMPT_PROPOSAL_SCHEMA,
     l3_prompt_artifact_from_proposal,
@@ -78,6 +83,15 @@ class CompilerGenerationResult:
     promoted: bool
     reason: str
     manifest: ArtifactManifest | None = None
+
+
+@dataclass(frozen=True)
+class _L2GuardCalibrationWindow:
+    train_traces: list[TeacherTrace]
+    validation_traces: list[TeacherTrace]
+    residual_validation_traces: list[TeacherTrace]
+    source: str
+    fallback_reason: str | None = None
 
 
 def run_compiler_generation(
@@ -300,6 +314,9 @@ def run_compiler_generation(
                     "schema_version": tune_result.schema_version,
                     "train_size": tune_result.train_size,
                     "validation_size": tune_result.validation_size,
+                    "validation_residual_size": tune_result.validation_residual_size,
+                    "objective_validation_size": tune_result.objective_validation_size,
+                    "objective_validation_source": tune_result.objective_validation_source,
                     "split_policy": tune_result.split_policy,
                     "n_trials_requested": tune_result.n_trials_requested,
                     "n_trials_completed": tune_result.n_trials_completed,
@@ -351,9 +368,56 @@ def run_compiler_generation(
                     "mode": "always_accept",
                 }
             else:
-                threshold_selection = select_l2_accept_threshold(
-                    l2_bundle,
+                guard_bundle = l2_bundle
+                guard_search_traces = l2_training_traces
+                calibration_window = _l2_guard_calibration_window(
                     l2_training_traces,
+                    settings=settings,
+                    l2_config=l2_config,
+                )
+                calibration_payload = {
+                    "source": calibration_window.source,
+                    "split_policy": settings.l2_tuning_split_policy,
+                    "train_size": len(
+                        training_examples_from_teacher_traces(calibration_window.train_traces)
+                    ),
+                    "validation_size": len(
+                        training_examples_from_teacher_traces(
+                            calibration_window.validation_traces
+                        )
+                    ),
+                    "validation_residual_size": len(
+                        training_examples_from_teacher_traces(
+                            calibration_window.residual_validation_traces
+                        )
+                    ),
+                    "fallback_reason": calibration_window.fallback_reason,
+                }
+                if calibration_window.residual_validation_traces:
+                    try:
+                        guard_bundle = train_l2_student(
+                            training_examples_from_teacher_traces(
+                                calibration_window.train_traces
+                            ),
+                            l2_config,
+                        )
+                        guard_search_traces = calibration_window.residual_validation_traces
+                        candidate_metrics["l2_unguarded_guard_calibration"] = (
+                            _threshold_evaluation_payload(
+                                evaluate_l2_unguarded(guard_bundle, guard_search_traces),
+                            )
+                        )
+                    except ValueError as exc:
+                        guard_bundle = l2_bundle
+                        guard_search_traces = l2_training_traces
+                        calibration_payload["source"] = "training_scope_fallback"
+                        calibration_payload["fallback_reason"] = str(exc)
+                else:
+                    calibration_payload["source"] = "training_scope_fallback"
+                candidate_metrics["l2_guard_calibration"] = calibration_payload
+                threshold_selection = select_l2_accept_threshold(
+                    guard_bundle,
+                    guard_search_traces,
                     grid=guard_search_spec.grid,
                     max_wrong_accept_rate=guard_search_spec.max_wrong_accept_rate,
                     min_accepted_accuracy=settings.l2_min_guarded_accuracy,
@@ -686,6 +750,56 @@ def _l2_training_traces_for_scope(
     if scope == "lower_miss":
         return _l2_lower_miss_traces(traces)
     raise ValueError(f"unsupported L2 training scope: {scope}")
+
+
+def _l2_guard_calibration_window(
+    traces: list[TeacherTrace],
+    *,
+    settings: Settings,
+    l2_config: L2StudentConfig,
+) -> _L2GuardCalibrationWindow:
+    if len(training_examples_from_teacher_traces(traces)) < max(4, l2_config.min_examples):
+        return _L2GuardCalibrationWindow(
+            train_traces=[],
+            validation_traces=[],
+            residual_validation_traces=[],
+            source="training_scope_fallback",
+            fallback_reason="not enough L2 examples for residual calibration split",
+        )
+    try:
+        train_traces, validation_traces = split_l2_tune_traces(
+            traces,
+            validation_fraction=settings.l2_tuning_validation_fraction,
+            split_policy=settings.l2_tuning_split_policy,
+            random_state=l2_config.random_state,
+        )
+    except ValueError as exc:
+        return _L2GuardCalibrationWindow(
+            train_traces=[],
+            validation_traces=[],
+            residual_validation_traces=[],
+            source="training_scope_fallback",
+            fallback_reason=str(exc),
+        )
+
+    residual_validation_traces = residual_l2_validation_traces(
+        train_traces,
+        validation_traces,
+    )
+    if not residual_validation_traces:
+        return _L2GuardCalibrationWindow(
+            train_traces=train_traces,
+            validation_traces=validation_traces,
+            residual_validation_traces=[],
+            source="training_scope_fallback",
+            fallback_reason="residual validation split is empty",
+        )
+    return _L2GuardCalibrationWindow(
+        train_traces=train_traces,
+        validation_traces=validation_traces,
+        residual_validation_traces=residual_validation_traces,
+        source="residual_validation",
+    )
 
 
 def _l2_lower_miss_traces(traces: list[TeacherTrace]) -> list[TeacherTrace]:

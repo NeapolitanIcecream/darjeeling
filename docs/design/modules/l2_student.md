@@ -140,9 +140,11 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 - grid 默认覆盖 `0.70..0.98`。
 - 搜索会额外加入 teacher_train 上观测到的 guard probability 及其相邻阈值，避免安全阈值落在粗 grid 间隙时被跳过。
 - 搜索必须先缓存每条 trace 的 L2 prediction，再在缓存上评估所有 threshold；不能为每个 threshold 重新调用 `bundle.predict()`，否则样本扩大后会退化为 O(N²)。
-- 搜索输入只来自 `teacher_train`，不读取 promotion holdout 或 MASSIVE gold。
+- 搜索输入只来自 `teacher_train` 内部切分出的 calibration window，不读取 promotion holdout 或 MASSIVE gold。
+- 默认优先在 chronological residual validation 上校准 threshold：用 calibration train prefix 模拟 L0 exact cache，过滤 validation 中 exact repeat 和已记录的 L0/L1 accepted 请求，只在会真正到达 L2 的 residual validation traces 上评估 L2。
+- 如果 residual validation 为空或 calibration train 不足以训练 L2，则回退到旧的 training-scope search，并在 `candidate_metrics["l2_guard_calibration"]` 中记录 fallback reason。
 - 先过滤 `wrong_accept_rate <= l2_max_wrong_accept_rate` 且 `accepted_accuracy >= l2_min_guarded_accuracy` 的候选。
-- 若存在非零覆盖且 train-window zero-observed-wrong 的候选，优先在这组里选 coverage 最高的阈值；否则再在 eligible 候选里按 coverage、accepted accuracy、wrong accept、threshold 排序。
+- 若存在非零覆盖且 calibration-window zero-observed-wrong 的候选，优先在这组里选 coverage 最高的阈值；否则再在 eligible 候选里按 coverage、accepted accuracy、wrong accept、threshold 排序。
 - 选中的 threshold 写入 `L2StudentConfig.accept_threshold`，并记录到 `candidate_metrics["l2_guard_search"]`。
 - 若 teacher-visible examples 少于 `L2_MIN_RUNTIME_EXAMPLES`，compiler 仍训练 L2、记录 unguarded/guard diagnostics，但将 `L2StudentConfig.runtime_enabled=false`，runtime 只记录 prediction metadata，不接收。
 - Compiler 同时记录 `candidate_metrics["l2_unguarded_train"]`，即 threshold=0 时的 train-window frame accuracy、wrong accept 和 coverage，用于区分 student 本体质量问题与 guard 过严问题。
@@ -169,9 +171,10 @@ Optuna tuning path：
 - `edge-mvp l2 tune --traces <trace.jsonl> --out <report.json>` 是 L4 coding agent 可调用的本地工具接口。
 - `L2_TUNING_MODE=optuna` 时，compiler 在每个 generation 中先对 L2 training scope 做内部 train/validation split，再运行 Optuna search，最后用 best config 训练 runtime candidate。
 - Tuning report 使用 `l2-tune-v1`，记录每个 trial 的 params、最终 `L2StudentConfig`、split policy、validation unguarded/guarded metrics 和 p95 latency。
-- Optuna 不能读取 promotion holdout、MASSIVE gold、final eval 或 future stream；它只优化 teacher-visible train window 的内部 validation。
+- Optuna 不能读取 promotion holdout、MASSIVE gold、final eval 或 future stream；它只优化 teacher-visible train window 的内部 residual validation。
 - `candidate_metrics["l2_tuning"]` 记录 trial 数、best value、best metrics；`artifact_paths["l2_tuning"]` 指向完整 tuning report。
 - Tuning validation 默认使用 `chronological` split，即用 teacher-visible train window 的尾部模拟 future stream。`stratified_random` 只作为 ablation 开关保留；它会让每个 intent 更均匀，但容易高估真实 L0/L1 miss 后续分布。
+- 在 tuning validation 上也会应用同一套 residual filter：从 validation 中移除 calibration train prefix 的 exact repeat 和已记录 L0/L1 accepted 请求，并记录 `validation_residual_size`、`objective_validation_size` 与 `objective_validation_source`。若 residual 为空，才回退到未过滤 validation，防止样本过小时 tuning 完全失效。
 - Compact search 和小样本窗口默认不启用 MLP `early_stopping`，因为 sklearn 会在过小 validation split 上拒绝训练，浪费 trial budget。
 - `L2_TUNING_MIN_EXAMPLES` 是 tuning 的硬门槛；样本不足时 compiler 仍训练 deterministic L2 candidate，但跳过 Optuna 并记录 skip reason，避免用几十个样本制造虚假的 tuning 结论。
 

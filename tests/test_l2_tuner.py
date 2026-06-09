@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from darjeeling.compiler.l2_tuner import L2TuneSpec, split_l2_tune_traces, tune_l2_student
+from darjeeling.compiler.l2_tuner import (
+    L2TuneSpec,
+    residual_l2_validation_traces,
+    split_l2_tune_traces,
+    tune_l2_student,
+)
 from darjeeling.layers.l2_student import L2StudentConfig
-from darjeeling.schemas import Frame, TeacherTrace
+from darjeeling.schemas import Frame, LayerResult, TeacherTrace
 
 
 def test_l2_tuner_selects_best_config_and_reports_trials() -> None:
@@ -28,7 +33,10 @@ def test_l2_tuner_selects_best_config_and_reports_trials() -> None:
     assert result.best_config is not None
     assert result.best_config["intent_model_family"] in {"sgd_logreg", "mlp"}
     assert result.best_metrics is not None
-    assert result.best_metrics["unguarded"]["total"] == result.validation_size
+    assert result.validation_residual_size == result.validation_size
+    assert result.objective_validation_size == result.validation_size
+    assert result.objective_validation_source == "residual"
+    assert result.best_metrics["unguarded"]["total"] == result.objective_validation_size
     assert len(result.trials) == 3
     assert any(trial.config == result.best_config for trial in result.trials)
 
@@ -96,6 +104,23 @@ def test_l2_tune_split_defaults_to_chronological_holdout() -> None:
     assert [trace.request_id for trace in validation] == ["a4", "a5", "a6"]
 
 
+def test_l2_residual_validation_filters_lower_layer_hits_and_l0_repeats() -> None:
+    train = [
+        _trace("t1", "play jazz", "music_play"),
+        _trace("t2", "set alarm", "alarm_set"),
+    ]
+    validation = [
+        _trace("v1", "play jazz", "music_play"),
+        _trace("v2", "play rock", "music_play", lower_layer="L0"),
+        _trace("v3", "wake me up", "alarm_set", lower_layer="L1"),
+        _trace("v4", "play something new", "music_play"),
+    ]
+
+    residual = residual_l2_validation_traces(train, validation)
+
+    assert [trace.request_id for trace in residual] == ["v4"]
+
+
 def _teacher_traces() -> list[TeacherTrace]:
     rows = [
         ("m1", "play jazz", "music_play", {}),
@@ -112,14 +137,36 @@ def _teacher_traces() -> list[TeacherTrace]:
         ("a6", "set evening alarm", "alarm_set", {}),
     ]
     return [
-        TeacherTrace(
-            request_id=request_id,
-            utterance=utterance,
-            teacher_frame=Frame(intent=intent, slots=slots),
-            chosen_layer="L4",
-            final_frame=Frame(intent=intent, slots=slots),
-            layer_results=[],
-            timestamp="2026-06-09T00:00:00Z",
-        )
+        _trace(request_id, utterance, intent, slots=slots)
         for request_id, utterance, intent, slots in rows
     ]
+
+
+def _trace(
+    request_id: str,
+    utterance: str,
+    intent: str,
+    *,
+    slots: dict[str, str] | None = None,
+    lower_layer: str | None = None,
+) -> TeacherTrace:
+    frame = Frame(intent=intent, slots=slots or {})
+    layer_results = []
+    if lower_layer is not None:
+        layer_results.append(
+            LayerResult(
+                layer=lower_layer,
+                accepted=True,
+                frame=frame,
+                latency_ms=0.1,
+            )
+        )
+    return TeacherTrace(
+        request_id=request_id,
+        utterance=utterance,
+        teacher_frame=frame,
+        chosen_layer="L4",
+        final_frame=frame,
+        layer_results=layer_results,
+        timestamp="2026-06-09T00:00:00Z",
+    )
