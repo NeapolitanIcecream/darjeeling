@@ -298,6 +298,7 @@ def run_l2_target_evolution(
                 baseline["inner_validation"],
             ),
             "inner_validation": inner_result,
+            "train_audit": _candidate_train_audit(candidate),
             "selection_delta_vs_baseline": _metric_delta(
                 selection_result,
                 baseline["selection_holdout"],
@@ -671,6 +672,8 @@ def evaluate_target_workspace(
         if holdout_path is None:
             raise ValueError(f"{split} evaluation requires a private holdout_path")
         validation_sets = [(split, _read_teacher_jsonl(holdout_path))]
+    elif split == "train_audit":
+        validation_sets = [(split, train_traces)]
     elif split == "visible_validation":
         validation_sets = [
             (path.stem, _read_teacher_jsonl(path))
@@ -697,6 +700,8 @@ def evaluate_target_workspace(
         min_accepted_accuracy=min_accepted_accuracy,
         max_wrong_accept_rate=max_wrong_accept_rate,
     )
+    if split == "train_audit":
+        payload["gate_role"] = "diagnostic_only_not_selection_or_adoption_gate"
     if split == "visible_validation":
         fold_metrics = [
             _evaluate_trained_target(
@@ -880,6 +885,12 @@ def _evaluate_target_candidate(
         min_accepted_accuracy=config.min_accepted_accuracy,
         max_wrong_accept_rate=config.max_wrong_accept_rate,
     )
+    train_audit_result = evaluate_target_workspace(
+        workspace_root=workspace_root,
+        split="train_audit",
+        min_accepted_accuracy=config.min_accepted_accuracy,
+        max_wrong_accept_rate=config.max_wrong_accept_rate,
+    )
     private_results = {
         split_name: evaluate_target_workspace(
             workspace_root=workspace_root,
@@ -893,6 +904,7 @@ def _evaluate_target_candidate(
     return {
         "label": label,
         "inner_validation": inner_result,
+        "train_audit": train_audit_result,
         **private_results,
     }
 
@@ -1152,6 +1164,11 @@ def _target_diagnostics_payload(
         if recent_rounds
         else baseline["inner_validation"]
     )
+    latest_train_audit = (
+        _candidate_train_audit(recent_rounds[-1])
+        if recent_rounds
+        else _candidate_train_audit(baseline)
+    )
     return {
         "schema_version": "l2-target-diagnostics-v1",
         "visibility": "visible_validation_only",
@@ -1162,8 +1179,18 @@ def _target_diagnostics_payload(
             "family_diagnostics",
         ),
         "baseline_safety_backlog": _metric_safety_backlog(baseline["inner_validation"]),
+        "baseline_train_audit": _metric_family_diagnostics(
+            _candidate_train_audit(baseline),
+        ),
+        "baseline_train_audit_safety_backlog": _metric_safety_backlog(
+            _candidate_train_audit(baseline),
+        ),
         "latest_inner_validation": latest_metric.get("family_diagnostics"),
         "latest_safety_backlog": _metric_safety_backlog(latest_metric),
+        "latest_train_audit": _metric_family_diagnostics(latest_train_audit),
+        "latest_train_audit_safety_backlog": _metric_safety_backlog(
+            latest_train_audit or {},
+        ),
         "round_history": [
             {
                 "round": round_result["round"],
@@ -1174,10 +1201,30 @@ def _target_diagnostics_payload(
                 "safety_backlog": _metric_safety_backlog(
                     round_result["inner_validation"],
                 ),
+                "train_audit_safety_backlog": _metric_safety_backlog(
+                    _candidate_train_audit(round_result),
+                ),
             }
             for round_result in recent_rounds
         ],
     }
+
+
+def _candidate_train_audit(candidate: dict[str, Any]) -> dict[str, Any]:
+    metric = candidate.get("train_audit")
+    if isinstance(metric, dict):
+        return metric
+    fallback = dict(candidate["inner_validation"])
+    fallback["split"] = "train_audit"
+    fallback["gate_role"] = "diagnostic_only_not_selection_or_adoption_gate"
+    return fallback
+
+
+def _metric_family_diagnostics(metric: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(metric, dict):
+        return None
+    family_diagnostics = metric.get("family_diagnostics")
+    return family_diagnostics if isinstance(family_diagnostics, dict) else None
 
 
 def _metric_safety_backlog(metric: dict[str, Any]) -> dict[str, Any] | None:
@@ -1233,6 +1280,11 @@ def _write_target_state_files(
             "the inner loop unless stop_on_selection_gate is explicitly enabled"
         ),
         "baseline_inner_validation": _visible_metric_summary(baseline["inner_validation"]),
+        "baseline_train_audit": _visible_metric_summary(_candidate_train_audit(baseline)),
+        "train_audit_policy": (
+            "visible train audit is diagnostic-only; it may guide safety work but is not "
+            "a candidate selection or adoption gate"
+        ),
         "round_history": [_visible_round_summary(round_result) for round_result in round_results],
         "private_holdout_visibility": (
             "selection and promotion holdouts are not available in this workspace"
@@ -1474,6 +1526,14 @@ def _target_commands_text() -> str:
             "  --out runs/visible_validation.json",
             "```",
             "",
+            "Evaluate visible train audit diagnostics only:",
+            "",
+            "```bash",
+            "uv run --project system/darjeeling python tools/evaluate.py \\",
+            "  --split train_audit \\",
+            "  --out runs/train_audit.json",
+            "```",
+            "",
             "If `uv` cannot use its dependency cache but a Python >=3.11 environment",
             "with Darjeeling dependencies is already active, use:",
             "",
@@ -1482,6 +1542,8 @@ def _target_commands_text() -> str:
             "  python tools/evaluate.py --split visible_validation \\",
             "  --out runs/visible_validation.json",
             "```",
+            "",
+            "The same fallback can evaluate train audit with `--split train_audit`.",
             "",
             "Run local Optuna config search on visible train/validation folds only:",
             "",
@@ -1540,6 +1602,7 @@ def _visible_round_summary(round_result: dict[str, Any]) -> dict[str, Any]:
         "inner_score": round_result["inner_score"],
         "inner_delta_vs_baseline": round_result["inner_delta_vs_baseline"],
         "inner_validation": _visible_metric_summary(round_result["inner_validation"]),
+        "train_audit": _visible_metric_summary(_candidate_train_audit(round_result)),
     }
 
 
@@ -1556,6 +1619,7 @@ def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
         "accepted_accuracy": metric["accepted_accuracy"],
         "wrong_accept_rate": metric["wrong_accept_rate"],
         "passes_gate": metric["passes_gate"],
+        "gate_role": metric.get("gate_role", "metric_gate"),
         "veto_examples": metric.get("veto_examples", []),
         "near_miss_examples": metric.get("near_miss_examples", []),
         "family_diagnostics": metric.get("family_diagnostics"),
@@ -1612,7 +1676,7 @@ def evaluate_target_workspace_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument(
         "--split",
-        choices=["inner_validation", "visible_validation"],
+        choices=["inner_validation", "visible_validation", "train_audit"],
         required=True,
     )
     parser.add_argument("--out", type=Path, required=True)
@@ -2047,6 +2111,8 @@ def _target_program_text() -> str:
             "  opportunities and risks by teacher intent family.",
             "  Read `latest_safety_backlog` first; if it has items, clear those",
             "  visible accepted-wrong families before working on near-miss coverage.",
+            "  `latest_train_audit_safety_backlog` is diagnostic-only visible",
+            "  train feedback for broadening safety rules; it is not a gate.",
             "- `data/commands.md` lists local commands.",
             "- `tools/evaluate.py` trains/evaluates the target code in seconds.",
             "- `tools/search_config.py` runs visible-data Optuna config search.",
@@ -2070,6 +2136,9 @@ def _target_program_text() -> str:
             "When `latest_safety_backlog.items` is non-empty, fix those visible",
             "accepted-wrong families before coverage expansion or broad threshold",
             "changes.",
+            "If visible validation backlog is empty but candidate selection still",
+            "fails, use the visible train audit backlog to design broader safety",
+            "rules; do not inspect private holdout rows.",
             "`target.accept_prediction` may veto uncertain guard accepts; it cannot",
             "force accepts that the core guard rejected.",
             "Private selection and promotion holdouts are outside this workspace and",

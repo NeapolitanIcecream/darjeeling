@@ -1611,3 +1611,72 @@ Interpretation:
   fixed 5-fold snapshot. The next L4 coding-agent round should start from the
   visible safety backlog, especially high-confidence slotless
   `transport_traffic` and slot-missing `general_joke`, before any coverage work.
+
+## Target-only visible safety veto
+
+The next patch used only visible validation/train rows and kept all
+target-specific logic under `target/`:
+
+```text
+docs/experiments/patches/l2_target_visible_safety_backlog_veto_r1.patch
+```
+
+It adds conservative `accept_prediction` vetoes for:
+
+- slotless currency requests with currency/exchange cues;
+- slotless traffic requests with visible route/place/time cues;
+- slotless jokes with visible joke-type/topic cues;
+- high-risk `general_quirky` extra date slots;
+- the visible calendar-set frequency/time mismatch.
+
+Validation command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-visible-safety-backlog-veto-3k-r3 \
+  --budget-profile fixed-inner \
+  --rounds 1 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --dry-run-patch docs/experiments/patches/l2_target_visible_safety_backlog_veto_r1.patch
+```
+
+Result:
+
+- The patch applied cleanly with no workspace scope violation.
+- Visible validation improved from 32 / 18 / 14 to 18 / 18 / 0 and passed.
+- Visible `latest_safety_backlog` was empty after the patch.
+- Private selection still failed: 11 / 7 / 4.
+- Private promotion still failed: 11 / 7 / 4.
+- `selection_gate_diagnosis=selection_wrong_accepts_for_inner_passing_rounds`.
+
+Interpretation:
+
+- The safety-backlog objective is useful: the patch eliminated all visible
+  validation wrong accepts without changing Darjeeling core.
+- It is still not adoptable. Clearing validation backlog alone overfits the
+  visible validation folds and does not prove target safety.
+- We therefore added `train_audit`: a diagnostic-only split that evaluates the
+  same trained target bundle on visible train rows. It is written to
+  `round_state.json` and `target_diagnostics.json`, but it is not a
+  selection/adoption gate.
+
+Train-audit signal from the same run:
+
+- Train audit after the patch: 160 accepted / 142 correct / 18 wrong.
+- `latest_train_audit_safety_backlog` ranked:
+  `takeaway_query` 4, `recommendation_locations` 3, `general_quirky` 2,
+  then single wrong accepts in `news_query`, `iot_cleaning`, `social_post`,
+  `iot_wemo_off`, and `social_query`.
+- `round_state.json` and `target_diagnostics.json` did not contain
+  `selection_holdout` or `promotion_holdout`.
+
+Next implication:
+
+- The next L4 target round should not read private rows. It should use
+  `latest_train_audit_safety_backlog` to broaden visible-data-derived safety
+  rules, then re-run 5-fold visible validation plus private selection/promotion.
+- A useful next hypothesis is a more general slot-risk guard for missing or
+  unsupported slot values, rather than adding one lexical veto per validation
+  example.

@@ -110,6 +110,10 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert summary["best_adoptable_round"] is None
     assert summary["target_code_scope"] == "target/"
     assert summary["baseline"]["label"] == "baseline"
+    assert summary["baseline"]["train_audit"]["split"] == "train_audit"
+    assert summary["baseline"]["train_audit"]["gate_role"] == (
+        "diagnostic_only_not_selection_or_adoption_gate"
+    )
     assert (workspace / "target" / "target_l2.py").exists()
     assert (workspace / "system" / "darjeeling" / "src").exists()
     assert (workspace / "system" / "darjeeling" / "README.md").exists()
@@ -198,6 +202,11 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert target_diagnostics["baseline_safety_backlog"]["visibility"] == (
         "visible_validation_only"
     )
+    assert target_diagnostics["baseline_train_audit"]["split"] == "train_audit"
+    assert target_diagnostics["baseline_train_audit_safety_backlog"]["schema_version"] == (
+        "l2-target-safety-backlog-v1"
+    )
+    assert "latest_train_audit_safety_backlog" in target_diagnostics
     assert "latest_safety_backlog" in target_diagnostics
     assert (
         summary["baseline"]["inner_validation"]["family_diagnostics"]["schema_version"]
@@ -218,6 +227,14 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     )
     assert "family_diagnostics" in round_state["baseline_inner_validation"]
     assert "safety_backlog" in round_state["baseline_inner_validation"]
+    assert round_state["baseline_train_audit"]["split"] == "train_audit"
+    assert round_state["baseline_train_audit"]["gate_role"] == (
+        "diagnostic_only_not_selection_or_adoption_gate"
+    )
+    assert "candidate selection or adoption gate" in round_state["train_audit_policy"]
+    assert summary["rounds"][0]["train_audit"]["gate_role"] == (
+        "diagnostic_only_not_selection_or_adoption_gate"
+    )
     assert round_state["agent_budget"]["mode"] == "dry-run"
     assert "private_holdout_evidence" not in round_state
     assert "not a" in program_text
