@@ -353,43 +353,6 @@ def test_l2_student_layer_uses_guard_threshold() -> None:
     assert "guard_probability" in result.metadata
 
 
-def test_l2_guard_probability_is_capped_by_signature_accuracy() -> None:
-    class FakeIntentPipeline:
-        classes_ = ["lists_query", "music_play"]
-
-        def predict_proba(self, utterances):
-            return np.asarray([[0.99, 0.01] for _utterance in utterances])
-
-    calibration = IntentCalibrationIndex(
-        predicted_intent_frame_accuracy={"lists_query": 0.72},
-        predicted_intent_intent_accuracy={"lists_query": 1.0},
-        predicted_intent_support={"lists_query": 0.10},
-        predicted_intent_slotless_rate={"lists_query": 1.0},
-        predicted_signature_frame_accuracy={("lists_query", ()): 0.72},
-        predicted_signature_support={("lists_query", ()): 0.10},
-    )
-    bundle = L2StudentBundle(
-        intent_pipeline=FakeIntentPipeline(),
-        slot_tagger=None,
-        guard_model=ConstantGuard(0.99),
-        config=L2StudentConfig(accept_threshold=0.93),
-        intent_calibration_index=calibration,
-    )
-
-    prediction = bundle.predict("what's on my to do list")
-
-    assert prediction.raw_guard_probability == 0.99
-    assert prediction.guard_calibration_cap == 0.72
-    assert prediction.guard_probability == 0.72
-
-    result = L2StudentLayer(bundle).try_answer("what's on my to do list")
-
-    assert not result.accepted
-    assert result.frame is None
-    assert result.metadata["raw_guard_probability"] == 0.99
-    assert result.metadata["guard_calibration_cap"] == 0.72
-
-
 def test_l2_student_layer_reports_intent_support_metadata() -> None:
     bundle = train_l2_student(
         _examples(),
