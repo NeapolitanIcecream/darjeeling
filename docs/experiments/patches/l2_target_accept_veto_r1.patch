@@ -1,0 +1,47 @@
+--- a/target/target_l2.py
++++ b/target/target_l2.py
+@@ -5,12 +5,24 @@
+ from typing import Any
+ 
+ 
++_SLOT_CUE_WORDS = (" from ", " to ", " for ", " at ", " in ", " on ", " with ")
++
++
+ def config_overrides() -> dict[str, Any]:
+     """Return target-specific L2StudentConfig overrides."""
+     config_path = Path(__file__).with_name("config.json")
+     if config_path.exists():
+         return json.loads(config_path.read_text(encoding="utf-8"))
+-    return {}
++    return {
++        "accept_threshold": 0.90,
++        "frame_source": "student",
++        "intent_model_family": "sgd_logreg",
++        "word_ngram_range": (1, 3),
++        "char_ngram_range": (3, 5),
++        "max_features": 1000,
++        "max_iter": 200,
++        "slot_model_family": "none",
++    }
+ 
+ 
+ def postprocess_frame(
+@@ -30,5 +42,16 @@
+     default_accept: bool,
+ ) -> bool | None:
+     """Return False to veto a guard accept; True/None keep the default decision."""
+-    del utterance, frame, metadata
+-    return default_accept
++    if not default_accept:
++        return None
++    slots = frame.get("slots") or {}
++    if slots:
++        return None
++    student_slots = ((metadata.get("student_frame") or {}).get("slots")) or {}
++    retrieval_slots = ((metadata.get("retrieval_frame") or {}).get("slots")) or {}
++    if student_slots or retrieval_slots:
++        return False
++    normalized = f" {utterance.lower()} "
++    if any(cue in normalized for cue in _SLOT_CUE_WORDS):
++        return False
++    return None

@@ -449,3 +449,59 @@ Interpretation:
   next quality-bearing iteration should use L4 target-code evolution to improve
   slot/frame exactness or calibration/search-space design, then call
   `tools/search_config.py` for local tuning inside that target workspace.
+
+## Target accept-veto hook smoke
+
+The next implementation added a target-owned `accept_prediction(...)` hook.
+The hook can only veto a core guard accept; it cannot force acceptance when the
+core guard rejected a prediction. Metrics now include `vetoed_accepts` and up
+to 8 `veto_examples`.
+
+The dry-run patch used for the smoke is committed at:
+
+```text
+docs/experiments/patches/l2_target_accept_veto_r1.patch
+```
+
+It intentionally recreates the risky local-search R1 config
+(`frame_source=student`, `slot_model_family=none`, `accept_threshold=0.90`) and
+adds a broad slot-risk veto for slotless predictions with slot cues or alternate
+slot evidence.
+
+Command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-accept-veto-r4 \
+  --rounds 1 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_accept_veto_r1.patch \
+  --max-traces 500 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Runtime: about 4 seconds.
+- Baseline inner validation: 1 accepted / 1 correct / 0 wrong.
+- Patched inner validation: 1 accepted / 1 correct / 0 wrong, with
+  3 vetoed accepts.
+- Private selection holdout: 0 accepted.
+- Private promotion holdout: 0 accepted, with 1 vetoed accept.
+- The vetoed private promotion example was the previous wrong-accept case:
+  `do i have any emails from robert`, where the predicted `email_query` frame
+  omitted the `person` slot.
+- The visible inner `veto_examples` also showed over-vetoing: several vetoed
+  examples were already exact correct slotless frames, such as `any new emails`.
+
+Interpretation:
+
+- The hook solves an interface problem: target-owned code can now turn risky
+  guard accepts into abstentions without changing Darjeeling core.
+- The specific smoke patch is too conservative and not adoptable. It removed
+  the known private wrong accept, but it also removed visible correct accepts
+  and did not create private selection coverage.
+- `veto_examples` are necessary feedback for L4 target evolution. Without them,
+  an agent can see that coverage dropped but cannot tell whether the veto was a
+  desirable safety abstention or an overbroad rule.

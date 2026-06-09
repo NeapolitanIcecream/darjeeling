@@ -384,21 +384,43 @@ def evaluate_target_workspace(
     accepted = 0
     correct = 0
     wrong = 0
+    vetoed_accepts = 0
     examples: list[dict[str, Any]] = []
+    veto_examples: list[dict[str, Any]] = []
     for trace in validation_traces:
         if trace.teacher_frame is None:
             continue
         prediction = bundle.predict(trace.utterance)
+        metadata = prediction.model_dump(mode="json")
         frame = _target_postprocess_frame(
             target_module,
             utterance=trace.utterance,
             frame=prediction.frame,
-            metadata=prediction.model_dump(mode="json"),
+            metadata=metadata,
         )
-        should_accept = (
+        default_accept = (
             bundle.config.runtime_enabled
             and prediction.guard_probability >= bundle.config.accept_threshold
         )
+        should_accept = _target_accept_prediction(
+            target_module,
+            utterance=trace.utterance,
+            frame=frame,
+            metadata=metadata,
+            default_accept=default_accept,
+        )
+        if default_accept and not should_accept:
+            vetoed_accepts += 1
+            if len(veto_examples) < 8:
+                veto_examples.append(
+                    {
+                        "request_id": trace.request_id,
+                        "utterance": trace.utterance,
+                        "teacher_frame": trace.teacher_frame.model_dump(mode="json"),
+                        "predicted_frame": frame.model_dump(mode="json"),
+                        "guard_probability": prediction.guard_probability,
+                    }
+                )
         if should_accept:
             accepted += 1
             if frame == trace.teacher_frame:
@@ -432,12 +454,14 @@ def evaluate_target_workspace(
         "accepted": accepted,
         "correct_accepts": correct,
         "wrong_accepts": wrong,
+        "vetoed_accepts": vetoed_accepts,
         "coverage": accepted / total if total else 0.0,
         "accepted_accuracy": accepted_accuracy,
         "wrong_accept_rate": wrong_accept_rate,
         "passes_gate": passes_gate,
         "config": bundle.config.model_dump(mode="json"),
         "wrong_examples": examples,
+        "veto_examples": veto_examples,
     }
 
 
@@ -538,7 +562,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
             "config_overrides for bounded L2StudentConfig parameters",
             "local Optuna/config search over visible train and inner validation only",
             "postprocess_frame fixes that preserve exact frame correctness",
-            "mechanisms that abstain when uncertain",
+            "accept_prediction veto logic that abstains when uncertain",
         ],
     }
 
@@ -608,10 +632,12 @@ def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
         "accepted": metric["accepted"],
         "correct_accepts": metric["correct_accepts"],
         "wrong_accepts": metric["wrong_accepts"],
+        "vetoed_accepts": metric["vetoed_accepts"],
         "coverage": metric["coverage"],
         "accepted_accuracy": metric["accepted_accuracy"],
         "wrong_accept_rate": metric["wrong_accept_rate"],
         "passes_gate": metric["passes_gate"],
+        "veto_examples": metric.get("veto_examples", []),
     }
 
 
@@ -620,6 +646,7 @@ def _metric_delta(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str
         "accepted": current["accepted"] - baseline["accepted"],
         "correct_accepts": current["correct_accepts"] - baseline["correct_accepts"],
         "wrong_accepts": current["wrong_accepts"] - baseline["wrong_accepts"],
+        "vetoed_accepts": current["vetoed_accepts"] - baseline["vetoed_accepts"],
         "coverage": current["coverage"] - baseline["coverage"],
         "accepted_accuracy": _optional_float_delta(
             current["accepted_accuracy"],
@@ -1047,6 +1074,17 @@ def postprocess_frame(
     """Return a target-specific frame dict after the core L2 model predicts."""
     del utterance, metadata
     return frame
+
+
+def accept_prediction(
+    utterance: str,
+    frame: dict[str, Any],
+    metadata: dict[str, Any],
+    default_accept: bool,
+) -> bool | None:
+    """Return False to veto a guard accept; True/None keep the default decision."""
+    del utterance, frame, metadata
+    return default_accept
 '''
 
 
@@ -1073,6 +1111,8 @@ def _target_program_text() -> str:
             "Optimize generalization from the visible train and inner-validation data.",
             "Wrong accepts are worse than abstentions. A raw coverage increase is not",
             "useful if frame exactness or wrong-accept safety gets worse.",
+            "`target.accept_prediction` may veto uncertain guard accepts; it cannot",
+            "force accepts that the core guard rejected.",
             "Private selection and promotion holdouts are outside this workspace and",
             "only the outer harness can read them; do not try to access parent",
             "directories to inspect them.",
@@ -1175,6 +1215,32 @@ def _target_postprocess_frame(
         return frame
     value = function(utterance, frame.model_dump(mode="json"), metadata)
     return Frame.model_validate(value)
+
+
+def _target_accept_prediction(
+    module: ModuleType,
+    *,
+    utterance: str,
+    frame: Frame,
+    metadata: dict[str, Any],
+    default_accept: bool,
+) -> bool:
+    function = getattr(module, "accept_prediction", None)
+    if function is None:
+        return default_accept
+    value = function(
+        utterance,
+        frame.model_dump(mode="json"),
+        metadata,
+        default_accept,
+    )
+    if value is None:
+        return default_accept
+    if not isinstance(value, bool):
+        raise TypeError("target_l2.accept_prediction() must return bool or None")
+    if not value:
+        return False
+    return default_accept
 
 
 def _run_codex_round(

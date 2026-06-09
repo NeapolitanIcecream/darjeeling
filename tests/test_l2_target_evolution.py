@@ -6,7 +6,10 @@ from typer.testing import CliRunner
 from darjeeling.cli import app
 from darjeeling.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
+    evaluate_target_workspace,
+    prepare_l2_target_workspace,
     run_l2_target_evolution,
+    split_l2_target_traces,
 )
 from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
 
@@ -184,6 +187,59 @@ def test_l2_target_evolution_local_search_uses_visible_workspace_only(
     assert (workspace / "tools" / "search_config.py").exists()
     assert not (workspace / "data" / "selection_holdout.jsonl").exists()
     assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
+
+
+def test_l2_target_accept_hook_can_veto_guard_accepts(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    prepare_l2_target_workspace(
+        source_repo_dir=Path.cwd(),
+        workspace_root=workspace,
+        split=split_l2_target_traces(traces_to_teacher_view(_traces())),
+    )
+    (workspace / "target" / "target_l2.py").write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "",
+                "from typing import Any",
+                "",
+                "",
+                "def config_overrides() -> dict[str, Any]:",
+                "    return {'accept_threshold': 0.0}",
+                "",
+                "",
+                "def postprocess_frame(",
+                "    utterance: str,",
+                "    frame: dict[str, Any],",
+                "    metadata: dict[str, Any],",
+                ") -> dict[str, Any]:",
+                "    del utterance, metadata",
+                "    return frame",
+                "",
+                "",
+                "def accept_prediction(",
+                "    utterance: str,",
+                "    frame: dict[str, Any],",
+                "    metadata: dict[str, Any],",
+                "    default_accept: bool,",
+                ") -> bool | None:",
+                "    del utterance, frame, metadata, default_accept",
+                "    return False",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_target_workspace(
+        workspace_root=workspace,
+        split="inner_validation",
+    )
+
+    assert result["accepted"] == 0
+    assert result["vetoed_accepts"] == result["validation_size"]
+    assert len(result["veto_examples"]) == result["validation_size"]
+    assert result["veto_examples"][0]["predicted_frame"]
 
 
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
