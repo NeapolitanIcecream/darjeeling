@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -151,7 +153,25 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     assert manifest["data_dir"] == "data"
     assert "src/darjeeling/layers/l2_student.py" in manifest["candidate_paths"]
     assert "slot_error_summary.json" in manifest["data_files"]
-    assert manifest["commands"]["run_checks"].endswith("tools/run_checks.py")
+    assert manifest["commands"] == {
+        "inspect_context": "python3 tools/inspect_context.py",
+        "run_checks": "python3 tools/run_checks.py",
+    }
+    assert "uv run --project" not in program_text
+    commands_text = (data_dir / "commands.md").read_text(encoding="utf-8")
+    assert "`python3 tools/inspect_context.py`" in commands_text
+    assert "`python3 tools/run_checks.py`" in commands_text
+    assert "uv run --project" not in commands_text
+    inspect_result = subprocess.run(
+        [sys.executable, "tools/inspect_context.py"],
+        cwd=result.workspace_repo_dir,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert inspect_result.returncode == 0, inspect_result.stderr
+    assert "objective:" in inspect_result.stdout
+    assert "slot error summary:" in inspect_result.stdout
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l2-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"

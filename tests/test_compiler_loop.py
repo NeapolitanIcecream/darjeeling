@@ -487,7 +487,10 @@ def test_compiler_generation_records_l2_agent_patch_artifacts(tmp_path: Path) ->
         ).read_text(encoding="utf-8")
     )
     assert workspace_manifest["schema_version"] == "l2-research-workspace-v1"
-    assert workspace_manifest["commands"]["run_checks"].endswith("tools/run_checks.py")
+    assert workspace_manifest["commands"] == {
+        "inspect_context": "python3 tools/inspect_context.py",
+        "run_checks": "python3 tools/run_checks.py",
+    }
     context_families = json.loads(
         (l2_agent_dir / "contexts" / "l2_context_families.json").read_text(
             encoding="utf-8"

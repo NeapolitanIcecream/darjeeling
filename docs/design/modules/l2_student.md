@@ -180,7 +180,7 @@ L2 coding-agent path：
   - `candidate/` 是可 diff 的 L2 研究代码区。
   - `system/darjeeling/` 是固定 system copy，用于 overlay candidate 后验证。
   - `data/` 放 teacher-visible L2 train scope、train-visible hard cases、current metrics、objective、constraints 和命令说明。
-  - `tools/inspect_context.py` 和 `tools/run_checks.py` 是标准本地入口。
+  - `tools/inspect_context.py` 和 `tools/run_checks.py` 是标准本地入口；查看 context 使用 `python3 tools/inspect_context.py`，不需要加载 `system/darjeeling` project env。
 - Prompt stdin 保持稳定短前缀，只要求 agent 读取 `program.md`。动态 context 不进入 prompt，而是作为 `data/` 文件由 agent 自主读取，以减少上下文膨胀并最大化 KV cache 复用机会。
 - `data/slot_error_summary.json` 从 teacher-visible train/hard cases 中汇总 L2 wrong accept，尤其标出 intent 正确但 slot 缺失、多余或值错误的样本。该 summary 用于把下一轮 L2 evolve 的焦点放在 frame exactness，而不是只扩大 coverage。
 - 调参由 Optuna 或本地 deterministic tuner 负责；L4 coding agent 负责真正需要 generalized intelligence 的代码、特征、模型 family、calibration、accept policy、验证协议和 search-space 设计。

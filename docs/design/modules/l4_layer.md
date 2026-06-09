@@ -178,6 +178,7 @@ Workspace layout：
 - `data/` 存放动态 teacher-visible 资料：`teacher_train.jsonl`、`hard_cases.jsonl`、`l2_context_families.json`、`slot_error_summary.json`、`current_metrics.json`、`objective.json`、`constraints.md` 和 `commands.md`。
 - `tools/` 提供本地入口：`inspect_context.py` 查看 data，`run_checks.py` 将 candidate overlay 到 system copy 后运行 focused pytest/ruff。
 - `workspace_manifest.json` 记录 workspace schema、candidate/data 路径和标准命令。
+- `tools/inspect_context.py` 是无项目依赖的轻量脚本，标准入口为 `python3 tools/inspect_context.py`，避免只查看 context 时受 `uv --project system/darjeeling`、cache 或系统依赖状态影响。
 - `tools/run_checks.py` 会优先在当前 Python 环境中调用 pytest/ruff；若当前环境缺少模块，则回退到 `uv run pytest/ruff`，避免有可用 venv 时仍强制嵌套 `uv run`。
 
 Prompt/cache 策略：

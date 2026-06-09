@@ -239,8 +239,8 @@ Smoke result:
 - Rounds 1 and 2 had no inner improvement and no holdout improvement.
 - `data/round_state.json` exposed only inner validation history; private holdout
   stayed in `private/promotion_holdout.jsonl`.
-- The generated workspace commands were verified with
-  `uv run --project system/darjeeling python tools/inspect_context.py` and
+- The generated target workspace commands were verified with
+  `python3 tools/inspect_context.py` and
   `uv run --project system/darjeeling python tools/evaluate.py --split inner_validation`;
   copying `README.md` into `system/darjeeling/` was required because the
   project metadata declares it as the package readme.

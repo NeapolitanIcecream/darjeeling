@@ -825,8 +825,8 @@ def _prepare_l2_research_workspace(
         "candidate_paths": [path.as_posix() for path in sorted(_diffable_l2_files(candidate_dir))],
         "data_files": sorted(path.name for path in data_dir.iterdir() if path.is_file()),
         "commands": {
-            "inspect_context": "uv run --project system/darjeeling python tools/inspect_context.py",
-            "run_checks": "uv run --project system/darjeeling python tools/run_checks.py",
+            "inspect_context": "python3 tools/inspect_context.py",
+            "run_checks": "python3 tools/run_checks.py",
         },
     }
     (workspace_root / "workspace_manifest.json").write_text(
@@ -913,8 +913,8 @@ def _l2_research_program_text() -> str:
             "  reasoning for code, feature, model-family, calibration, or search-space changes.",
             "",
             "Useful commands:",
-            "- `uv run --project system/darjeeling python tools/inspect_context.py`",
-            "- `uv run --project system/darjeeling python tools/run_checks.py`",
+            "- `python3 tools/inspect_context.py`",
+            "- `python3 tools/run_checks.py`",
             "",
             "Evaluation contract:",
             "- `tools/run_checks.py` overlays `candidate/` into `system/darjeeling/`,",
@@ -1165,9 +1165,9 @@ def _commands_text() -> str:
             "# Allowed commands",
             "",
             "- Inspect available train-visible context with "
-            "`uv run --project system/darjeeling python tools/inspect_context.py`.",
+            "`python3 tools/inspect_context.py`.",
             "- Validate the current `candidate/` overlay with "
-            "`uv run --project system/darjeeling python tools/run_checks.py`.",
+            "`python3 tools/run_checks.py`.",
             "- Use local deterministic tooling or Optuna for numeric tuning when useful; "
             "keep generated reports inside this workspace.",
             "",
