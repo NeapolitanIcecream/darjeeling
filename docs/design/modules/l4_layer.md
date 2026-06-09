@@ -144,13 +144,36 @@ Agent 权限：
 
 ## L2CodingAgentAdapter
 
+用户决策，优先级高于原 proposal：
+
+- L2 evolve 的主路径使用 L4 coding agent，而不是 direct API 直接生成完整设计。
+- 动态资料不一股脑塞进 prompt；它们放进 workspace，由 Codex 自己决定读哪些文件。
+- L2 dataset/runtime 相关代码放入隔离 research workspace 管理，agent 不直接修改 Darjeeling 宿主仓库。
+- Codex CLI 使用 GPT-5.5、独立配置和更长 timeout；不能隐式继承宿主机个人配置。当前隔离对象是 config/rules/session persistence，auth 仍由 Codex CLI 的 `CODEX_HOME` 机制提供。
+
 职责：
 
 - 在 L2 compiler generation 中启动 Codex CLI。
-- 向 agent 提供隔离 Darjeeling workspace、teacher-visible L2 context files、当前 metrics、objective、constraints 和命令说明。
+- 向 agent 提供 autoresearch-style 隔离 workspace、teacher-visible L2 data files、当前 metrics、objective、constraints 和命令说明。
 - L2 context files 包含 `slot_error_summary.json`，用于暴露 teacher-visible L2 wrong accepts 和 slot-level mismatch，使 agent 在扩大 coverage 前优先处理 frame exactness 风险。
-- 允许 agent 修改 L2-owned Python source、tests 和模块设计文档，并调用 Optuna/local tests。
+- 允许 agent 修改 `candidate/` 中的 L2-owned source、tests 和模块设计文档，并调用 Optuna/local tests。
 - 收集 diff、raw transcript、commands、agent report 和结构化 provenance。
+
+Workspace layout：
+
+- `program.md` 是稳定任务说明，承担 prompt 前缀之外的主要 instruction surface。
+- `candidate/` 是唯一可写研究代码区，只包含 L2-owned 可 diff 文件。
+- `system/darjeeling/` 是固定 Darjeeling system copy，用于 overlay candidate 后跑验证。
+- `data/` 存放动态 teacher-visible 资料：`teacher_train.jsonl`、`hard_cases.jsonl`、`l2_context_families.json`、`slot_error_summary.json`、`current_metrics.json`、`objective.json`、`constraints.md` 和 `commands.md`。
+- `tools/` 提供本地入口：`inspect_context.py` 查看 data，`run_checks.py` 将 candidate overlay 到 system copy 后运行 focused pytest/ruff。
+- `workspace_manifest.json` 记录 workspace schema、candidate/data 路径和标准命令。
+
+Prompt/cache 策略：
+
+- Codex stdin prompt 保持极短且稳定：只要求读取当前 workspace 的 `program.md` 并完成一次 bounded L2 research iteration。
+- 动态 trace、hard cases、metrics、objective 和 slot error summary 不进 prompt；它们作为文件放在 `data/`。
+- 稳定 prompt 最大化 provider/server-side KV cache 机会，也避免每轮把大量代码或样本直接塞入上下文。
+- 是否读取某个 data file 是 coding agent 的局部决策；harness 只提供可见边界和审计 artifact。
 
 Agent 可见范围：
 
@@ -168,9 +191,9 @@ Agent 不可见：
 
 Agent 权限：
 
-- 只写隔离 Python workspace。
+- 只写隔离 research workspace 中的 `candidate/`。
 - 不联网。
-- 可运行 L2 unit tests、ruff、`edge-mvp l2 tune` 和小型 cached experiments。
+- 可运行 `tools/inspect_context.py`、`tools/run_checks.py`、Optuna/local deterministic tools 和小型 cached experiments。
 - 不允许修改外层 replay、promotion logic、teacher cache、data loader 或非 L2-owned orchestration。
 
 重要边界：
@@ -178,11 +201,14 @@ Agent 权限：
 - Python L2 patch 不在当前 compiler 进程中热加载。Harness 产出的是 auditable patch candidate，记录 `runtime_patch_applied=false`。
 - 若要让 patch 影响真实 L2 runtime，外层开发/实验循环必须应用 patch、纳入 Git、重启实验进程。
 - Agent 不能 self-certify；即便 patch 通过自身验证，也必须经过外层 replay/promotion 和后续 experiment comparison。
+- Artifact promotion 仍有遗留风险：整组 promotion 可能掩盖单层 regression。后续需要更细的 per-layer regression attribution 或分层 promotion 设计。
 
 当前实现状态：
 
 - 已实现 `darjeeling.compiler.l2_coding_agent.L2CodingAgentAdapter`。
+- 当前 workspace schema 为 `l2-research-workspace-v1`，参考 `karpathy/autoresearch` 的 `program.md + editable train/candidate code + fixed evaluator` 思路，但边界改为 Darjeeling 的 L2 candidate overlay。
 - 支持 `dry-run` fixture patch 和 `codex-cli` 模式。
+- `codex-cli` 默认使用 `L2_AGENT_MODEL=gpt-5.5`、`L2_AGENT_TIMEOUT_S=7200`、`--ignore-user-config`、`--ignore-rules`、`--ephemeral` 和 `--skip-git-repo-check`。`--ignore-user-config` 不加载 `$CODEX_HOME/config.toml`；auth 仍使用 `CODEX_HOME`。
 - compiler generation 已在 `L2_AGENT_MODE` 非 disabled 时运行该 harness，并记录 `l2_agent_*` artifact paths 与 metrics。
 - `edge-mvp experiment l2-agent` 会开启 `L2_AGENT_MODE=codex-cli` 和 Optuna tuning，用于真实 L2 patch generation 实验。
 - 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。

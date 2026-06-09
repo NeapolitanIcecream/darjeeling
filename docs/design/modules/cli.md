@@ -89,7 +89,7 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `l2-tuned-lower-miss` 是分布对齐诊断实验：它设置 `L2_TRAINING_SCOPE=lower_miss` 和 `L2_TUNING_MODE=optuna`，让 tuning 与训练只看当前 `teacher_train` 中 L0/L1 未接收的样本，并继续使用 residual validation 做目标评估。该实验用于检验 L2 在真实低层 miss 分布上的吸收改善，不取代默认 `teacher_train` 主线。
 
-`l2-agent` 是 L4 coding-agent evolve L2 的 patch-generation 实验：它设置 `L2_AGENT_MODE=codex-cli` 和 `L2_TUNING_MODE=optuna`。当前 harness 只产出可审计 patch artifact，不在同一 Python 进程中热加载；要测 patch 的真实效果，需要外层应用 patch、提交 Git、重启实验。
+`l2-agent` 是 L4 coding-agent evolve L2 的 patch-generation 实验：它设置 `L2_AGENT_MODE=codex-cli` 和 `L2_TUNING_MODE=optuna`。Harness 会创建隔离 `workspace/l2_research/`，用稳定短 prompt 要求 Codex 读取 `program.md`，把动态 teacher-visible context 放入 `data/`，并限制 agent 只改 `candidate/`。当前 harness 只产出可审计 patch artifact，不在同一 Python 进程中热加载；要测 patch 的真实效果，需要外层应用 patch、提交 Git、重启实验。
 
 `workload-locality` 会在同一个 experiment root 下分别运行 `uniform`、`zipf-mild` 和 `zipf-heavy` 子目录。
 

@@ -24,10 +24,13 @@ class L2CodingAgentJobConfig:
     source_repo_dir: Path
     job_dir: Path
     codex_command: str = "codex"
-    codex_model: str | None = None
-    timeout_s: float = 900.0
+    codex_model: str | None = "gpt-5.5"
+    timeout_s: float = 7200.0
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
+    ignore_user_config: bool = True
+    ignore_rules: bool = True
+    ephemeral: bool = True
     dry_run_patch: Path | None = None
     run_validation: bool = True
 
@@ -80,6 +83,9 @@ class L2CodingAgentAdapter:
             timeout_s=self.settings.l2_agent_timeout_s,
             sandbox=self.settings.l2_agent_sandbox,
             approval_policy=self.settings.l2_agent_approval_policy,
+            ignore_user_config=self.settings.l2_agent_ignore_user_config,
+            ignore_rules=self.settings.l2_agent_ignore_rules,
+            ephemeral=self.settings.l2_agent_ephemeral,
             dry_run_patch=dry_run_patch or self.settings.l2_agent_dry_run_patch,
             run_validation=(
                 self.settings.l2_agent_run_validation
@@ -106,7 +112,8 @@ def run_l2_coding_agent_job(
 ) -> L2CodingAgentJobResult:
     job_dir = config.job_dir
     context_dir = job_dir / "contexts"
-    workspace_repo_dir = job_dir / "workspace" / "darjeeling"
+    workspace_repo_dir = job_dir / "workspace" / "l2_research"
+    candidate_dir = workspace_repo_dir / "candidate"
     prompt_path = job_dir / "prompt.md"
     transcript_path = job_dir / "transcript.jsonl"
     diff_path = job_dir / "diff.patch"
@@ -115,7 +122,6 @@ def run_l2_coding_agent_job(
     report_path = job_dir / "agent_report.md"
 
     job_dir.mkdir(parents=True, exist_ok=True)
-    _copy_l2_workspace(config.source_repo_dir, workspace_repo_dir)
     _write_context_files(
         context_dir=context_dir,
         teacher_train=teacher_train,
@@ -123,12 +129,13 @@ def run_l2_coding_agent_job(
         current_metrics=current_metrics,
         objective=objective,
     )
-    workspace_context_dir = workspace_repo_dir / "agent_contexts"
-    _copy_context_files(context_dir, workspace_context_dir)
+    _prepare_l2_research_workspace(
+        source_repo_dir=config.source_repo_dir,
+        workspace_root=workspace_repo_dir,
+        context_dir=context_dir,
+    )
     prompt_path.write_text(
         _build_l2_agent_prompt(
-            context_dir=context_dir,
-            workspace_context_dir=workspace_context_dir,
             workspace_repo_dir=workspace_repo_dir,
         ),
         encoding="utf-8",
@@ -164,7 +171,7 @@ def run_l2_coding_agent_job(
             if validation_result["return_code"] != 0 and result_code == 0:
                 result_code = int(validation_result["return_code"])
 
-    diff_text = _l2_workspace_diff(config.source_repo_dir, workspace_repo_dir)
+    diff_text = _l2_candidate_diff(config.source_repo_dir, candidate_dir)
     if (
         config.mode == "dry-run"
         and config.dry_run_patch is not None
@@ -234,12 +241,6 @@ def _write_context_files(
         hard_cases=hard_cases,
     )
     payloads = {
-        "agent_brief.md": _agent_brief_text(
-            context_families=context_families,
-            slot_error_summary=slot_error_summary,
-            current_metrics=current_metrics,
-            objective=objective,
-        ),
         "teacher_train.jsonl": [trace.model_dump(mode="json") for trace in teacher_train],
         "hard_cases.jsonl": [trace.model_dump(mode="json") for trace in hard_cases],
         "l2_context_families.json": context_families,
@@ -265,190 +266,14 @@ def _write_context_files(
 
 def _build_l2_agent_prompt(
     *,
-    context_dir: Path,
-    workspace_context_dir: Path,
     workspace_repo_dir: Path,
 ) -> str:
+    del workspace_repo_dir
     return "\n".join(
         [
-            "# Darjeeling L2 Python student evolution job",
-            "",
-            "You are running as the L4 coding-agent compiler mode for L2.",
-            "Edit only the isolated Darjeeling workspace provided for this job.",
-            "Read `agent_contexts/agent_brief.md` first. Use teacher-visible context",
-            "files, current metrics, objective, constraints, and the command guide.",
-            "Optuna is available for targeted follow-up, but do not spend this job on",
-            "broad tuning before producing a patch.",
-            "",
-            "Primary goal: improve L2 residual-stream frame exact match while keeping",
-            "wrong accepts within the replay gate. Pay special attention to slot quality,",
-            "guard calibration, retrieval-vs-student frame selection, and search space.",
-            "",
-            "Bounded execution rules:",
-            "- Make one small L2-owned patch, then stop and report.",
-            "- Do not read Codex skill files or unrelated docs.",
-            "- Do not run leave-one-out loops, exhaustive sweeps, full experiments,",
-            "  or network commands.",
-            "- After a few short diagnostic commands, edit files rather than continuing",
-            "  open-ended analysis.",
-            "",
-            "Do not modify outer replay, promotion, teacher cache, data loading, or gold labels.",
-            "This job produces an auditable patch. The compiler records it but does not",
-            "hot-load Python code into the current process.",
-            "",
-            f"Workspace repo: `{workspace_repo_dir.resolve()}`",
-            f"Workspace context directory: `{workspace_context_dir.resolve()}`",
-            f"Artifact context directory: `{context_dir.resolve()}`",
-            "",
-            "Required final response:",
-            "- Summarize files changed.",
-            "- Summarize Optuna/test commands run and results.",
-            "- Identify expected impact on L2 coverage, accuracy, latency, and risks.",
+            "Read `program.md` in this workspace and complete one bounded L2 research iteration.",
         ]
     )
-
-
-def _agent_brief_text(
-    *,
-    context_families: dict[str, Any],
-    slot_error_summary: dict[str, Any],
-    current_metrics: dict[str, Any],
-    objective: dict[str, Any],
-) -> str:
-    lines = [
-        "# L2 agent brief",
-        "",
-        "Read this first. This is a bounded evolve job, not a broad research sweep.",
-        "Produce one small auditable L2-owned patch, run focused checks when possible,",
-        "then write the report.",
-        "",
-        "Stop rules:",
-        "- Use at most a few short diagnostics before editing.",
-        "- Do not run leave-one-out loops, exhaustive sweeps, full experiments,",
-        "  or network commands.",
-        "- Do not read Codex skill files; this brief is the job-specific guide.",
-        "- If evidence is weak, prefer a conservative abstention-safe change and",
-        "  record follow-up tuning needs in the report.",
-        "",
-        "Suggested first pass:",
-        "1. Inspect this brief, `agent_contexts/l2_context_families.json`, and the",
-        "   L2 student/guard code.",
-        "2. Choose one small change around retrieval-vs-student selection, slot",
-        "   quality, guard calibration, or L2 search-space plumbing.",
-        "3. Add or update a focused L2 test.",
-        "4. Run the smallest relevant pytest/ruff commands from `agent_contexts/commands.md`.",
-        "5. If `agent_contexts/slot_error_summary.json` contains L2 slot failures,",
-        "   prioritize exact frame quality over broad coverage.",
-        "",
-        "Objective:",
-        _compact_json(objective),
-        "",
-        "Current metrics summary:",
-    ]
-    lines.extend(f"- {line}" for line in _l2_metric_summary_lines(current_metrics))
-    lines.extend(["", "Slot-level L2 failure summary:"])
-    lines.extend(f"- {line}" for line in _slot_error_summary_lines(slot_error_summary))
-    lines.extend(["", "Top visible context families:"])
-    for family in context_families.get("families", [])[:8]:
-        examples = family.get("examples") or []
-        sample = examples[0] if examples else {}
-        sample_frame = sample.get("teacher_frame") if isinstance(sample, dict) else None
-        sample_utterance = sample.get("utterance") if isinstance(sample, dict) else None
-        lines.append(
-            "- "
-            f"{family.get('family_id')}: support={family.get('support')}, "
-            f"hard_case_support={family.get('hard_case_support')}, "
-            f"outcomes={_compact_json(family.get('l2_outcome_counts', {}))}, "
-            f"sample={sample_utterance!r} -> {_compact_json(sample_frame)}"
-        )
-    return "\n".join(lines)
-
-
-def _l2_metric_summary_lines(metrics: dict[str, Any]) -> list[str]:
-    config = metrics.get("l2_config") if isinstance(metrics.get("l2_config"), dict) else {}
-    calibration = (
-        metrics.get("l2_guard_calibration")
-        if isinstance(metrics.get("l2_guard_calibration"), dict)
-        else {}
-    )
-    unguarded_calibration = (
-        metrics.get("l2_unguarded_guard_calibration")
-        if isinstance(metrics.get("l2_unguarded_guard_calibration"), dict)
-        else {}
-    )
-    unguarded_train = (
-        metrics.get("l2_unguarded_train")
-        if isinstance(metrics.get("l2_unguarded_train"), dict)
-        else {}
-    )
-    search = (
-        metrics.get("l2_guard_search")
-        if isinstance(metrics.get("l2_guard_search"), dict)
-        else {}
-    )
-    lines = [
-        f"teacher_traces_seen={metrics.get('teacher_traces_seen')}",
-        f"teacher_train_size={metrics.get('teacher_train_size')}",
-        f"l2_examples={metrics.get('l2_examples')}",
-        f"l2_training_scope={metrics.get('l2_training_scope')}",
-        f"l2_tuning_mode={metrics.get('l2_tuning_mode')}",
-        f"l2_guard_threshold={metrics.get('l2_guard_threshold')}",
-        "l2_config="
-        + _compact_json(
-            {
-                key: config.get(key)
-                for key in [
-                    "frame_source",
-                    "intent_model_family",
-                    "slot_model_family",
-                    "max_features",
-                    "max_iter",
-                    "min_examples",
-                ]
-            }
-        ),
-        "guard_calibration="
-        + _compact_json(
-            {
-                key: calibration.get(key)
-                for key in [
-                    "source",
-                    "train_size",
-                    "validation_size",
-                    "validation_residual_size",
-                    "fallback_reason",
-                ]
-            }
-        ),
-        "unguarded_residual="
-        + _compact_json(
-            {
-                key: unguarded_calibration.get(key)
-                for key in ["accepted", "correct_accepts", "wrong_accepts", "wrong_accept_rate"]
-            }
-        ),
-        "unguarded_train="
-        + _compact_json(
-            {
-                key: unguarded_train.get(key)
-                for key in ["accepted", "correct_accepts", "wrong_accepts", "wrong_accept_rate"]
-            }
-        ),
-        "guard_search_selected=" + _compact_json(search.get("selected")),
-    ]
-    return lines
-
-
-def _slot_error_summary_lines(summary: dict[str, Any]) -> list[str]:
-    return [
-        f"l2_wrong_accept_count={summary.get('l2_wrong_accept_count')}",
-        "l2_intent_correct_slot_mismatch_count="
-        f"{summary.get('l2_intent_correct_slot_mismatch_count')}",
-        "missing_slot_counts=" + _compact_json(summary.get("missing_slot_counts", {})),
-        "extra_slot_counts=" + _compact_json(summary.get("extra_slot_counts", {})),
-        "changed_slot_counts=" + _compact_json(summary.get("changed_slot_counts", {})),
-        f"example_count={len(summary.get('examples', []))}",
-    ]
 
 
 def _compact_json(payload: Any) -> str:
@@ -712,6 +537,17 @@ def _run_codex_cli_job(
             "-a",
             config.approval_policy,
             "exec",
+        ]
+    )
+    if config.ignore_user_config:
+        command.append("--ignore-user-config")
+    if config.ignore_rules:
+        command.append("--ignore-rules")
+    if config.ephemeral:
+        command.append("--ephemeral")
+    command.extend(
+        [
+            "--skip-git-repo-check",
             "--cd",
             str(workspace_repo_dir.resolve()),
             "--json",
@@ -736,23 +572,10 @@ def _validation_commands() -> list[list[str]]:
         [
             "uv",
             "run",
-            "pytest",
-            "tests/test_l2_student_training.py",
-            "tests/test_l2_tuner.py",
-            "tests/test_l2_guard.py",
-            "-q",
-        ],
-        [
-            "uv",
-            "run",
-            "ruff",
-            "check",
-            "src/darjeeling/layers/l2_student.py",
-            "src/darjeeling/compiler/l2_tuner.py",
-            "src/darjeeling/compiler/guard_optimizer.py",
-            "tests/test_l2_student_training.py",
-            "tests/test_l2_tuner.py",
-            "tests/test_l2_guard.py",
+            "--project",
+            "system/darjeeling",
+            "python",
+            "tools/run_checks.py",
         ],
     ]
 
@@ -832,6 +655,9 @@ def _write_l2_agent_provenance(
         "codex_model": config.codex_model,
         "sandbox": config.sandbox,
         "approval_policy": config.approval_policy,
+        "ignore_user_config": config.ignore_user_config,
+        "ignore_rules": config.ignore_rules,
+        "ephemeral": config.ephemeral,
         "runtime_patch_applied": False,
         "runtime_patch_reason": "Python L2 code changes require outer process apply/restart",
         "paths": {
@@ -961,7 +787,55 @@ def _diff_summary(diff_text: str) -> dict[str, Any]:
     }
 
 
-def _copy_l2_workspace(source_repo_dir: Path, workspace_repo_dir: Path) -> None:
+def _prepare_l2_research_workspace(
+    *,
+    source_repo_dir: Path,
+    workspace_root: Path,
+    context_dir: Path,
+) -> None:
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    system_repo_dir = workspace_root / "system" / "darjeeling"
+    candidate_dir = workspace_root / "candidate"
+    data_dir = workspace_root / "data"
+    tools_dir = workspace_root / "tools"
+
+    _copy_l2_system_workspace(source_repo_dir, system_repo_dir)
+    _copy_l2_candidate_files(source_repo_dir, candidate_dir)
+    _copy_context_files(context_dir, data_dir)
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "program.md").write_text(_l2_research_program_text(), encoding="utf-8")
+    (tools_dir / "sync_candidate.py").write_text(
+        _sync_candidate_tool_text(),
+        encoding="utf-8",
+    )
+    (tools_dir / "run_checks.py").write_text(_run_checks_tool_text(), encoding="utf-8")
+    (tools_dir / "inspect_context.py").write_text(
+        _inspect_context_tool_text(),
+        encoding="utf-8",
+    )
+    manifest = {
+        "schema_version": "l2-research-workspace-v1",
+        "candidate_dir": "candidate",
+        "system_repo_dir": "system/darjeeling",
+        "data_dir": "data",
+        "tools_dir": "tools",
+        "candidate_paths": [path.as_posix() for path in sorted(_diffable_l2_files(candidate_dir))],
+        "data_files": sorted(path.name for path in data_dir.iterdir() if path.is_file()),
+        "commands": {
+            "inspect_context": "uv run --project system/darjeeling python tools/inspect_context.py",
+            "run_checks": "uv run --project system/darjeeling python tools/run_checks.py",
+        },
+    }
+    (workspace_root / "workspace_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _copy_l2_system_workspace(source_repo_dir: Path, workspace_repo_dir: Path) -> None:
     if workspace_repo_dir.exists():
         shutil.rmtree(workspace_repo_dir)
     workspace_repo_dir.mkdir(parents=True, exist_ok=True)
@@ -993,20 +867,209 @@ def _copy_l2_workspace(source_repo_dir: Path, workspace_repo_dir: Path) -> None:
             shutil.copy2(source_path, target_path)
 
 
+def _copy_l2_candidate_files(source_repo_dir: Path, candidate_dir: Path) -> None:
+    if candidate_dir.exists():
+        shutil.rmtree(candidate_dir)
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    for rel_path in sorted(_diffable_l2_files(source_repo_dir)):
+        source_path = source_repo_dir / rel_path
+        target_path = candidate_dir / rel_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+
+
 def _copy_context_files(context_dir: Path, workspace_context_dir: Path) -> None:
     if workspace_context_dir.exists():
         shutil.rmtree(workspace_context_dir)
     shutil.copytree(context_dir, workspace_context_dir)
 
 
-def _l2_workspace_diff(source_repo_dir: Path, workspace_repo_dir: Path) -> str:
+def _l2_research_program_text() -> str:
+    return "\n".join(
+        [
+            "# L2 research program",
+            "",
+            "You are the L4 coding-agent for one bounded L2 research iteration.",
+            "",
+            "Workspace layout:",
+            "- `candidate/` is the only editable research code area.",
+            "- `system/darjeeling/` is the fixed Darjeeling system copy used for checks.",
+            "- `data/` contains teacher-visible traces, hard cases, metrics, and objective.",
+            "- `tools/` contains local inspection and validation commands.",
+            "",
+            "Rules:",
+            "- Edit only files under `candidate/`.",
+            "- Do not edit `system/`, `data/`, or `tools/`.",
+            "- Do not use network commands.",
+            "- Do not read MASSIVE gold labels, promotion holdout, future stream data,",
+            "  teacher cache internals, or files outside this workspace.",
+            "- Produce one small L2-owned patch, then stop.",
+            "- Prefer Optuna or local deterministic tools for numeric tuning; use your",
+            "  reasoning for code, feature, model-family, calibration, or search-space changes.",
+            "",
+            "Useful commands:",
+            "- `uv run --project system/darjeeling python tools/inspect_context.py`",
+            "- `uv run --project system/darjeeling python tools/run_checks.py`",
+            "",
+            "Evaluation contract:",
+            "- `tools/run_checks.py` overlays `candidate/` into `system/darjeeling/`,",
+            "  then runs focused L2 pytest and ruff checks.",
+            "- Passing checks does not self-certify the patch. The outer Darjeeling",
+            "  compiler/replay loop decides whether a patch is useful.",
+            "",
+            "Final response:",
+            "- Summarize candidate files changed.",
+            "- List commands run and results.",
+            "- State expected impact on L2 coverage, exact-match accuracy, latency, and risks.",
+        ]
+    )
+
+
+def _sync_candidate_tool_text() -> str:
+    return """from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+CANDIDATE = ROOT / "candidate"
+SYSTEM = ROOT / "system" / "darjeeling"
+
+
+def sync_candidate() -> int:
+    copied = 0
+    for source in sorted(CANDIDATE.rglob("*")):
+        if not source.is_file():
+            continue
+        rel_path = source.relative_to(CANDIDATE)
+        target = SYSTEM / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        copied += 1
+    print(f"synced {copied} candidate files into {SYSTEM}")
+    return copied
+
+
+if __name__ == "__main__":
+    sync_candidate()
+"""
+
+
+def _run_checks_tool_text() -> str:
+    return """from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+CANDIDATE = ROOT / "candidate"
+SYSTEM = ROOT / "system" / "darjeeling"
+
+
+def sync_candidate() -> None:
+    for source in sorted(CANDIDATE.rglob("*")):
+        if not source.is_file():
+            continue
+        rel_path = source.relative_to(CANDIDATE)
+        target = SYSTEM / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+
+
+def run(command: list[str]) -> int:
+    print("+ " + " ".join(command), flush=True)
+    completed = subprocess.run(command, cwd=SYSTEM, check=False)
+    return int(completed.returncode)
+
+
+def main() -> int:
+    sync_candidate()
+    test_command = [
+        "uv",
+        "run",
+        "pytest",
+        "tests/test_l2_student_training.py",
+        "tests/test_l2_tuner.py",
+        "tests/test_l2_guard.py",
+        "-q",
+    ]
+    test_code = run(test_command)
+    if test_code != 0:
+        return test_code
+    l2_tests = sorted(
+        str(path.relative_to(SYSTEM)) for path in (SYSTEM / "tests").glob("test_l2_*.py")
+    )
+    ruff_command = [
+        "uv",
+        "run",
+        "ruff",
+        "check",
+        "src/darjeeling/layers/l2_student.py",
+        "src/darjeeling/compiler/l2_tuner.py",
+        "src/darjeeling/compiler/guard_optimizer.py",
+        *l2_tests,
+    ]
+    return run(ruff_command)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""
+
+
+def _inspect_context_tool_text() -> str:
+    return """from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "data"
+
+
+def load_json(name: str):
+    path = DATA / name
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    print("data files:")
+    for path in sorted(DATA.iterdir()):
+        if path.is_file():
+            print(f"- {path.name}: {path.stat().st_size} bytes")
+    objective = load_json("objective.json")
+    if objective is not None:
+        print("\\nobjective:")
+        print(json.dumps(objective, indent=2, sort_keys=True))
+    slot_summary = load_json("slot_error_summary.json")
+    if slot_summary is not None:
+        print("\\nslot error summary:")
+        for key in [
+            "l2_wrong_accept_count",
+            "l2_intent_correct_slot_mismatch_count",
+            "missing_slot_counts",
+            "extra_slot_counts",
+            "changed_slot_counts",
+        ]:
+            print(f"- {key}: {slot_summary.get(key)}")
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def _l2_candidate_diff(source_repo_dir: Path, candidate_dir: Path) -> str:
     diff_chunks: list[str] = []
     rel_paths = sorted(
-        _diffable_l2_files(source_repo_dir) | _diffable_l2_files(workspace_repo_dir)
+        _diffable_l2_files(source_repo_dir) | _diffable_l2_files(candidate_dir)
     )
     for rel_path in rel_paths:
         source_path = source_repo_dir / rel_path
-        workspace_path = workspace_repo_dir / rel_path
+        workspace_path = candidate_dir / rel_path
         source_text = _read_text_or_empty(source_path)
         workspace_text = _read_text_or_empty(workspace_path)
         if source_text == workspace_text:
@@ -1093,17 +1156,13 @@ def _commands_text() -> str:
         [
             "# Allowed commands",
             "",
-            "- `uv run pytest tests/test_l2_student_training.py tests/test_l2_tuner.py "
-            "tests/test_l2_guard.py -q`",
-            "- `uv run ruff check src/darjeeling/layers/l2_student.py "
-            "src/darjeeling/compiler/l2_tuner.py "
-            "src/darjeeling/compiler/guard_optimizer.py tests/test_l2_student_training.py "
-            "tests/test_l2_tuner.py tests/test_l2_guard.py`",
-            "- `uv run edge-mvp l2 tune --traces <teacher-visible-jsonl> "
-            "--out <report.json>`",
-            "- Small cached experiments scoped to this workspace, if the required cache/data "
-            "exists.",
+            "- Inspect available train-visible context with "
+            "`uv run --project system/darjeeling python tools/inspect_context.py`.",
+            "- Validate the current `candidate/` overlay with "
+            "`uv run --project system/darjeeling python tools/run_checks.py`.",
+            "- Use local deterministic tooling or Optuna for numeric tuning when useful; "
+            "keep generated reports inside this workspace.",
             "",
-            "Do not run network commands from the L2 candidate workspace.",
+            "Do not run network commands from the L2 research workspace.",
         ]
     )

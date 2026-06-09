@@ -116,8 +116,8 @@ class Settings(BaseSettings):
         validation_alias="L2_AGENT_MODE",
     )
     l2_agent_codex_command: str = Field(default="codex", validation_alias="L2_AGENT_CODEX_COMMAND")
-    l2_agent_model: str | None = Field(default=None, validation_alias="L2_AGENT_MODEL")
-    l2_agent_timeout_s: float = Field(default=900.0, validation_alias="L2_AGENT_TIMEOUT_S")
+    l2_agent_model: str = Field(default="gpt-5.5", validation_alias="L2_AGENT_MODEL")
+    l2_agent_timeout_s: float = Field(default=7200.0, validation_alias="L2_AGENT_TIMEOUT_S")
     l2_agent_dry_run_patch: Path | None = Field(
         default=None,
         validation_alias="L2_AGENT_DRY_RUN_PATCH",
@@ -134,6 +134,12 @@ class Settings(BaseSettings):
         default=True,
         validation_alias="L2_AGENT_RUN_VALIDATION",
     )
+    l2_agent_ignore_user_config: bool = Field(
+        default=True,
+        validation_alias="L2_AGENT_IGNORE_USER_CONFIG",
+    )
+    l2_agent_ignore_rules: bool = Field(default=True, validation_alias="L2_AGENT_IGNORE_RULES")
+    l2_agent_ephemeral: bool = Field(default=True, validation_alias="L2_AGENT_EPHEMERAL")
     l2_frame_source: Literal["student", "retrieval"] = Field(
         default="retrieval",
         validation_alias="L2_FRAME_SOURCE",

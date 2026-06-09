@@ -171,9 +171,17 @@ L2 coding-agent path：
 
 - `L2_AGENT_MODE=disabled|dry-run|codex-cli` 控制 L4 coding agent 是否为 L2 生成 patch candidate。默认 disabled，不产生 live LLM cost。
 - `dry-run` 应用 fixture patch，只用于 harness 和 artifact 测试。
-- `codex-cli` 在隔离 Darjeeling workspace 中运行 Codex CLI，可修改 L2-owned Python source、tests 和模块设计文档，并调用 Optuna/pytest/ruff。
-- Agent context 只包含 teacher-visible L2 train scope、train-visible hard cases、current metrics、objective、constraints 和命令说明。
-- Agent context 还包含 `slot_error_summary.json`，从 teacher-visible train/hard cases 中汇总 L2 wrong accept，尤其标出 intent 正确但 slot 缺失、多余或值错误的样本。该 summary 用于把下一轮 L2 evolve 的焦点放在 frame exactness，而不是只扩大 coverage。
+- 用户决策：`codex-cli` 是 L2 evolve 主路径，优先级高于原 proposal 中更轻量的 direct config proposal。Codex 使用 GPT-5.5，独立于宿主机个人 config/rules，并使用更长 timeout；auth 仍由 Codex CLI 的 `CODEX_HOME` 机制提供。
+- `codex-cli` 在隔离 autoresearch-style workspace 中运行 Codex CLI。Agent 只能修改 `candidate/` 中的 L2-owned Python source、tests 和模块设计文档；Darjeeling 宿主仓库不直接暴露为可写目标。
+- Workspace 使用 `program.md + candidate/ + system/darjeeling/ + data/ + tools/`：
+  - `program.md` 是稳定任务说明。
+  - `candidate/` 是可 diff 的 L2 研究代码区。
+  - `system/darjeeling/` 是固定 system copy，用于 overlay candidate 后验证。
+  - `data/` 放 teacher-visible L2 train scope、train-visible hard cases、current metrics、objective、constraints 和命令说明。
+  - `tools/inspect_context.py` 和 `tools/run_checks.py` 是标准本地入口。
+- Prompt stdin 保持稳定短前缀，只要求 agent 读取 `program.md`。动态 context 不进入 prompt，而是作为 `data/` 文件由 agent 自主读取，以减少上下文膨胀并最大化 KV cache 复用机会。
+- `data/slot_error_summary.json` 从 teacher-visible train/hard cases 中汇总 L2 wrong accept，尤其标出 intent 正确但 slot 缺失、多余或值错误的样本。该 summary 用于把下一轮 L2 evolve 的焦点放在 frame exactness，而不是只扩大 coverage。
+- 调参由 Optuna 或本地 deterministic tuner 负责；L4 coding agent 负责真正需要 generalized intelligence 的代码、特征、模型 family、calibration、accept policy、验证协议和 search-space 设计。
 - 当前 compiler 只记录 agent patch artifact，不在同一 Python 进程中热加载 patch：`candidate_metrics["l2_agent_patch_runtime_applied"] = false`。真实采用 patch 必须由外层开发循环应用、提交 Git、重启实验。
 
 Optuna tuning path：

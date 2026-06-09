@@ -407,10 +407,11 @@ def test_compiler_generation_records_l2_agent_patch_artifacts(tmp_path: Path) ->
     patch_path.write_text(
         "\n".join(
             [
-                "diff --git a/tests/test_l2_agent_marker.py b/tests/test_l2_agent_marker.py",
+                "diff --git a/candidate/tests/test_l2_agent_marker.py "
+                "b/candidate/tests/test_l2_agent_marker.py",
                 "new file mode 100644",
                 "--- /dev/null",
-                "+++ b/tests/test_l2_agent_marker.py",
+                "+++ b/candidate/tests/test_l2_agent_marker.py",
                 "@@ -0,0 +1 @@",
                 "+MARKER = 'compiler dry run marker'",
                 "",
@@ -440,6 +441,21 @@ def test_compiler_generation_records_l2_agent_patch_artifacts(tmp_path: Path) ->
     assert "l2_agent_transcript" in manifest.artifact_paths
     assert "l2_agent_provenance" in manifest.artifact_paths
     l2_agent_dir = tmp_path / "artifacts" / manifest.artifact_paths["l2_agent_dir"]
+    assert (l2_agent_dir / "workspace" / "l2_research" / "program.md").exists()
+    assert (
+        l2_agent_dir
+        / "workspace"
+        / "l2_research"
+        / "candidate"
+        / "tests/test_l2_agent_marker.py"
+    ).exists()
+    workspace_manifest = json.loads(
+        (
+            l2_agent_dir / "workspace" / "l2_research" / "workspace_manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert workspace_manifest["schema_version"] == "l2-research-workspace-v1"
+    assert workspace_manifest["commands"]["run_checks"].endswith("tools/run_checks.py")
     context_families = json.loads(
         (l2_agent_dir / "contexts" / "l2_context_families.json").read_text(
             encoding="utf-8"

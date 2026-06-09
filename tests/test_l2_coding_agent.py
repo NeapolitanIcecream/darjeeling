@@ -73,10 +73,11 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     patch_path.write_text(
         "\n".join(
             [
-                "diff --git a/tests/test_l2_agent_marker.py b/tests/test_l2_agent_marker.py",
+                "diff --git a/candidate/tests/test_l2_agent_marker.py "
+                "b/candidate/tests/test_l2_agent_marker.py",
                 "new file mode 100644",
                 "--- /dev/null",
-                "+++ b/tests/test_l2_agent_marker.py",
+                "+++ b/candidate/tests/test_l2_agent_marker.py",
                 "@@ -0,0 +1 @@",
                 "+MARKER = 'dry run marker'",
                 "",
@@ -100,8 +101,15 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     )
 
     assert result.succeeded
-    assert (result.workspace_repo_dir / "src/darjeeling/layers/l2_student.py").exists()
-    assert (result.workspace_repo_dir / "tests/test_l2_agent_marker.py").read_text(
+    candidate_dir = result.workspace_repo_dir / "candidate"
+    system_dir = result.workspace_repo_dir / "system" / "darjeeling"
+    data_dir = result.workspace_repo_dir / "data"
+    assert (result.workspace_repo_dir / "program.md").exists()
+    assert (result.workspace_repo_dir / "workspace_manifest.json").exists()
+    assert (result.workspace_repo_dir / "tools" / "run_checks.py").exists()
+    assert (candidate_dir / "src/darjeeling/layers/l2_student.py").exists()
+    assert (system_dir / "src/darjeeling/layers/l2_student.py").exists()
+    assert (candidate_dir / "tests/test_l2_agent_marker.py").read_text(
         encoding="utf-8"
     ) == "MARKER = 'dry run marker'\n"
     assert result.prompt_path.exists()
@@ -110,36 +118,40 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     assert result.provenance_path.exists()
     assert "test_l2_agent_marker.py" in result.diff_path.read_text(encoding="utf-8")
     prompt_text = result.prompt_path.read_text(encoding="utf-8")
-    workspace_context_dir = result.workspace_repo_dir / "agent_contexts"
-    assert "agent_contexts/agent_brief.md" in prompt_text
-    assert "Workspace context directory" in prompt_text
-    assert str(workspace_context_dir.resolve()) in prompt_text
-    assert (workspace_context_dir / "agent_brief.md").exists()
-    assert (workspace_context_dir / "l2_context_families.json").exists()
-    assert (workspace_context_dir / "slot_error_summary.json").exists()
-    agent_brief = (workspace_context_dir / "agent_brief.md").read_text(encoding="utf-8")
-    assert "bounded evolve job" in agent_brief
-    assert "l2_examples" in agent_brief
-    assert "alarm_set|time" in agent_brief
-    assert "Slot-level L2 failure summary" in agent_brief
-    assert "missing_slot_counts" in agent_brief
+    assert prompt_text == (
+        "Read `program.md` in this workspace and complete one bounded L2 research iteration."
+    )
+    assert "agent_contexts" not in prompt_text
+    assert "l2_context_families" not in prompt_text
+    assert "r-slot" not in prompt_text
+    program_text = (result.workspace_repo_dir / "program.md").read_text(encoding="utf-8")
+    assert "`candidate/` is the only editable research code area" in program_text
+    assert "tools/run_checks.py" in program_text
     context_families = json.loads(
         (result.context_dir / "l2_context_families.json").read_text(encoding="utf-8")
     )
-    workspace_context_families = json.loads(
-        (workspace_context_dir / "l2_context_families.json").read_text(encoding="utf-8")
-    )
+    workspace_context_families = json.loads((data_dir / "l2_context_families.json").read_text())
     assert context_families["schema_version"] == "l2-context-families-v1"
     assert workspace_context_families == context_families
     assert context_families["families"][0]["family_id"] == "alarm_set|time"
     slot_error_summary = json.loads(
-        (workspace_context_dir / "slot_error_summary.json").read_text(encoding="utf-8")
+        (data_dir / "slot_error_summary.json").read_text(encoding="utf-8")
     )
     assert slot_error_summary["schema_version"] == "l2-slot-error-summary-v1"
     assert slot_error_summary["l2_wrong_accept_count"] == 1
     assert slot_error_summary["l2_intent_correct_slot_mismatch_count"] == 1
     assert slot_error_summary["missing_slot_counts"] == {"list_name": 1}
     assert slot_error_summary["examples"][0]["l2_metadata"]["guard_probability"] == 0.95
+    manifest = json.loads(
+        (result.workspace_repo_dir / "workspace_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["schema_version"] == "l2-research-workspace-v1"
+    assert manifest["candidate_dir"] == "candidate"
+    assert manifest["system_repo_dir"] == "system/darjeeling"
+    assert manifest["data_dir"] == "data"
+    assert "src/darjeeling/layers/l2_student.py" in manifest["candidate_paths"]
+    assert "slot_error_summary.json" in manifest["data_files"]
+    assert manifest["commands"]["run_checks"].endswith("tools/run_checks.py")
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l2-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"
@@ -183,7 +195,7 @@ def test_l2_coding_agent_codex_cli_mode_records_transcript_and_report(
                 "prompt = sys.stdin.read()",
                 "out = pathlib.Path(sys.argv[sys.argv.index('-o') + 1])",
                 "out.write_text('fake L2 agent report\\n')",
-                "print(json.dumps({'event': 'done', 'prompt_seen': 'L2 Python' in prompt}))",
+                "print(json.dumps({'event': 'done', 'prompt_seen': 'program.md' in prompt}))",
             ]
         ),
         encoding="utf-8",
@@ -213,6 +225,9 @@ def test_l2_coding_agent_codex_cli_mode_records_transcript_and_report(
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["transcript"]["event_types"] == {"done": 1}
     assert provenance["commands"][0]["return_code"] == 0
+    assert provenance["ignore_user_config"] is True
+    assert provenance["ignore_rules"] is True
+    assert provenance["ephemeral"] is True
     command = provenance["commands"][0]["command"]
     assert command[:8] == [
         str(fake_codex),
@@ -224,6 +239,10 @@ def test_l2_coding_agent_codex_cli_mode_records_transcript_and_report(
         "never",
         "exec",
     ]
+    assert "--ignore-user-config" in command
+    assert "--ignore-rules" in command
+    assert "--ephemeral" in command
+    assert "--skip-git-repo-check" in command
     assert Path(command[command.index("--cd") + 1]).is_absolute()
     assert Path(command[command.index("-o") + 1]).is_absolute()
 

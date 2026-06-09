@@ -56,7 +56,12 @@ def test_default_prompt_cache_retention_matches_live_provider_requirement() -> N
     assert settings.prompt_cache_retention == "24h"
     assert settings.l2_training_scope == "teacher_train"
     assert settings.l2_agent_mode == "disabled"
+    assert settings.l2_agent_model == "gpt-5.5"
+    assert settings.l2_agent_timeout_s == 7200.0
     assert settings.l2_agent_run_validation is True
+    assert settings.l2_agent_ignore_user_config is True
+    assert settings.l2_agent_ignore_rules is True
+    assert settings.l2_agent_ephemeral is True
     assert settings.l2_frame_source == "retrieval"
     assert settings.l2_tuning_mode == "disabled"
     assert settings.l2_tuning_trials == 16
