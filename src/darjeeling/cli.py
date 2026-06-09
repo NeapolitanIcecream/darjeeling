@@ -7,7 +7,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
@@ -49,6 +49,7 @@ from darjeeling.layers.l2_student import (
     train_l2_student,
     training_examples_from_teacher_traces,
 )
+from darjeeling.layers.l2_target import load_target_module, target_config_overrides
 from darjeeling.layers.l3_local_slm import (
     DEFAULT_L3_BENCHMARK_UTTERANCES,
     L3LocalSLMLayer,
@@ -69,7 +70,7 @@ from darjeeling.runtime.replay import (
     write_run_settings,
 )
 from darjeeling.runtime.trace import read_traces
-from darjeeling.schemas import traces_to_teacher_view
+from darjeeling.schemas import TeacherTrace, traces_to_teacher_view
 from darjeeling.settings import load_settings
 
 app = typer.Typer(no_args_is_help=True)
@@ -739,6 +740,203 @@ def l2_target_evolve(
         traces=traces_to_teacher_view(trace_records),
     )
     console.print_json(data=summary)
+
+
+@l2_app.command("promote-target")
+def l2_promote_target(
+    target_run: Annotated[
+        Path,
+        typer.Option(help="Output directory from `edge-mvp l2 target-evolve`."),
+    ],
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Replay run directory whose artifact manifest should receive L2 target."),
+    ],
+    allow_non_adopted: Annotated[
+        bool,
+        typer.Option(
+            help=(
+                "Stage the best non-adopted target candidate for outer replay. "
+                "Default only promotes target runs that passed inner adoption gates."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Promote an adopted L2 target-evolve result into a replay artifact manifest."""
+
+    try:
+        manifest = _promote_l2_target_run(
+            target_run=target_run,
+            run_dir=run_dir,
+            allow_non_adopted=allow_non_adopted,
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        error_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    console.print_json(data=manifest.model_dump(mode="json"))
+
+
+def _promote_l2_target_run(
+    *,
+    target_run: Path,
+    run_dir: Path,
+    allow_non_adopted: bool = False,
+) -> ArtifactManifest:
+    summary_path = target_run / "summary.json"
+    if not summary_path.exists():
+        raise FileNotFoundError(f"L2 target summary is missing: {summary_path}")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    adoption_decision = summary.get("adoption_decision") or {}
+    inner_adopted = bool(adoption_decision.get("adopted"))
+    selected_round_payload: dict[str, Any] | None = None
+    if inner_adopted:
+        selected_round = adoption_decision.get("round")
+        if not isinstance(selected_round, int):
+            raise ValueError("L2 target adopted round is missing")
+        promotion_reason = "explicit L2 target adoption passed gates"
+    elif allow_non_adopted:
+        best_round = summary.get("best_round")
+        if not isinstance(best_round, dict):
+            raise ValueError("L2 target run has no best round to stage")
+        selected_round = best_round.get("round")
+        if not isinstance(selected_round, int):
+            raise ValueError("L2 target best round is missing")
+        selected_round_payload = best_round
+        promotion_reason = "explicit L2 target candidate staged for outer replay"
+    else:
+        raise ValueError("L2 target run is not adopted; refusing to promote")
+
+    workspace_root = target_run / "workspace" / "l2_target"
+    if not workspace_root.exists() and summary.get("workspace"):
+        workspace_root = Path(str(summary["workspace"]))
+    target_dir = workspace_root / "target"
+    target_module_path = target_dir / "target_l2.py"
+    train_path = workspace_root / "data" / "train.jsonl"
+    if not target_module_path.exists():
+        raise FileNotFoundError(f"L2 target module is missing: {target_module_path}")
+    if not train_path.exists():
+        raise FileNotFoundError(f"L2 target train split is missing: {train_path}")
+
+    train_traces = [
+        TeacherTrace.model_validate_json(line)
+        for line in train_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    target_module = load_target_module(target_module_path)
+    l2_config = L2StudentConfig(**target_config_overrides(target_module))
+    l2_bundle = train_l2_student(
+        training_examples_from_teacher_traces(train_traces),
+        l2_config,
+    )
+
+    store = ArtifactStore(run_dir / "artifacts")
+    current_manifest = store.load_current_manifest()
+    generation = 1 if current_manifest is None else current_manifest.generation + 1
+    generation_dir = store.generation_dir(generation)
+    l2_dir = generation_dir / "l2"
+    l2_dir.mkdir(parents=True, exist_ok=True)
+    promoted_bundle_path = l2_dir / "l2_student.joblib"
+    promoted_target_dir = l2_dir / "target"
+    if promoted_target_dir.exists():
+        shutil.rmtree(promoted_target_dir)
+    shutil.copytree(target_dir, promoted_target_dir)
+    l2_bundle.save(promoted_bundle_path)
+
+    artifact_paths = dict(current_manifest.artifact_paths) if current_manifest else {}
+    artifact_paths["l2_student"] = _artifact_path_relative_to_store(
+        store,
+        promoted_bundle_path,
+    )
+    artifact_paths["l2_target"] = _artifact_path_relative_to_store(
+        store,
+        promoted_target_dir / "target_l2.py",
+    )
+
+    if selected_round_payload is None:
+        selected_round_payload = next(
+            (
+                round_payload
+                for round_payload in summary.get("rounds", [])
+                if round_payload.get("round") == selected_round
+            ),
+            None,
+        )
+    candidate_metrics = (
+        dict(current_manifest.candidate_metrics) if current_manifest is not None else {}
+    )
+    candidate_metrics.update(
+        {
+            "l2_target_runtime_promoted": True,
+            "l2_target_inner_adopted": inner_adopted,
+            "l2_target_staged_for_outer_replay": not inner_adopted,
+            "l2_target_requires_outer_replay": True,
+            "l2_target_source_run": str(target_run),
+            "l2_target_adopted_round": selected_round if inner_adopted else None,
+            "l2_target_staged_round": selected_round,
+            "l2_target_mode": summary.get("mode"),
+            "l2_target_data_split": summary.get("data_split"),
+            "l2_target_selection_decision": summary.get("selection_decision"),
+            "l2_target_adoption_decision": adoption_decision,
+            "l2_target_training_traces": len(train_traces),
+            "l2_target_training_source": str(train_path),
+            "l2_target_inner_validation": (
+                selected_round_payload.get("inner_validation")
+                if isinstance(selected_round_payload, dict)
+                else None
+            ),
+            "l2_target_selection_holdout": (
+                selected_round_payload.get("selection_holdout")
+                if isinstance(selected_round_payload, dict)
+                else None
+            ),
+            "l2_target_promotion_holdout": (
+                selected_round_payload.get("promotion_holdout")
+                if isinstance(selected_round_payload, dict)
+                else None
+            ),
+            "l2_config": l2_config.model_dump(mode="json"),
+            "l2_examples": len(train_traces),
+            "l2_trained": True,
+            "l2_training_scope": "l2_target_workspace_train",
+            "l2_training_traces": len(train_traces),
+        }
+    )
+    promotion_record_path = store.write_generation_json(
+        generation,
+        "promotion.json",
+        {
+            "artifact_set_id": f"gen_{generation:03d}_l2_target",
+            "generation": generation,
+            "promoted": True,
+            "promotion_reason": promotion_reason,
+            "l2_target_summary": {
+                "source_run": str(target_run),
+                "inner_adopted": inner_adopted,
+                "adoption_decision": adoption_decision,
+                "selection_decision": summary.get("selection_decision"),
+                "selected_round": selected_round,
+            },
+        },
+    )
+    artifact_paths["promotion_record"] = _artifact_path_relative_to_store(
+        store,
+        promotion_record_path,
+    )
+    manifest = ArtifactManifest(
+        artifact_set_id=f"gen_{generation:03d}_l2_target",
+        generation=generation,
+        parent_artifact_set_id=current_manifest.artifact_set_id if current_manifest else None,
+        schema_versions={
+            "artifact_manifest": "artifact-manifest-v1",
+            "l2_target": "l2-target-runtime-v1",
+        },
+        artifact_paths=artifact_paths,
+        candidate_metrics=candidate_metrics,
+        promotion_reason=promotion_reason,
+        l3_mode=current_manifest.l3_mode if current_manifest else "disabled",
+    )
+    store.promote(manifest)
+    return ArtifactStore(run_dir / "artifacts").load_current_manifest() or manifest
 
 
 @experiments_app.command("main-evolution")

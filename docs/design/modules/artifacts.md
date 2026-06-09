@@ -30,6 +30,8 @@ runs/<id>/artifacts/
         l2_config.json
         l2_student.joblib
         l2_guard.joblib
+        target/
+          target_l2.py
       guard/
         guard_candidate.json
       l3/
@@ -66,6 +68,15 @@ runs/<id>/artifacts/
 4. 用 atomic replace 更新 `manifest.current.json`。
 
 ## L1 native artifact
+
+## L2 target artifact
+
+当 `edge-mvp l2 promote-target` 提升一个通过 target-evolve adoption gate 的候选时，manifest 同时记录：
+
+- `artifact_paths["l2_student"]`: 用 target workspace 的 visible train split 和 target config 重新训练得到的 L2 bundle。
+- `artifact_paths["l2_target"]`: copied target runtime module，通常是 `generations/gen_*/l2/target/target_l2.py`。
+
+Runtime replay 和 compiler offline replay 都必须在加载 `l2_student` 后检查 `l2_target`。若存在，L2 运行时使用 target wrapper：先执行 bundle prediction，再执行 `postprocess_frame(...)`，再应用 guard accept，最后允许 `accept_prediction(...)` veto。`l2_target` 不进入 Darjeeling core；它是 target-dependent artifact。
 
 ## Hard buffer artifact
 

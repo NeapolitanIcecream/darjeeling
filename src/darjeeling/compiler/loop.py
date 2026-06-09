@@ -218,6 +218,7 @@ def run_compiler_generation(
     if not settings.l2_enabled:
         candidate_l2_bundle = None
         artifact_paths.pop("l2_student", None)
+        artifact_paths.pop("l2_target", None)
         candidate_metrics["l2_trained"] = False
         candidate_metrics["l2_training_error"] = "L2 disabled by settings"
     elif settings.l4_proposal_mode == "live" and l2_examples:
@@ -446,6 +447,10 @@ def run_compiler_generation(
             l2_path = l2_dir / "l2_student.joblib"
             l2_bundle.save(l2_path)
             artifact_paths["l2_student"] = _artifact_relative_path(store.root, l2_path)
+            if artifact_paths.pop("l2_target", None) is not None:
+                candidate_metrics["l2_target_dropped_reason"] = (
+                    "compiler retrained L2 bundle without target-aware adoption"
+                )
             candidate_metrics["l2_trained"] = True
             candidate_l2_bundle = l2_bundle
             generated_artifacts = True

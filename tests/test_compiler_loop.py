@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from darjeeling.artifacts.store import ArtifactStore
+from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.compiler.l2_tuner import L2TuneResult
 from darjeeling.compiler.loop import run_compiler_generation
 from darjeeling.data.massive import DataRecord
@@ -382,6 +382,38 @@ def test_compiler_generation_respects_no_l2_ablation(tmp_path: Path) -> None:
     assert metrics["l2_trained"] is False
     assert metrics["l2_training_error"] == "L2 disabled by settings"
     assert "l2_student" not in result.manifest.artifact_paths
+
+
+def test_compiler_generation_drops_l2_target_when_retraining_core_l2(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    target_path = store.generation_dir(1) / "l2" / "target" / "target_l2.py"
+    target_path.parent.mkdir(parents=True)
+    target_path.write_text("def postprocess_frame(u, f, m): return f\n", encoding="utf-8")
+    store.promote(
+        ArtifactManifest(
+            artifact_set_id="gen_001_l2_target",
+            generation=1,
+            artifact_paths={
+                "l2_target": "generations/gen_001/l2/target/target_l2.py",
+            },
+            promotion_reason="test fixture",
+        )
+    )
+
+    result = run_compiler_generation(
+        run_dir=tmp_path,
+        traces=_two_intent_traces(),
+        settings=load_settings(),
+    )
+
+    assert result.manifest is not None
+    assert "l2_student" in result.manifest.artifact_paths
+    assert "l2_target" not in result.manifest.artifact_paths
+    assert result.manifest.candidate_metrics["l2_target_dropped_reason"] == (
+        "compiler retrained L2 bundle without target-aware adoption"
+    )
 
 
 def test_compiler_generation_respects_no_guard_ablation(tmp_path: Path) -> None:

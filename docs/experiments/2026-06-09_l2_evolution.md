@@ -779,3 +779,146 @@ Interpretation:
 - The result is still a 500-row target-loop proof, not a final system result.
   The next step is to replay the adopted target behavior at 3k/10k scale or wire
   target adoption into the artifact promotion path.
+
+## Target artifact promotion and 3k replay
+
+The adopted email-from target was wired into runtime artifacts:
+
+- `l2_target` is now a manifest artifact path next to `l2_student`.
+- Runtime replay and compiler offline replay load `TargetL2Layer` whenever
+  `artifact_paths["l2_target"]` exists.
+- `edge-mvp l2 promote-target` copies `target/`, retrains the target L2 bundle
+  from the target workspace train split, and writes a new generation.
+- If a normal compiler generation retrains core L2 without target-aware
+  adoption, it drops inherited `l2_target` and records
+  `l2_target_dropped_reason`.
+
+The first 3k replay accidentally used the default `compile_every=500`, which
+allowed the compiler to retrain a normal L2 bundle mid-run while inheriting the
+old target wrapper. That run is not a valid target-only comparison and is kept
+only as bug evidence:
+
+- Run: `runs/l2-target-postprocess-3k-r1`.
+- Layer counts: `L0=1807, L1=16, L2=15, L3=0, L4=1162`.
+- Frame EM: `0.997333`.
+- L2 accepted: 15 / 7 correct / 8 wrong.
+
+The fair target-only replay used `--compile-every 999999`:
+
+```bash
+uv run edge-mvp l2 promote-target \
+  --target-run runs/l2-target-evolve-email-from-postprocess-r2 \
+  --run-dir runs/l2-target-postprocess-3k-r2
+
+uv run edge-mvp run \
+  --run-dir runs/l2-target-postprocess-3k-r2 \
+  --max-requests 3000 \
+  --compile-every 999999 \
+  --teacher cache \
+  --data-dir data/processed/massive_en_us
+```
+
+Control from the same starting artifacts, without target:
+
+- Run: `runs/l2-list-fallback-final-3k-r1`.
+- Layer counts: `L0=577, L1=19, L2=0, L3=0, L4=2404`.
+- Frame EM: `1.0`.
+
+Target replay:
+
+- Run: `runs/l2-target-postprocess-3k-r2`.
+- Layer counts: `L0=577, L1=19, L2=21, L3=0, L4=2383`.
+- Frame EM: `0.996333`.
+- L2 accepted: 21 / 10 correct / 11 wrong.
+- Failure mode: the target code fixed some `email_query from <person>` slots,
+  but the lowered threshold also accepted unrelated `iot_coffee`,
+  `iot_hue_lightdim`, and `lists_query` errors. It also truncated
+  `jane doe` to `jane`.
+
+This invalidated the earlier 500-row adoption as a final quality claim. Inner
+target adoption is a useful prefilter, but e2e replay remains the authority.
+
+## Email-query postprocess plus veto
+
+The next target patch made two changes:
+
+- `postprocess_frame` extracts multi-token `from <person>` spans.
+- `accept_prediction` vetoes all non-`email_query` accepts and only allows
+  empty-slot or `person`-slot `email_query` frames.
+
+Patch:
+
+```text
+docs/experiments/patches/l2_target_email_query_postprocess_veto_r2.patch
+```
+
+500-row target-evolve command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-email-query-postprocess-veto-r3 \
+  --rounds 1 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_email_query_postprocess_veto_r2.patch \
+  --max-traces 500 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Inner validation: 2 accepted / 2 correct / 0 wrong.
+- Private selection: 0 accepted / 0 wrong, with one vetoed accept.
+- Private promotion: 1 accepted / 1 correct / 0 wrong.
+- `adoption_decision.adopted=false` because selection had no accepted coverage.
+
+A 3000-row target-evolve split with the same patch also did not pass adoption:
+using a larger 1800-example train split changed the core L2 bundle and produced
+no useful promotion coverage. This shows that target code, train split, and
+guard threshold are a coupled artifact, not independent knobs.
+
+For outer replay diagnosis, `promote-target` now supports explicit staging:
+
+```bash
+uv run edge-mvp l2 promote-target \
+  --target-run runs/l2-target-evolve-email-query-postprocess-veto-r3 \
+  --run-dir runs/l2-target-postprocess-veto-3k-r1 \
+  --allow-non-adopted
+
+uv run edge-mvp run \
+  --run-dir runs/l2-target-postprocess-veto-3k-r1 \
+  --max-requests 3000 \
+  --compile-every 999999 \
+  --teacher cache \
+  --data-dir data/processed/massive_en_us
+```
+
+Manifest semantics:
+
+- `promotion_reason = explicit L2 target candidate staged for outer replay`.
+- `l2_target_inner_adopted = false`.
+- `l2_target_staged_for_outer_replay = true`.
+- `l2_training_scope = l2_target_workspace_train`.
+- `l2_target_training_traces = 300`.
+
+3k replay result:
+
+- Run: `runs/l2-target-postprocess-veto-3k-r1`.
+- Layer counts: `L0=577, L1=19, L2=10, L3=0, L4=2394`.
+- Frame EM: `3000/3000 = 1.0`.
+- L2 accepted: 10 / 10 correct / 0 wrong.
+- Target vetoed 11 would-be accepts.
+- Compared with same-artifact control, this removes 10 L4 calls without any
+  observed frame regression.
+
+Interpretation:
+
+- This is a safe but narrow improvement. It proves the target wrapper/staging
+  path can produce a real e2e L2 gain, but it does not solve the broad L2
+  quality bottleneck.
+- The inner target selection gate is too brittle for very narrow candidates
+  when selection holdout is only 50 examples. It should remain a useful
+  prefilter, not the sole authority.
+- The outer replay path should be treated as final evidence. Non-adopted
+  candidate staging is acceptable only when manifest metadata makes that status
+  explicit and the run is isolated.

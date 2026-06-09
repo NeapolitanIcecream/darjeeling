@@ -136,6 +136,96 @@ def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:
     assert trace["final_frame"]["intent"] == "music_play"
 
 
+def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    l2_dir = run_dir / "artifacts" / "generations" / "gen_001" / "l2"
+    target_dir = l2_dir / "target"
+    data_dir.mkdir()
+    target_dir.mkdir(parents=True)
+    (data_dir / "train.jsonl").write_text(
+        DataRecord(
+            request_id="r1",
+            locale="en-US",
+            split="train",
+            utterance="play some jazz",
+            annotated_utterance="play some jazz",
+            template="play some jazz",
+            gold_frame=Frame(intent="music_play", slots={"genre": "jazz"}),
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "teacher_cache.jsonl").write_text(
+        json.dumps(
+            {
+                "utterance": "play some jazz",
+                "teacher_frame": {
+                    "intent": "music_play",
+                    "slots": {"genre": "jazz"},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    examples = [
+        L2TrainingExample(utterance="play some jazz", teacher_frame=Frame(intent="music_play")),
+        L2TrainingExample(utterance="play music", teacher_frame=Frame(intent="music_play")),
+        L2TrainingExample(utterance="start playlist", teacher_frame=Frame(intent="music_play")),
+        L2TrainingExample(utterance="set alarm for seven", teacher_frame=Frame(intent="alarm_set")),
+        L2TrainingExample(utterance="wake me at eight", teacher_frame=Frame(intent="alarm_set")),
+        L2TrainingExample(utterance="alarm at nine", teacher_frame=Frame(intent="alarm_set")),
+    ]
+    bundle = train_l2_student(
+        examples,
+        L2StudentConfig(accept_threshold=0.0, min_examples=4),
+    )
+    bundle.save(l2_dir / "l2_student.joblib")
+    (target_dir / "target_l2.py").write_text(
+        """
+def postprocess_frame(utterance, frame, metadata):
+    del metadata
+    if utterance == "play some jazz":
+        updated = dict(frame)
+        updated["slots"] = {"genre": "jazz"}
+        return updated
+    return frame
+""",
+        encoding="utf-8",
+    )
+    ArtifactStore(run_dir / "artifacts").promote(
+        ArtifactManifest(
+            artifact_set_id="gen_001_l2_target",
+            generation=1,
+            artifact_paths={
+                "l2_student": "generations/gen_001/l2/l2_student.joblib",
+                "l2_target": "generations/gen_001/l2/target/target_l2.py",
+            },
+            promotion_reason="test fixture",
+        )
+    )
+
+    summary = run_replay(
+        stream="sequential",
+        max_requests=1,
+        teacher_mode="cache",
+        run_dir=run_dir,
+        data_dir=data_dir,
+        settings=load_settings(),
+    )
+
+    assert summary.layer_counts["L2"] == 1
+    trace = json.loads((run_dir / "traces.jsonl").read_text(encoding="utf-8"))
+    assert trace["chosen_layer"] == "L2"
+    assert trace["final_frame"] == {
+        "intent": "music_play",
+        "slots": {"genre": "jazz"},
+        "is_abstain": False,
+    }
+    assert trace["layer_results"][2]["metadata"]["target_postprocessed"] is True
+
+
 def test_run_replay_loads_promoted_l3_prompt_artifact(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     run_dir = tmp_path / "run"

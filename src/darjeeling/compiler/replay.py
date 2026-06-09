@@ -8,8 +8,10 @@ from statistics import quantiles
 from darjeeling.artifacts.store import ArtifactManifest, LayerDelta
 from darjeeling.compiler.objective import ObjectiveMetrics, objective_score
 from darjeeling.data.frames import normalize_utterance
+from darjeeling.layers.base import RuntimeLayer
 from darjeeling.layers.l1_rust_programbank import RustL1Worker, build_l1_binary
-from darjeeling.layers.l2_student import L2StudentBundle, guard_accepts
+from darjeeling.layers.l2_student import L2StudentBundle, L2StudentLayer
+from darjeeling.layers.l2_target import TargetL2Layer
 from darjeeling.runtime.cost import ReplayCostModel
 from darjeeling.schemas import Frame, TeacherTrace
 
@@ -57,6 +59,7 @@ class OfflineArtifactSet:
     l1_crate_dir: Path | None = None
     l1_worker_timeout_s: float = 5.0
     l2_bundle: L2StudentBundle | None = None
+    l2_target_path: Path | None = None
 
     @property
     def artifact_complexity(self) -> float:
@@ -64,6 +67,7 @@ class OfflineArtifactSet:
             sqrt(len(self.l0_cache))
             + (1 if self.l1_crate_dir is not None else 0)
             + (1 if self.l2_bundle is not None else 0)
+            + (1 if self.l2_target_path is not None else 0)
         )
 
 
@@ -175,6 +179,10 @@ def load_offline_artifact_set(
     l2_path_text = manifest.artifact_paths.get("l2_student")
     if l2_path_text:
         l2_bundle = L2StudentBundle.load(_artifact_path(artifacts_root, l2_path_text))
+    l2_target_path: Path | None = None
+    l2_target_path_text = manifest.artifact_paths.get("l2_target")
+    if l2_target_path_text:
+        l2_target_path = _artifact_path(artifacts_root, l2_target_path_text)
 
     l1_crate_dir = default_l1_crate_dir
     l1_path_text = manifest.artifact_paths.get("l1_crate_dir")
@@ -186,6 +194,7 @@ def load_offline_artifact_set(
         l1_crate_dir=l1_crate_dir,
         l1_worker_timeout_s=l1_worker_timeout_s,
         l2_bundle=l2_bundle,
+        l2_target_path=l2_target_path,
     )
 
 
@@ -207,6 +216,7 @@ def evaluate_offline_artifact_set(
     wrong_accepts = 0
 
     l1_worker = _build_l1_worker(artifact_set)
+    l2_layer = _build_l2_layer(artifact_set)
     try:
         for trace in labeled:
             expected = trace.teacher_frame
@@ -216,6 +226,7 @@ def evaluate_offline_artifact_set(
                 artifact_set,
                 expected,
                 l1_worker=l1_worker,
+                l2_layer=l2_layer,
             )
             correct = frame == expected
             frame_matches += int(correct)
@@ -351,6 +362,7 @@ def _offline_route(
     fallback_frame: Frame,
     *,
     l1_worker: RustL1Worker | None,
+    l2_layer: RuntimeLayer | None,
 ) -> tuple[str, Frame, bool]:
     normalized = normalize_utterance(trace.utterance)
     if normalized in artifact_set.l0_cache:
@@ -359,14 +371,10 @@ def _offline_route(
         l1_response = l1_worker.answer(trace.utterance)
         if l1_response.accepted and l1_response.frame is not None:
             return "L1", l1_response.frame, True
-    if artifact_set.l2_bundle is not None:
-        prediction = artifact_set.l2_bundle.predict(trace.utterance)
-        accepted = guard_accepts(
-            prediction.guard_probability,
-            artifact_set.l2_bundle.config.accept_threshold,
-        )
-        if accepted:
-            return "L2", prediction.frame, True
+    if l2_layer is not None:
+        l2_result = l2_layer.try_answer(trace.utterance)
+        if l2_result.accepted and l2_result.frame is not None:
+            return "L2", l2_result.frame, True
     if l3_result := _recorded_l3_accept(trace):
         return "L3", l3_result, True
     return "L4", fallback_frame, False
@@ -411,3 +419,11 @@ def _build_l1_worker(artifact_set: OfflineArtifactSet) -> RustL1Worker | None:
     worker = RustL1Worker(binary_path, timeout_s=artifact_set.l1_worker_timeout_s)
     worker.start()
     return worker
+
+
+def _build_l2_layer(artifact_set: OfflineArtifactSet) -> RuntimeLayer | None:
+    if artifact_set.l2_bundle is None:
+        return None
+    if artifact_set.l2_target_path is not None:
+        return TargetL2Layer(artifact_set.l2_bundle, artifact_set.l2_target_path)
+    return L2StudentLayer(artifact_set.l2_bundle)

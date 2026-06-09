@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
@@ -8,7 +7,6 @@ import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Literal
 
 from darjeeling.layers.l2_student import (
@@ -16,7 +14,13 @@ from darjeeling.layers.l2_student import (
     train_l2_student,
     training_examples_from_teacher_traces,
 )
-from darjeeling.schemas import Frame, TeacherTrace
+from darjeeling.layers.l2_target import (
+    load_target_module,
+    target_accept_prediction,
+    target_config_overrides,
+    target_postprocess_frame,
+)
+from darjeeling.schemas import TeacherTrace
 
 L2TargetEvolutionMode = Literal["dry-run", "codex-cli", "local-search"]
 L2TargetSearchSpace = Literal["compact", "wide"]
@@ -391,8 +395,8 @@ def evaluate_target_workspace(
     else:
         validation_path = workspace_root / "data" / f"{split}.jsonl"
     validation_traces = _read_teacher_jsonl(validation_path)
-    target_module = _load_target_module(workspace_root / "target" / "target_l2.py")
-    overrides = _target_config_overrides(target_module)
+    target_module = load_target_module(workspace_root / "target" / "target_l2.py")
+    overrides = target_config_overrides(target_module)
     config = L2StudentConfig(**overrides)
     bundle = train_l2_student(training_examples_from_teacher_traces(train_traces), config)
 
@@ -408,7 +412,7 @@ def evaluate_target_workspace(
             continue
         prediction = bundle.predict(trace.utterance)
         metadata = prediction.model_dump(mode="json")
-        frame = _target_postprocess_frame(
+        frame = target_postprocess_frame(
             target_module,
             utterance=trace.utterance,
             frame=prediction.frame,
@@ -418,7 +422,7 @@ def evaluate_target_workspace(
             bundle.config.runtime_enabled
             and prediction.guard_probability >= bundle.config.accept_threshold
         )
-        should_accept = _target_accept_prediction(
+        should_accept = target_accept_prediction(
             target_module,
             utterance=trace.utterance,
             frame=frame,
@@ -1254,65 +1258,6 @@ def _read_teacher_jsonl(path: Path) -> list[TeacherTrace]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-
-
-def _load_target_module(path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location("target_l2", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot import target module: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _target_config_overrides(module: ModuleType) -> dict[str, Any]:
-    function = getattr(module, "config_overrides", None)
-    if function is None:
-        return {}
-    value = function()
-    if not isinstance(value, dict):
-        raise TypeError("target_l2.config_overrides() must return a dict")
-    return value
-
-
-def _target_postprocess_frame(
-    module: ModuleType,
-    *,
-    utterance: str,
-    frame: Frame,
-    metadata: dict[str, Any],
-) -> Frame:
-    function = getattr(module, "postprocess_frame", None)
-    if function is None:
-        return frame
-    value = function(utterance, frame.model_dump(mode="json"), metadata)
-    return Frame.model_validate(value)
-
-
-def _target_accept_prediction(
-    module: ModuleType,
-    *,
-    utterance: str,
-    frame: Frame,
-    metadata: dict[str, Any],
-    default_accept: bool,
-) -> bool:
-    function = getattr(module, "accept_prediction", None)
-    if function is None:
-        return default_accept
-    value = function(
-        utterance,
-        frame.model_dump(mode="json"),
-        metadata,
-        default_accept,
-    )
-    if value is None:
-        return default_accept
-    if not isinstance(value, bool):
-        raise TypeError("target_l2.accept_prediction() must return bool or None")
-    if not value:
-        return False
-    return default_accept
 
 
 def _run_codex_round(

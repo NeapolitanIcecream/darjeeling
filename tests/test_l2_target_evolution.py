@@ -457,3 +457,191 @@ def test_l2_target_evolve_cli_accepts_local_search_mode(tmp_path: Path) -> None:
     summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
     assert summary["mode"] == "local-search"
     assert summary["budget_policy"]["local_search_trials"] == 2
+
+
+def test_l2_promote_target_cli_writes_runtime_artifacts(tmp_path: Path) -> None:
+    target_run = tmp_path / "target-run"
+    workspace = target_run / "workspace" / "l2_target"
+    target_dir = workspace / "target"
+    data_dir = workspace / "data"
+    target_dir.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+    (data_dir / "train.jsonl").write_text(
+        "".join(
+            trace.model_dump_json() + "\n"
+            for trace in traces_to_teacher_view(_traces())
+        ),
+        encoding="utf-8",
+    )
+    (target_dir / "target_l2.py").write_text(
+        """
+def config_overrides():
+    return {"accept_threshold": 0.0, "min_examples": 4}
+
+def postprocess_frame(utterance, frame, metadata):
+    del utterance, metadata
+    return frame
+""",
+        encoding="utf-8",
+    )
+    (target_run / "summary.json").write_text(
+        json.dumps(
+            {
+                "mode": "dry-run",
+                "workspace": str(workspace),
+                "data_split": {
+                    "train": 8,
+                    "inner_validation": 2,
+                    "selection_holdout": 1,
+                    "promotion_holdout": 1,
+                },
+                "selection_decision": {"selected": True, "round": 1},
+                "adoption_decision": {"adopted": True, "round": 1},
+                "rounds": [
+                    {
+                        "round": 1,
+                        "inner_validation": {"accepted": 1, "wrong_accepts": 0},
+                        "selection_holdout": {"accepted": 1, "wrong_accepts": 0},
+                        "promotion_holdout": {"accepted": 1, "wrong_accepts": 0},
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "replay-run"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "promote-target",
+            "--target-run",
+            str(target_run),
+            "--run-dir",
+            str(run_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    manifest = json.loads(
+        (run_dir / "artifacts" / "manifest.current.json").read_text(encoding="utf-8")
+    )
+    assert manifest["promoted"] is True
+    assert manifest["promotion_reason"] == "explicit L2 target adoption passed gates"
+    assert manifest["artifact_paths"]["l2_student"].endswith("l2_student.joblib")
+    assert manifest["artifact_paths"]["l2_target"].endswith("target/target_l2.py")
+    assert (
+        run_dir
+        / "artifacts"
+        / manifest["artifact_paths"]["l2_target"]
+    ).exists()
+    assert manifest["candidate_metrics"]["l2_target_runtime_promoted"] is True
+    assert manifest["candidate_metrics"]["l2_target_inner_adopted"] is True
+    assert manifest["candidate_metrics"]["l2_target_staged_for_outer_replay"] is False
+    assert manifest["candidate_metrics"]["l2_target_training_traces"] == 12
+    assert manifest["candidate_metrics"]["l2_training_scope"] == "l2_target_workspace_train"
+    assert manifest["candidate_metrics"]["l2_training_traces"] == 12
+
+
+def test_l2_promote_target_cli_can_stage_non_adopted_candidate_for_outer_replay(
+    tmp_path: Path,
+) -> None:
+    target_run = tmp_path / "target-run"
+    workspace = target_run / "workspace" / "l2_target"
+    target_dir = workspace / "target"
+    data_dir = workspace / "data"
+    target_dir.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+    (data_dir / "train.jsonl").write_text(
+        "".join(
+            trace.model_dump_json() + "\n"
+            for trace in traces_to_teacher_view(_traces())
+        ),
+        encoding="utf-8",
+    )
+    (target_dir / "target_l2.py").write_text(
+        """
+def config_overrides():
+    return {"accept_threshold": 0.0, "min_examples": 4}
+
+def postprocess_frame(utterance, frame, metadata):
+    del utterance, metadata
+    return frame
+""",
+        encoding="utf-8",
+    )
+    (target_run / "summary.json").write_text(
+        json.dumps(
+            {
+                "mode": "dry-run",
+                "workspace": str(workspace),
+                "data_split": {
+                    "train": 8,
+                    "inner_validation": 2,
+                    "selection_holdout": 1,
+                    "promotion_holdout": 1,
+                },
+                "selection_decision": {"selected": False, "round": None},
+                "adoption_decision": {"adopted": False, "round": None},
+                "best_round": {
+                    "round": 1,
+                    "inner_validation": {"accepted": 1, "wrong_accepts": 0},
+                    "selection_holdout": {"accepted": 0, "wrong_accepts": 0},
+                    "promotion_holdout": {"accepted": 1, "wrong_accepts": 0},
+                },
+                "rounds": [
+                    {
+                        "round": 1,
+                        "inner_validation": {"accepted": 1, "wrong_accepts": 0},
+                        "selection_holdout": {"accepted": 0, "wrong_accepts": 0},
+                        "promotion_holdout": {"accepted": 1, "wrong_accepts": 0},
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rejected = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "promote-target",
+            "--target-run",
+            str(target_run),
+            "--run-dir",
+            str(tmp_path / "rejected-run"),
+        ],
+    )
+    assert rejected.exit_code == 2
+    assert "not adopted" in rejected.output
+
+    run_dir = tmp_path / "replay-run"
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "promote-target",
+            "--target-run",
+            str(target_run),
+            "--run-dir",
+            str(run_dir),
+            "--allow-non-adopted",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    manifest = json.loads(
+        (run_dir / "artifacts" / "manifest.current.json").read_text(encoding="utf-8")
+    )
+    assert (
+        manifest["promotion_reason"]
+        == "explicit L2 target candidate staged for outer replay"
+    )
+    assert manifest["candidate_metrics"]["l2_target_inner_adopted"] is False
+    assert manifest["candidate_metrics"]["l2_target_staged_for_outer_replay"] is True
+    assert manifest["candidate_metrics"]["l2_target_adopted_round"] is None
+    assert manifest["candidate_metrics"]["l2_target_staged_round"] == 1

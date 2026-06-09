@@ -231,6 +231,7 @@ Agent 权限：
 - `local-search` 不消耗 LLM tokens；它只优化可见 train/inner validation，并把 best visible config 写入 `target/config.json`。L4 coding agent 应在此基础上改 target-owned code/search-space，而不是手工猜 threshold、ngram 或模型 family。
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
 - Target workspace 也暴露 `postprocess_frame(...)`。当 visible target data 支持稳定解析时，L4 agent 应优先用 postprocess 补全 slot 或修正 frame；这类 target-specific code 只能留在 `target/`，不能进入 Darjeeling core。
+- Adopted target workspace 通过 `edge-mvp l2 promote-target` 进入 manifest，写入 `l2_student` 和 `l2_target` artifacts。Runtime replay 与 compiler offline replay 都加载 target wrapper，避免 target-loop evaluator 与系统 replay 语义分叉。
 - Target evaluator 在 visible inner validation 上暴露 `near_miss_examples`，帮助 L4 agent 找到高 guard probability 但被拒绝的 coverage 机会。Private selection/promotion 的 near-miss 只能留在 outer artifact 中用于人类/outer harness 分析，不进入 agent workspace。
 
 ## Direct API session 策略

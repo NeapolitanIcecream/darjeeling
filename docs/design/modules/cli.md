@@ -85,6 +85,8 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `target-evolve` 先评估 unmodified baseline，再执行 target rounds。`--mode dry-run|local-search|codex-cli` 控制 round 执行方式；`local-search` 使用 Optuna 在可见 train/inner validation 上搜索 `target/config.json`，不消耗 LLM tokens，也不读取 private holdout。`--rounds` 是最大 target round 数，默认 12；默认 `--inner-patience-rounds 4`，连续四轮没有 inner validation improvement 会早停，`--inner-patience-rounds 0` 可禁用。candidate selection gate 要求 visible inner validation 和 private selection holdout 同时通过，但默认只用于最终 selection/adoption，不中止 inner loop；`--stop-on-selection-gate` 是显式 opt-in 的 smoke/cost-control 开关。`--local-search-trials` 默认 96；`--local-search-space compact|wide` 和 `--local-search-timeout-s` 控制本地 Optuna trial budget；`--timeout-s` 只覆盖 `codex-cli` agent round timeout，默认继承 `L2_AGENT_TIMEOUT_S`。
 
+`edge-mvp l2 promote-target --target-run <target-run> --run-dir <run>` 将一个 `adoption_decision.adopted=true` 的 target-evolve run 提升为 replay runtime artifact。该命令继承 `<run>/artifacts/manifest.current.json` 中已有 artifact paths，重新用 target workspace 的 visible train split 训练 `l2_student.joblib`，复制 `target/` 到 generation 目录，并写入 `artifact_paths["l2_target"]`。默认未通过 adoption gate 的 target run 会被拒绝；传 `--allow-non-adopted` 时只把 `best_round` 显式 stage 到 run manifest，用于外层 e2e replay 诊断，manifest 会记录 `l2_target_inner_adopted=false` 和 `l2_target_staged_for_outer_replay=true`。promotion 后普通 `edge-mvp run --compile-every <large>` 会自动加载 target wrapper。
+
 `no-guard` 是诊断性 ablation：它设置 `L2_GUARD_MODE=always_accept` 和 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能进入该隔离 experiment runtime，报告 threshold 移除后的真实错误率和时延。该配置不用于主线 evolution。
 
 `l2-mlp` 是确定性 MLP family 实验：它设置 `L2_INTENT_MODEL_FAMILY=mlp`，不要求 live L4 proposal，用于把 MLP candidate 与默认 `sgd_logreg` 在同一 replay/report 框架下比较。

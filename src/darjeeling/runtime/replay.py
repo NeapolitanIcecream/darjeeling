@@ -16,6 +16,7 @@ from darjeeling.layers.l1_rust_programbank import (
     build_l1_binary,
 )
 from darjeeling.layers.l2_student import L2StudentBundle, L2StudentLayer
+from darjeeling.layers.l2_target import TargetL2Layer
 from darjeeling.layers.l3_local_slm import (
     L3LocalSLMLayer,
     L3PromptArtifact,
@@ -200,6 +201,14 @@ def load_l2_layer_from_manifest(
     bundle = L2StudentBundle.load(l2_path)
     if settings is not None and settings.l2_guard_mode == "always_accept":
         bundle.config.accept_threshold = 0.0
+    target_path_text = manifest.artifact_paths.get("l2_target")
+    if target_path_text:
+        target_path = Path(target_path_text)
+        if not target_path.is_absolute():
+            target_path = run_dir / "artifacts" / target_path
+        if not target_path.exists():
+            raise FileNotFoundError(f"L2 target artifact is missing: {target_path}")
+        return TargetL2Layer(bundle, target_path)
     return L2StudentLayer(bundle)
 
 
