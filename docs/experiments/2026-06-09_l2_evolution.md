@@ -2019,3 +2019,25 @@ Interpretation:
 - The aborted 64-trial run confirms that local-search budget needs explicit
   cost controls. The default top-k/trial budget was reduced; larger searches
   should be explicit experiment choices.
+
+## L4 target-agent launch audit
+
+After the local-search experiments, the `codex-cli` launch path was audited
+against the installed Codex CLI help:
+
+- `codex exec` supports `--model`, `--sandbox`, `--ask-for-approval`,
+  `--ignore-user-config`, `--ignore-rules`, `--ephemeral`,
+  `--skip-git-repo-check`, `--cd`, `--json`, and `-o`.
+- The target harness builds a stable short stdin prompt:
+  `Read program.md and complete target L2 evolution round N.`
+- Dynamic context remains in `program.md`, `data/objective.json`,
+  `data/round_state.json`, `data/target_diagnostics.json`, and
+  `data/commands.md`.
+- Default model remains `gpt-5.5`, timeout remains 7200 seconds, and private
+  selection/promotion holdouts remain outside the agent workspace.
+
+No live GPT-5.5 target-agent round was launched in this iteration. The bounded
+local-search run already showed that `trials * folds * rounds` can dominate
+wall-clock time. The next live-agent smoke should use `--max-agent-rounds 1`,
+an explicit small target budget, and the cross-audit backlogs as workspace
+context; it should not start with an unconstrained fixed-inner run.
