@@ -498,9 +498,17 @@ def _run_command(
             "cwd": str(cwd),
             "started_at": started_at,
             "return_code": 124,
-            "stdout": exc.stdout or "",
-            "stderr": exc.stderr or f"timed out after {timeout_s:.1f}s",
+            "stdout": _output_text(exc.stdout),
+            "stderr": _output_text(exc.stderr) or f"timed out after {timeout_s:.1f}s",
         }
+
+
+def _output_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _write_l2_agent_provenance(

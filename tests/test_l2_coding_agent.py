@@ -173,3 +173,51 @@ def test_l2_coding_agent_codex_cli_mode_records_transcript_and_report(
     ]
     assert Path(command[command.index("--cd") + 1]).is_absolute()
     assert Path(command[command.index("-o") + 1]).is_absolute()
+
+
+def test_l2_coding_agent_codex_timeout_writes_serializable_artifacts(
+    tmp_path: Path,
+) -> None:
+    slow_codex = tmp_path / "slow_codex.py"
+    slow_codex.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import sys",
+                "import time",
+                "sys.stdout.write('partial output')",
+                "sys.stdout.flush()",
+                "time.sleep(5)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    slow_codex.chmod(0o755)
+
+    result = run_l2_coding_agent_job(
+        config=L2CodingAgentJobConfig(
+            mode="codex-cli",
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            codex_command=str(slow_codex),
+            timeout_s=0.1,
+            run_validation=False,
+        ),
+        teacher_train=[_teacher_trace()],
+        hard_cases=[],
+        current_metrics={},
+        objective={},
+    )
+
+    assert not result.succeeded
+    commands = [
+        json.loads(line)
+        for line in result.commands_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert commands[0]["return_code"] == 124
+    assert isinstance(commands[0]["stdout"], str)
+    assert isinstance(commands[0]["stderr"], str)
+    provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
+    assert provenance["return_code"] == 124
+    assert provenance["commands"][0]["return_code"] == 124
