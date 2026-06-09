@@ -89,7 +89,7 @@ L3 必须报告：
 - compiler 每个 generation 写 `candidate_metrics.csv` 和 `promotion.json`。
 - `edge-mvp report` 会读取 traces、settings、current manifest、generation manifests 和 promotion records。
 - report 输出 `summary.md`、`metrics.csv`、`artifacts.csv`、`curves.html` 和 `hard_cases.jsonl`。
-- `summary.md` 展示 layer summary、evolution summary、artifact summary、settings、current manifest、promotion 摘要和 L3 mode/hardware 摘要。
+- `summary.md` 展示 layer summary、L2 unguarded diagnostics、evolution summary、artifact summary、settings、current manifest、promotion 摘要和 L3 mode/hardware 摘要。
 - layer summary 表固定输出 `layer | coverage | accepted_accuracy | wrong_accept_rate | forced_global_accuracy | p50_ms | p95_ms | cost/100`。
 - layer summary 的 label 优先使用 gold frame，没有 gold 时退到 teacher frame；`accepted_accuracy` 只统计该层作为最终选择的有 label 样本，`wrong_accept_rate` 按全局有 label 请求数归一化。
 - `forced_global_accuracy` 表示强制使用某层当轮产物时的全局准确率；该层缺失产物或 abstain 均按错误计入。
@@ -103,7 +103,8 @@ L3 必须报告：
 - L1 benchmark corpus 优先使用当前 trace 的去重 utterance，最多 128 条；没有 trace 时使用固定 smoke corpus。
 - L1 benchmark 若没有配置则跳过；若本地 build/worker 失败，则写入 error status，不阻塞已有 report 生成。
 - 若 generation manifest 包含 `l1_benchmark`，report 会在 metrics 和 `curves.html` 中生成 L1 benchmark by generation 表格。
-- `metrics.csv` 聚合 run layer share、`layer_summary`、`evolution_summary`、gold eval frame exact、latency percentile、L1 native latency、L1 program path counts、L1 benchmark metrics、promotion objective 和 per-layer delta。
+- `metrics.csv` 聚合 run layer share、`layer_summary`、`l2_unguarded`、`evolution_summary`、gold eval frame exact、latency percentile、L1 native latency、L1 program path counts、L1 benchmark metrics、promotion objective 和 per-layer delta。
+- `l2_unguarded` 指标来自 trace 中每次 L2 运行的 `metadata.predicted_frame`，按 threshold=0 语义统计 evaluated/labeled/correct/wrong/runtime accepted、frame accuracy、wrong prediction rate、guard probability p50/p95、intent support similarity p50/p95、intent support margin p50/p95 和 L2 latency p50/p95。它用于回答“如果 L2 不被 threshold 拦截，正确率和时延如何”。
 - `summary.md` 的 Settings 段展示非 secret price assumptions，包括 layer per-request estimate 和 L4 token pricing；API key 只记录 presence，不写明文。
 - `artifacts.csv` 列出 generation manifest 中的 artifact lineage。
 - `hard_cases.jsonl` 从最新 generation/current manifest 的 hard buffer 导出，保留 `visibility` 字段，供后续人工检查和实验归因使用。

@@ -76,6 +76,11 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
     assert result.report_path.exists()
     assert result.provenance_path.exists()
     assert "DRY_RUN_MARKER" in result.diff_path.read_text(encoding="utf-8")
+    context_families = json.loads(
+        (result.context_dir / "context_families.json").read_text(encoding="utf-8")
+    )
+    assert context_families["schema_version"] == "l1-context-families-v1"
+    assert context_families["families"][0]["family_id"] == "alarm_set|time"
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l1-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"

@@ -101,7 +101,12 @@ class Settings(BaseSettings):
     )
     l2_min_guarded_accuracy: float = 0.93
     l2_max_wrong_accept_rate: float = 0.05
+    l2_min_runtime_examples: int = Field(default=30, validation_alias="L2_MIN_RUNTIME_EXAMPLES")
     promotion_accuracy_epsilon: float = 0.02
+    force_promote_artifacts: bool = Field(
+        default=False,
+        validation_alias="FORCE_PROMOTE_ARTIFACTS",
+    )
     hard_buffer_max_cases: int = Field(default=100, validation_alias="HARD_BUFFER_MAX_CASES")
     settings_file: Path | None = None
     l0_cost_usd_per_request: float = Field(default=0.0, validation_alias="L0_COST_USD_PER_REQUEST")

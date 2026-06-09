@@ -113,21 +113,39 @@ def select_l2_accept_threshold(
     *,
     grid: list[float] | None = None,
     max_wrong_accept_rate: float = 0.05,
+    min_accepted_accuracy: float = 0.93,
 ) -> L2ThresholdSelection | None:
     labeled = [trace for trace in traces if trace.teacher_frame is not None]
     if not labeled:
         return None
 
+    thresholds = grid or threshold_grid()
+    thresholds = _augment_thresholds_from_predictions(bundle, labeled, thresholds)
     candidates = [
         evaluate_l2_threshold(bundle, labeled, threshold=threshold)
-        for threshold in (grid or threshold_grid())
+        for threshold in thresholds
     ]
     eligible = [
         candidate
         for candidate in candidates
         if candidate.wrong_accept_rate <= max_wrong_accept_rate
+        and candidate.accepted_accuracy >= min_accepted_accuracy
     ]
-    if eligible:
+    zero_wrong_eligible = [
+        candidate
+        for candidate in eligible
+        if candidate.accepted > 0 and candidate.wrong_accepts == 0
+    ]
+    if zero_wrong_eligible:
+        selected = max(
+            zero_wrong_eligible,
+            key=lambda item: (
+                item.coverage,
+                item.accepted_accuracy,
+                item.threshold,
+            ),
+        )
+    elif eligible:
         selected = max(
             eligible,
             key=lambda item: (
@@ -152,6 +170,26 @@ def select_l2_accept_threshold(
         evaluation=selected,
         candidates=candidates,
     )
+
+
+def _augment_thresholds_from_predictions(
+    bundle: Any,
+    traces: list[TeacherTrace],
+    thresholds: list[float],
+) -> list[float]:
+    augmented = {round(_clamp_threshold(threshold), 6) for threshold in thresholds}
+    for trace in traces:
+        prediction = bundle.predict(trace.utterance)
+        probability = _clamp_threshold(float(prediction.guard_probability))
+        augmented.add(round(probability, 6))
+        augmented.add(round(_clamp_threshold(probability + 1e-6), 6))
+    return sorted(augmented)
+
+
+def evaluate_l2_unguarded(bundle: Any, traces: list[TeacherTrace]) -> L2ThresholdEvaluation:
+    """Evaluate L2 as if the accept threshold did not block predictions."""
+
+    return evaluate_l2_threshold(bundle, traces, threshold=0.0)
 
 
 def evaluate_l2_threshold(
@@ -199,3 +237,7 @@ def _bounded_float(value: Any, *, field_name: str) -> float:
     if not 0.0 <= value <= 1.0:
         raise ValueError(f"{field_name} must be in [0, 1]")
     return value
+
+
+def _clamp_threshold(value: float) -> float:
+    return min(1.0, max(0.0, value))

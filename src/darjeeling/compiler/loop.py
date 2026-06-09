@@ -10,6 +10,7 @@ from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore, LayerDel
 from darjeeling.compiler.guard_optimizer import (
     GUARD_PROPOSAL_SCHEMA,
     GuardSearchSpec,
+    evaluate_l2_unguarded,
     guard_search_spec_from_proposal,
     select_l2_accept_threshold,
 )
@@ -254,9 +255,15 @@ def run_compiler_generation(
             candidate_metrics["l2_trained"] = False
             candidate_metrics["l2_training_error"] = str(exc)
         else:
+            unguarded_evaluation = evaluate_l2_unguarded(l2_bundle, split.teacher_train)
+            candidate_metrics["l2_unguarded_train"] = _threshold_evaluation_payload(
+                unguarded_evaluation
+            )
             if settings.l2_guard_mode == "always_accept":
+                l2_bundle.config.runtime_enabled = True
                 l2_bundle.config.accept_threshold = 0.0
                 candidate_metrics["l2_guard_threshold"] = 0.0
+                candidate_metrics["l2_runtime_enabled"] = True
                 candidate_metrics["l2_guard_search"] = {
                     "selected": {
                         "threshold": 0.0,
@@ -277,6 +284,7 @@ def run_compiler_generation(
                     split.teacher_train,
                     grid=guard_search_spec.grid,
                     max_wrong_accept_rate=guard_search_spec.max_wrong_accept_rate,
+                    min_accepted_accuracy=settings.l2_min_guarded_accuracy,
                 )
                 if threshold_selection is not None:
                     l2_bundle.config.accept_threshold = threshold_selection.threshold
@@ -288,6 +296,14 @@ def run_compiler_generation(
                             for candidate in threshold_selection.candidates
                         ],
                     }
+                runtime_enabled = len(l2_examples) >= settings.l2_min_runtime_examples
+                l2_bundle.config.runtime_enabled = runtime_enabled
+                candidate_metrics["l2_runtime_enabled"] = runtime_enabled
+                candidate_metrics["l2_min_runtime_examples"] = settings.l2_min_runtime_examples
+                if not runtime_enabled:
+                    candidate_metrics["l2_runtime_disabled_reason"] = (
+                        f"requires at least {settings.l2_min_runtime_examples} examples"
+                    )
             l2_dir = generation_dir / "l2"
             l2_path = l2_dir / "l2_student.joblib"
             l2_bundle.save(l2_path)
@@ -467,6 +483,11 @@ def run_compiler_generation(
         promoted = decision.promoted
         promoted_with_layer_regression = decision.promoted_with_layer_regression
         regressed_layers = decision.regressed_layers or []
+        if settings.force_promote_artifacts:
+            candidate_metrics["force_promote_artifacts"] = True
+            candidate_metrics["force_promote_original_reason"] = decision_reason
+            promoted = True
+            decision_reason = f"force promoted by settings after: {decision_reason}"
 
     candidate_metrics.update(
         {

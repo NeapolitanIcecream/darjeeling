@@ -40,12 +40,13 @@
 - L1 coding-agent 成功生成 candidate crate 后，compiler 会运行小型 Rust worker benchmark，写入 generation-scoped `l1/l1_benchmark.json` 并记录到 manifest。
 - `L4_PROPOSAL_MODE=live` 时，compiler 通过 `L4ProposalAdapter` 请求 bounded L2 config proposal；默认 disabled，失败时记录错误并回退 deterministic config。
 - `L2_ENABLED=false` 时，compiler 不训练、不写入 L2 candidate artifact，并从 candidate manifest 中移除 inherited `l2_student`。
-- `L2_GUARD_MODE=always_accept` 时，compiler 仍训练 L2 student，但跳过 learned-threshold search，将 threshold 固定为 0 以支持 no-guard ablation。
+- `L2_GUARD_MODE=always_accept` 时，compiler 仍训练 L2 student，但跳过 learned-threshold search，将 threshold 固定为 0。`experiment no-guard` 是隔离的诊断性 ablation，会设置 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能实际进入 runtime 并暴露真实错误率；主实验不使用这个设置。
 - `L4_PROPOSAL_MODE=live` 时，compiler 请求 bounded guard search proposal，写入 `guard/guard_candidate.json`，并用 proposal 中的 threshold grid 与 wrong-accept 上限驱动 deterministic local search。
 - L2 训练后在 `teacher_train` 上执行 deterministic guard threshold grid search，选择满足 wrong-accept 上限且覆盖率最高的 threshold，并写入 L2 artifact 与 candidate metrics。
 - `L4_PROPOSAL_MODE=live` 时，compiler 也会请求 bounded L3 prompt proposal，展开 teacher-visible few-shot trace IDs，并写入 `l3/l3_prompt.candidate.json`。该 candidate 记录为 `l3_prompt_candidate`，不会自动成为 runtime `l3_prompt`。
 - 用 `teacher_promotion_holdout + teacher_regression_sample + hard_buffer` 对 current artifact set 与 candidate artifact set 做离线 replay；hard buffer 包含 `train_visible` 与 `replay_only` 两类 replay pressure，但不能替代独立 holdout，若没有 holdout/regression 覆盖则拒绝 promotion。
 - promotion 使用 `decide_artifact_set_promotion`，检查 objective、accuracy epsilon 和 wrong-accept 上限。
+- 若 `FORCE_PROMOTE_ARTIFACTS=true`，compiler 仍先计算正常 promotion decision，并在 candidate metrics 中记录 `force_promote_original_reason`，随后强制 promotion。该开关只用于诊断实验，不属于主线 evolution 策略。
 - 每个 generation 写 `hard_buffer.jsonl`、`candidate_metrics.csv`、`promotion.json` 和 `manifest.json`。
 - 候选即使被拒绝，也写入 `artifacts/generations/gen_*/manifest.json`；只有 gate 通过才更新 `manifest.current.json`。
 - replay 在 promotion 后重新加载 L0/L1/L2，使下一窗口能实际使用 promoted artifacts。

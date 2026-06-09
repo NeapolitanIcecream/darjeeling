@@ -72,6 +72,8 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 - `workload-locality`
 - `hard-buffer`
 
+`no-guard` 是诊断性 ablation：它设置 `L2_GUARD_MODE=always_accept` 和 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能进入该隔离 experiment runtime，报告 threshold 移除后的真实错误率和时延。该配置不用于主线 evolution。
+
 `workload-locality` 会在同一个 experiment root 下分别运行 `uniform`、`zipf-mild` 和 `zipf-heavy` 子目录。
 
 `experiment compare` 不重新执行实验，只读取已有 run dir。输入可以是重复传入的 `--run`，也可以是 `--root` 下递归发现的 `traces.jsonl` 所在目录。输出 `comparison.csv` 和 `comparison.html`。

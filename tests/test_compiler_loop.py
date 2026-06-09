@@ -109,6 +109,7 @@ def test_compiler_generation_rejects_candidate_without_replay_coverage(
 
 
 def test_compiler_generation_records_l2_guard_threshold_search(tmp_path: Path) -> None:
+    settings = load_settings()
     traces = [
         _teacher_trace("m1", "play jazz", "music_play"),
         _teacher_trace("m2", "play music", "music_play"),
@@ -123,7 +124,7 @@ def test_compiler_generation_records_l2_guard_threshold_search(tmp_path: Path) -
     result = run_compiler_generation(
         run_dir=tmp_path,
         traces=traces,
-        settings=load_settings(),
+        settings=settings,
     )
 
     assert result.manifest is not None
@@ -132,6 +133,11 @@ def test_compiler_generation_records_l2_guard_threshold_search(tmp_path: Path) -
     assert metrics["l4_proposal_mode"] == "disabled"
     assert "l2_guard_threshold" in metrics
     assert "l2_guard_search" in metrics
+    assert "l2_unguarded_train" in metrics
+    assert metrics["l2_unguarded_train"]["threshold"] == 0.0
+    assert metrics["l2_unguarded_train"]["accepted"] == metrics["l2_unguarded_train"]["total"]
+    assert metrics["l2_runtime_enabled"] is False
+    assert metrics["l2_min_runtime_examples"] == settings.l2_min_runtime_examples
     assert metrics["l2_guard_search"]["selected"]["threshold"] == metrics["l2_guard_threshold"]
 
 
@@ -213,7 +219,9 @@ def test_compiler_generation_uses_live_l4_l2_proposal_when_enabled(
     searched_thresholds = [
         candidate["threshold"] for candidate in metrics["l2_guard_search"]["candidates"]
     ]
-    assert searched_thresholds == [0.5, 0.6, 0.7, 0.8, 0.9]
+    for threshold in [0.5, 0.6, 0.7, 0.8, 0.9]:
+        assert threshold in searched_thresholds
+    assert len(searched_thresholds) > 5
     assert metrics["l4_l3_prompt_proposal_succeeded"] is True
     assert metrics["l3_prompt_candidate_runtime_promoted"] is False
     assert "l3_prompt_candidate" in result.manifest.artifact_paths
@@ -257,7 +265,26 @@ def test_compiler_generation_respects_no_guard_ablation(tmp_path: Path) -> None:
     metrics = result.manifest.candidate_metrics
     assert metrics["l2_guard_mode"] == "always_accept"
     assert metrics["l2_guard_threshold"] == 0.0
+    assert metrics["l2_runtime_enabled"] is True
     assert metrics["l2_guard_search"]["mode"] == "always_accept"
+
+
+def test_compiler_generation_force_promote_records_original_reason(tmp_path: Path) -> None:
+    settings = load_settings()
+    settings.force_promote_artifacts = True
+
+    result = run_compiler_generation(
+        run_dir=tmp_path,
+        traces=_two_intent_traces(),
+        settings=settings,
+    )
+
+    assert result.promoted
+    assert result.reason.startswith("force promoted by settings after:")
+    manifest = ArtifactStore(tmp_path / "artifacts").load_current_manifest()
+    assert manifest is not None
+    assert manifest.candidate_metrics["force_promote_artifacts"] is True
+    assert "force_promote_original_reason" in manifest.candidate_metrics
 
 
 def test_run_replay_compile_every_promotes_l0_for_repeated_teacher_trace(
@@ -435,6 +462,13 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
     assert manifest.candidate_metrics["hard_buffer_agent_context_size"] == 1
     assert manifest.candidate_metrics["candidate_layer_counts"]["L1"] == 1
     l1_agent_dir = run_dir / "artifacts" / manifest.artifact_paths["l1_agent_dir"]
+    context_families = json.loads(
+        (l1_agent_dir / "contexts" / "context_families.json").read_text(encoding="utf-8")
+    )
+    assert context_families["schema_version"] == "l1-context-families-v1"
+    assert context_families["family_count"] >= 1
+    assert context_families["families"][0]["intent"] == "music_play"
+    assert "gold_frame" not in json.dumps(context_families)
     l1_agent_hard_cases = (l1_agent_dir / "contexts" / "hard_cases.jsonl").read_text(
         encoding="utf-8"
     )

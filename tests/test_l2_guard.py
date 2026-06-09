@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from darjeeling.compiler.guard_optimizer import (
+    evaluate_l2_unguarded,
     guard_search_spec_from_proposal,
     select_l2_accept_threshold,
 )
@@ -47,9 +48,135 @@ def test_l2_guard_optimizer_prefers_highest_safe_coverage_threshold() -> None:
     )
 
     assert selection is not None
-    assert selection.threshold == 0.8
+    assert selection.threshold == 0.82
     assert selection.evaluation.coverage == 2 / 3
     assert selection.evaluation.wrong_accept_rate == 0.0
+
+
+def test_l2_guard_optimizer_uses_observed_probabilities_between_grid_points() -> None:
+    predictions = {
+        "correct": SimpleNamespace(
+            frame=Frame(intent="music_play"),
+            guard_probability=0.81,
+        ),
+        "wrong": SimpleNamespace(
+            frame=Frame(intent="music_play"),
+            guard_probability=0.80,
+        ),
+    }
+    bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
+    traces = [
+        _teacher_trace("r1", "correct", "music_play"),
+        _teacher_trace("r2", "wrong", "alarm_set"),
+    ]
+
+    selection = select_l2_accept_threshold(
+        bundle,
+        traces,
+        grid=[0.7, 0.9],
+        max_wrong_accept_rate=0.0,
+    )
+
+    assert selection is not None
+    assert selection.threshold == 0.81
+    assert selection.evaluation.accepted == 1
+    assert selection.evaluation.wrong_accept_rate == 0.0
+
+
+def test_l2_guard_optimizer_enforces_minimum_accepted_accuracy() -> None:
+    predictions = {
+        "correct-high": SimpleNamespace(
+            frame=Frame(intent="music_play"),
+            guard_probability=0.90,
+        ),
+        "wrong-mid": SimpleNamespace(
+            frame=Frame(intent="music_play"),
+            guard_probability=0.80,
+        ),
+        "correct-low": SimpleNamespace(
+            frame=Frame(intent="alarm_set"),
+            guard_probability=0.10,
+        ),
+    }
+    bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
+    traces = [
+        _teacher_trace("r1", "correct-high", "music_play"),
+        _teacher_trace("r2", "wrong-mid", "alarm_set"),
+        _teacher_trace("r3", "correct-low", "alarm_set"),
+    ]
+
+    selection = select_l2_accept_threshold(
+        bundle,
+        traces,
+        grid=[0.0, 0.7],
+        max_wrong_accept_rate=0.50,
+        min_accepted_accuracy=0.90,
+    )
+
+    assert selection is not None
+    assert selection.threshold >= 0.800001
+    assert selection.evaluation.accepted == 1
+    assert selection.evaluation.accepted_accuracy == 1.0
+
+
+def test_l2_guard_optimizer_prefers_zero_observed_wrong_accepts() -> None:
+    predictions = {
+        "correct-high": SimpleNamespace(
+            frame=Frame(intent="music_play"),
+            guard_probability=0.90,
+        ),
+        "wrong-mid": SimpleNamespace(
+            frame=Frame(intent="music_play"),
+            guard_probability=0.80,
+        ),
+        "correct-low": SimpleNamespace(
+            frame=Frame(intent="alarm_set"),
+            guard_probability=0.70,
+        ),
+    }
+    bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
+    traces = [
+        _teacher_trace("r1", "correct-high", "music_play"),
+        _teacher_trace("r2", "wrong-mid", "alarm_set"),
+        _teacher_trace("r3", "correct-low", "alarm_set"),
+    ]
+
+    selection = select_l2_accept_threshold(
+        bundle,
+        traces,
+        grid=[0.7],
+        max_wrong_accept_rate=0.50,
+        min_accepted_accuracy=0.50,
+    )
+
+    assert selection is not None
+    assert selection.threshold >= 0.800001
+    assert selection.evaluation.wrong_accepts == 0
+
+
+def test_l2_unguarded_evaluation_reports_threshold_zero_accuracy() -> None:
+    predictions = {
+        "correct": SimpleNamespace(
+            frame=Frame(intent="music_play"),
+            guard_probability=0.10,
+        ),
+        "wrong": SimpleNamespace(
+            frame=Frame(intent="music_play"),
+            guard_probability=0.05,
+        ),
+    }
+    bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
+    traces = [
+        _teacher_trace("r1", "correct", "music_play"),
+        _teacher_trace("r2", "wrong", "alarm_set"),
+    ]
+
+    evaluation = evaluate_l2_unguarded(bundle, traces)
+
+    assert evaluation.threshold == 0.0
+    assert evaluation.accepted == 2
+    assert evaluation.accepted_accuracy == 0.5
+    assert evaluation.wrong_accept_rate == 0.5
 
 
 def test_l2_config_from_proposal_accepts_only_bounded_fields() -> None:

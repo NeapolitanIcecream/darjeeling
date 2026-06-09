@@ -34,8 +34,15 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
     ),
     "no-guard": ExperimentSpec(
         name="no-guard",
-        settings_overrides={"l2_guard_mode": "always_accept"},
-        description="Ablate the L2 guard by accepting every L2 prediction.",
+        settings_overrides={
+            "l2_guard_mode": "always_accept",
+            "l2_max_wrong_accept_rate": 1.0,
+            "promotion_accuracy_epsilon": 1.0,
+            "force_promote_artifacts": True,
+        },
+        description=(
+            "Diagnostic ablation that promotes always-accept L2 artifacts in an isolated run."
+        ),
     ),
     "no-l2": ExperimentSpec(
         name="no-l2",

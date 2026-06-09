@@ -1,12 +1,21 @@
 from pathlib import Path
 
+import numpy as np
+
 from darjeeling.layers.l2_student import (
+    ConstantGuard,
     L2StudentBundle,
     L2StudentConfig,
     L2StudentLayer,
     L2TrainingExample,
+    SlotPrediction,
+    apply_slot_patterns,
     bio_tags_for_teacher_slots,
+    filter_slots_for_intent,
+    slot_patterns_by_intent_from_examples,
+    slots_by_intent_from_examples,
     slots_from_bio_tags,
+    train_guard,
     train_l2_student,
     train_slot_tagger,
 )
@@ -52,6 +61,8 @@ def test_l2_student_trains_from_teacher_frames_and_predicts_intent() -> None:
 
     assert prediction.frame.intent == "alarm_set"
     assert 0.0 <= prediction.guard_probability <= 1.0
+    feature_union = bundle.intent_pipeline.named_steps["features"]
+    assert [name for name, _transformer in feature_union.transformer_list] == ["word", "char"]
 
 
 def test_token_slot_tagger_learns_teacher_slot_spans() -> None:
@@ -86,6 +97,101 @@ def test_slot_alignment_and_bio_reconstruction() -> None:
     assert duplicate_invalid_bio
 
 
+def test_l2_filters_predicted_slots_by_intent_schema() -> None:
+    slots_by_intent = slots_by_intent_from_examples(_examples())
+
+    assert slots_by_intent["alarm_set"] == ("time",)
+    assert filter_slots_for_intent(
+        "music_play",
+        {"time": "seven", "playlist_name": "jazz"},
+        slots_by_intent,
+    ) == {}
+
+
+def test_l2_slot_patterns_fill_missing_schema_slots() -> None:
+    examples = [
+        L2TrainingExample(
+            utterance="how old is carrie underwood",
+            teacher_frame=Frame(intent="qa_factoid", slots={"person": "carrie underwood"}),
+        ),
+        L2TrainingExample(
+            utterance="what does regal mean",
+            teacher_frame=Frame(intent="qa_definition", slots={"definition_word": "regal"}),
+        ),
+    ]
+    slots_by_intent = slots_by_intent_from_examples(examples)
+    patterns = slot_patterns_by_intent_from_examples(examples)
+
+    assert apply_slot_patterns(
+        "qa_factoid",
+        "how old is dolly parton",
+        {},
+        slots_by_intent,
+        patterns,
+    ) == {"person": "dolly parton"}
+    assert apply_slot_patterns(
+        "qa_definition",
+        "what does hesitant mean",
+        {},
+        slots_by_intent,
+        patterns,
+    ) == {"definition_word": "hesitant"}
+
+
+def test_l2_bundle_drops_slots_not_seen_for_predicted_intent() -> None:
+    class FakeIntentPipeline:
+        classes_ = ["music_play", "alarm_set"]
+
+        def predict_proba(self, utterances):
+            return [[0.95, 0.05] for _utterance in utterances]
+
+    class FakeSlotTagger:
+        def predict(self, utterance: str) -> SlotPrediction:
+            return SlotPrediction(slots={"time": "seven"})
+
+    bundle = L2StudentBundle(
+        intent_pipeline=FakeIntentPipeline(),
+        slot_tagger=FakeSlotTagger(),
+        guard_model=ConstantGuard(1.0),
+        config=L2StudentConfig(accept_threshold=0.0),
+        slots_by_intent={"music_play": (), "alarm_set": ("time",)},
+    )
+
+    prediction = bundle.predict("play music at seven")
+
+    assert prediction.frame == Frame(intent="music_play", slots={})
+
+
+def test_l2_guard_training_labels_postprocessed_frames() -> None:
+    class FakeIntentPipeline:
+        classes_ = ["qa_factoid"]
+
+        def predict_proba(self, utterances):
+            return [[1.0] for _utterance in utterances]
+
+    class EmptySlotTagger:
+        def predict(self, utterance: str) -> SlotPrediction:
+            return SlotPrediction(slots={})
+
+    examples = [
+        L2TrainingExample(
+            utterance="how old is carrie underwood",
+            teacher_frame=Frame(intent="qa_factoid", slots={"person": "carrie underwood"}),
+        )
+    ]
+    guard = train_guard(
+        FakeIntentPipeline(),
+        EmptySlotTagger(),
+        examples,
+        L2StudentConfig(),
+        slots_by_intent=slots_by_intent_from_examples(examples),
+        slot_patterns_by_intent=slot_patterns_by_intent_from_examples(examples),
+    )
+
+    assert isinstance(guard, ConstantGuard)
+    assert guard.probability == 1.0
+
+
 def test_l2_student_layer_uses_guard_threshold() -> None:
     bundle = train_l2_student(
         _examples(),
@@ -100,6 +206,63 @@ def test_l2_student_layer_uses_guard_threshold() -> None:
     assert result.frame is not None
     assert result.metadata["slot_model"] == "token_sgd"
     assert "guard_probability" in result.metadata
+
+
+def test_l2_student_layer_reports_intent_support_metadata() -> None:
+    bundle = train_l2_student(
+        _examples(),
+        L2StudentConfig(accept_threshold=0.0, min_examples=4),
+    )
+    layer = L2StudentLayer(bundle)
+
+    result = layer.try_answer("wake me at eight")
+
+    assert result.metadata["nearest_similarity"] > 0.0
+    assert result.metadata["predicted_intent_similarity"] > 0.0
+    assert -1.0 <= result.metadata["intent_support_margin"] <= 1.0
+
+
+def test_l2_bundle_keeps_legacy_five_feature_guard_compatible() -> None:
+    class FakeIntentPipeline:
+        classes_ = ["music_play", "alarm_set"]
+
+        def predict_proba(self, utterances):
+            return [[0.95, 0.05] for _utterance in utterances]
+
+    class LegacyFiveFeatureGuard:
+        n_features_in_ = 5
+
+        def predict_proba(self, features):
+            assert features.shape == (1, 5)
+            return np.asarray([[0.0, 1.0]])
+
+    bundle = L2StudentBundle(
+        intent_pipeline=FakeIntentPipeline(),
+        slot_tagger=None,
+        guard_model=LegacyFiveFeatureGuard(),
+        config=L2StudentConfig(accept_threshold=0.0),
+    )
+
+    prediction = bundle.predict("play music")
+
+    assert prediction.guard_probability == 1.0
+
+
+def test_l2_student_layer_runtime_disabled_still_reports_prediction() -> None:
+    bundle = train_l2_student(
+        _examples(),
+        L2StudentConfig(accept_threshold=0.0, min_examples=4, runtime_enabled=False),
+    )
+    layer = L2StudentLayer(bundle)
+
+    result = layer.try_answer("play music")
+
+    assert result.layer == "L2"
+    assert not result.accepted
+    assert result.frame is None
+    assert result.reason == "runtime disabled"
+    assert result.metadata["runtime_enabled"] is False
+    assert result.metadata["predicted_frame"]["intent"] == "music_play"
 
 
 def test_l2_student_bundle_round_trips_with_joblib(tmp_path: Path) -> None:

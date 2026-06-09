@@ -74,9 +74,11 @@ Replay/promotion：
 - `HARD_BUFFER_MAX_CASES`
 - `L2_ENABLED`
 - `L2_GUARD_MODE`: `learned | always_accept`
+- `L2_MIN_RUNTIME_EXAMPLES`
 - objective weights
 - wrong accept limits
 - promotion accuracy epsilon
+- `FORCE_PROMOTE_ARTIFACTS`: 默认 false，只用于隔离诊断实验；打开时 compiler 仍记录原始 promotion decision，但会强制 promotion candidate artifact。
 
 Context/prompt cache：
 

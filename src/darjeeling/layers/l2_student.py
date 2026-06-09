@@ -13,7 +13,8 @@ from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import FeatureUnion, Pipeline
+from sklearn.preprocessing import normalize
 
 from darjeeling.runtime.timing import elapsed_ms
 from darjeeling.schemas import Frame, LayerResult, TeacherTrace
@@ -31,6 +32,7 @@ class GuardDecision:
 
 class L2StudentConfig(BaseModel):
     accept_threshold: float = 0.93
+    runtime_enabled: bool = True
     random_state: int = 17
     min_examples: int = 4
     word_ngram_range: tuple[int, int] = (1, 2)
@@ -53,6 +55,77 @@ class L2Prediction(BaseModel):
     entropy: float
     slot_avg_probability: float = 1.0
     slot_invalid_bio: bool = False
+    nearest_similarity: float = 0.0
+    predicted_intent_similarity: float = 0.0
+    intent_support_margin: float = 0.0
+
+
+@dataclass(frozen=True)
+class IntentSupportFeatures:
+    nearest_similarity: float = 0.0
+    predicted_intent_similarity: float = 0.0
+    intent_support_margin: float = 0.0
+
+
+class IntentPrototypeIndex:
+    def __init__(
+        self,
+        *,
+        prototype_intents: tuple[str, ...],
+        prototype_matrix: Any,
+    ) -> None:
+        self.prototype_intents = prototype_intents
+        self.prototype_matrix = prototype_matrix
+
+    @classmethod
+    def from_examples(
+        cls,
+        intent_pipeline: Pipeline,
+        examples: list[L2TrainingExample],
+    ) -> IntentPrototypeIndex:
+        feature_step = intent_pipeline.named_steps["features"]
+        texts = [example.utterance for example in examples]
+        matrix = normalize(feature_step.transform(texts), copy=True)
+        return cls(
+            prototype_intents=tuple(example.teacher_frame.intent for example in examples),
+            prototype_matrix=matrix,
+        )
+
+    def score(
+        self,
+        intent_pipeline: Pipeline,
+        utterance: str,
+        predicted_intent: str,
+    ) -> IntentSupportFeatures:
+        if not self.prototype_intents:
+            return IntentSupportFeatures()
+        feature_step = intent_pipeline.named_steps["features"]
+        query = normalize(feature_step.transform([utterance]), copy=True)
+        similarities = (query @ self.prototype_matrix.T).toarray().ravel()
+        if similarities.size == 0:
+            return IntentSupportFeatures()
+        nearest_similarity = float(similarities.max())
+        same_intent_similarities = [
+            float(similarity)
+            for similarity, intent in zip(similarities, self.prototype_intents, strict=True)
+            if intent == predicted_intent
+        ]
+        other_intent_similarities = [
+            float(similarity)
+            for similarity, intent in zip(similarities, self.prototype_intents, strict=True)
+            if intent != predicted_intent
+        ]
+        predicted_intent_similarity = (
+            max(same_intent_similarities) if same_intent_similarities else 0.0
+        )
+        other_intent_similarity = (
+            max(other_intent_similarities) if other_intent_similarities else 0.0
+        )
+        return IntentSupportFeatures(
+            nearest_similarity=nearest_similarity,
+            predicted_intent_similarity=predicted_intent_similarity,
+            intent_support_margin=predicted_intent_similarity - other_intent_similarity,
+        )
 
 
 class ConstantGuard:
@@ -110,11 +183,18 @@ class L2StudentBundle:
         slot_tagger: TokenSlotTagger | None,
         guard_model: LogisticRegression | ConstantGuard,
         config: L2StudentConfig,
+        slots_by_intent: dict[str, tuple[str, ...]] | None = None,
+        slot_patterns_by_intent: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]]
+        | None = None,
+        intent_support_index: IntentPrototypeIndex | None = None,
     ) -> None:
         self.intent_pipeline = intent_pipeline
         self.slot_tagger = slot_tagger
         self.guard_model = guard_model
         self.config = config
+        self.slots_by_intent = slots_by_intent or {}
+        self.slot_patterns_by_intent = slot_patterns_by_intent or {}
+        self.intent_support_index = intent_support_index
 
     def predict(self, utterance: str) -> L2Prediction:
         intent_result = predict_intent(self.intent_pipeline, utterance)
@@ -123,22 +203,48 @@ class L2StudentBundle:
             if self.slot_tagger is not None
             else SlotPrediction(slots={})
         )
+        predicted_intent = str(intent_result["intent"])
+        slots = filter_slots_for_intent(
+            predicted_intent,
+            slot_prediction.slots,
+            getattr(self, "slots_by_intent", {}),
+        )
+        slots = apply_slot_patterns(
+            predicted_intent,
+            utterance,
+            slots,
+            getattr(self, "slots_by_intent", {}),
+            getattr(self, "slot_patterns_by_intent", {}),
+        )
+        support = _score_intent_support(
+            getattr(self, "intent_support_index", None),
+            self.intent_pipeline,
+            utterance,
+            predicted_intent,
+        )
         features = guard_features(
             intent_result["top_probability"],
             intent_result["margin"],
             intent_result["entropy"],
             slot_prediction.avg_probability,
             slot_prediction.invalid_bio,
+            support.nearest_similarity,
+            support.predicted_intent_similarity,
+            support.intent_support_margin,
         )
+        features = _match_guard_feature_width(features, self.guard_model)
         guard_probability = float(self.guard_model.predict_proba(features)[0][1])
         return L2Prediction(
-            frame=Frame(intent=intent_result["intent"], slots=slot_prediction.slots),
+            frame=Frame(intent=predicted_intent, slots=slots),
             guard_probability=guard_probability,
             top1_probability=intent_result["top_probability"],
             margin=intent_result["margin"],
             entropy=intent_result["entropy"],
             slot_avg_probability=slot_prediction.avg_probability,
             slot_invalid_bio=slot_prediction.invalid_bio,
+            nearest_similarity=support.nearest_similarity,
+            predicted_intent_similarity=support.predicted_intent_similarity,
+            intent_support_margin=support.intent_support_margin,
         )
 
     def save(self, path: Path) -> None:
@@ -157,7 +263,8 @@ class L2StudentLayer:
     def try_answer(self, utterance: str) -> LayerResult:
         with elapsed_ms() as ms:
             prediction = self.bundle.predict(utterance)
-            accepted = guard_accepts(
+            runtime_enabled = getattr(self.bundle.config, "runtime_enabled", True)
+            accepted = runtime_enabled and guard_accepts(
                 prediction.guard_probability,
                 self.bundle.config.accept_threshold,
             )
@@ -166,7 +273,7 @@ class L2StudentLayer:
                 accepted=accepted,
                 frame=prediction.frame if accepted else None,
                 confidence=prediction.guard_probability,
-                reason="guard accepted" if accepted else "guard rejected",
+                reason=_l2_layer_reason(runtime_enabled, accepted),
                 latency_ms=ms(),
                 metadata={
                     "predicted_frame": prediction.frame.model_dump(mode="json"),
@@ -176,7 +283,11 @@ class L2StudentLayer:
                     "entropy": prediction.entropy,
                     "slot_avg_probability": prediction.slot_avg_probability,
                     "slot_invalid_bio": prediction.slot_invalid_bio,
+                    "nearest_similarity": prediction.nearest_similarity,
+                    "predicted_intent_similarity": prediction.predicted_intent_similarity,
+                    "intent_support_margin": prediction.intent_support_margin,
                     "accept_threshold": self.bundle.config.accept_threshold,
+                    "runtime_enabled": runtime_enabled,
                     "slot_model": "token_sgd" if self.bundle.slot_tagger else "none",
                 },
             )
@@ -184,6 +295,12 @@ class L2StudentLayer:
 
 def guard_accepts(probability: float, threshold: float) -> bool:
     return GuardDecision(probability=probability, threshold=threshold).accepted
+
+
+def _l2_layer_reason(runtime_enabled: bool, accepted: bool) -> str:
+    if not runtime_enabled:
+        return "runtime disabled"
+    return "guard accepted" if accepted else "guard rejected"
 
 
 def training_examples_from_teacher_traces(
@@ -208,14 +325,66 @@ def train_l2_student(
         raise ValueError("L2 intent student requires at least two teacher intents")
 
     train_examples, guard_examples = _split_examples(examples, config.random_state)
+    calibration_intent_pipeline = train_intent_pipeline(train_examples, config)
+    calibration_slot_tagger = train_slot_tagger(train_examples, config)
+    calibration_slots_by_intent = slots_by_intent_from_examples(train_examples)
+    calibration_slot_patterns = slot_patterns_by_intent_from_examples(train_examples)
+    calibration_intent_support = IntentPrototypeIndex.from_examples(
+        calibration_intent_pipeline,
+        train_examples,
+    )
+    guard_model = train_guard(
+        calibration_intent_pipeline,
+        calibration_slot_tagger,
+        guard_examples,
+        config,
+        slots_by_intent=calibration_slots_by_intent,
+        slot_patterns_by_intent=calibration_slot_patterns,
+        intent_support_index=calibration_intent_support,
+    )
+    runtime_intent_pipeline = train_intent_pipeline(examples, config)
+    runtime_slot_tagger = train_slot_tagger(examples, config)
+    return L2StudentBundle(
+        intent_pipeline=runtime_intent_pipeline,
+        slot_tagger=runtime_slot_tagger,
+        guard_model=guard_model,
+        config=config,
+        slots_by_intent=slots_by_intent_from_examples(examples),
+        slot_patterns_by_intent=slot_patterns_by_intent_from_examples(examples),
+        intent_support_index=IntentPrototypeIndex.from_examples(
+            runtime_intent_pipeline,
+            examples,
+        ),
+    )
+
+
+def train_intent_pipeline(
+    examples: list[L2TrainingExample],
+    config: L2StudentConfig,
+) -> Pipeline:
     intent_pipeline = Pipeline(
         [
             (
                 "features",
-                TfidfVectorizer(
-                    analyzer="word",
-                    ngram_range=config.word_ngram_range,
-                    max_features=config.max_features,
+                FeatureUnion(
+                    [
+                        (
+                            "word",
+                            TfidfVectorizer(
+                                analyzer="word",
+                                ngram_range=config.word_ngram_range,
+                                max_features=config.max_features,
+                            ),
+                        ),
+                        (
+                            "char",
+                            TfidfVectorizer(
+                                analyzer="char_wb",
+                                ngram_range=config.char_ngram_range,
+                                max_features=config.max_features,
+                            ),
+                        ),
+                    ]
                 ),
             ),
             (
@@ -230,17 +399,10 @@ def train_l2_student(
         ]
     )
     intent_pipeline.fit(
-        [example.utterance for example in train_examples],
-        [example.teacher_frame.intent for example in train_examples],
+        [example.utterance for example in examples],
+        [example.teacher_frame.intent for example in examples],
     )
-    slot_tagger = train_slot_tagger(train_examples, config)
-    guard_model = train_guard(intent_pipeline, slot_tagger, guard_examples, config)
-    return L2StudentBundle(
-        intent_pipeline=intent_pipeline,
-        slot_tagger=slot_tagger,
-        guard_model=guard_model,
-        config=config,
-    )
+    return intent_pipeline
 
 
 def train_guard(
@@ -248,7 +410,14 @@ def train_guard(
     slot_tagger: TokenSlotTagger | None,
     examples: list[L2TrainingExample],
     config: L2StudentConfig,
+    *,
+    slots_by_intent: dict[str, tuple[str, ...]] | None = None,
+    slot_patterns_by_intent: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]]
+    | None = None,
+    intent_support_index: IntentPrototypeIndex | None = None,
 ) -> LogisticRegression | ConstantGuard:
+    slots_by_intent = slots_by_intent or {}
+    slot_patterns_by_intent = slot_patterns_by_intent or {}
     feature_rows = []
     correct_labels = []
     for example in examples:
@@ -258,7 +427,26 @@ def train_guard(
             if slot_tagger is not None
             else SlotPrediction(slots={})
         )
-        predicted_frame = Frame(intent=intent_result["intent"], slots=slot_prediction.slots)
+        predicted_intent = str(intent_result["intent"])
+        slots = filter_slots_for_intent(
+            predicted_intent,
+            slot_prediction.slots,
+            slots_by_intent,
+        )
+        slots = apply_slot_patterns(
+            predicted_intent,
+            example.utterance,
+            slots,
+            slots_by_intent,
+            slot_patterns_by_intent,
+        )
+        predicted_frame = Frame(intent=predicted_intent, slots=slots)
+        support = _score_intent_support(
+            intent_support_index,
+            intent_pipeline,
+            example.utterance,
+            predicted_intent,
+        )
         feature_rows.append(
             [
                 intent_result["top_probability"],
@@ -266,6 +454,9 @@ def train_guard(
                 intent_result["entropy"],
                 slot_prediction.avg_probability,
                 float(slot_prediction.invalid_bio),
+                support.nearest_similarity,
+                support.predicted_intent_similarity,
+                support.intent_support_margin,
             ]
         )
         correct_labels.append(int(predicted_frame == example.teacher_frame))
@@ -285,6 +476,9 @@ def guard_features(
     entropy: float,
     slot_avg_probability: float = 1.0,
     slot_invalid_bio: bool = False,
+    nearest_similarity: float = 0.0,
+    predicted_intent_similarity: float = 0.0,
+    intent_support_margin: float = 0.0,
 ) -> np.ndarray:
     return np.asarray(
         [
@@ -294,10 +488,172 @@ def guard_features(
                 entropy,
                 slot_avg_probability,
                 float(slot_invalid_bio),
+                nearest_similarity,
+                predicted_intent_similarity,
+                intent_support_margin,
             ]
         ],
         dtype=float,
     )
+
+
+def _score_intent_support(
+    support_index: IntentPrototypeIndex | None,
+    intent_pipeline: Pipeline,
+    utterance: str,
+    predicted_intent: str,
+) -> IntentSupportFeatures:
+    if support_index is None:
+        return IntentSupportFeatures()
+    return support_index.score(intent_pipeline, utterance, predicted_intent)
+
+
+def _match_guard_feature_width(features: np.ndarray, guard_model: Any) -> np.ndarray:
+    expected_width = getattr(guard_model, "n_features_in_", None)
+    if expected_width is None:
+        return features
+    width = int(expected_width)
+    if features.shape[1] == width:
+        return features
+    if features.shape[1] > width:
+        return features[:, :width]
+    padding = np.zeros((features.shape[0], width - features.shape[1]), dtype=features.dtype)
+    return np.hstack([features, padding])
+
+
+def slots_by_intent_from_examples(
+    examples: list[L2TrainingExample],
+) -> dict[str, tuple[str, ...]]:
+    slots_by_intent: dict[str, set[str]] = {}
+    for example in examples:
+        slots_by_intent.setdefault(example.teacher_frame.intent, set()).update(
+            example.teacher_frame.slots
+        )
+    return {
+        intent: tuple(sorted(slot_names))
+        for intent, slot_names in sorted(slots_by_intent.items())
+    }
+
+
+def filter_slots_for_intent(
+    intent: str,
+    slots: dict[str, str],
+    slots_by_intent: dict[str, tuple[str, ...]],
+) -> dict[str, str]:
+    if not slots_by_intent:
+        return slots
+    allowed = set(slots_by_intent.get(intent, ()))
+    return {slot_name: value for slot_name, value in slots.items() if slot_name in allowed}
+
+
+def slot_patterns_by_intent_from_examples(
+    examples: list[L2TrainingExample],
+) -> dict[str, dict[str, list[dict[str, tuple[str, ...]]]]]:
+    patterns: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]] = {}
+    seen: set[tuple[str, str, tuple[str, ...], tuple[str, ...]]] = set()
+    for example in examples:
+        tokens = tokenize(example.utterance)
+        for slot_name, slot_value in sorted(example.teacher_frame.slots.items()):
+            slot_tokens = tokenize(slot_value)
+            if not tokens or not slot_tokens:
+                continue
+            start = _find_unoccupied_span(tokens, slot_tokens, [False] * len(tokens))
+            if start is None:
+                continue
+            end = start + len(slot_tokens)
+            prefix = tuple(tokens[max(0, start - 3) : start])
+            suffix = tuple(tokens[end : min(len(tokens), end + 3)])
+            key = (example.teacher_frame.intent, slot_name, prefix, suffix)
+            if key in seen:
+                continue
+            seen.add(key)
+            patterns.setdefault(example.teacher_frame.intent, {}).setdefault(slot_name, []).append(
+                {
+                    "prefix": prefix,
+                    "suffix": suffix,
+                }
+            )
+    return {
+        intent: {
+            slot_name: sorted(
+                slot_patterns,
+                key=lambda pattern: (
+                    -(len(pattern["prefix"]) + len(pattern["suffix"])),
+                    pattern["prefix"],
+                    pattern["suffix"],
+                ),
+            )
+            for slot_name, slot_patterns in sorted(slots.items())
+        }
+        for intent, slots in sorted(patterns.items())
+    }
+
+
+def apply_slot_patterns(
+    intent: str,
+    utterance: str,
+    slots: dict[str, str],
+    slots_by_intent: dict[str, tuple[str, ...]],
+    slot_patterns_by_intent: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]],
+) -> dict[str, str]:
+    allowed_slots = slots_by_intent.get(intent, ())
+    if not allowed_slots:
+        return slots
+    patterns_by_slot = slot_patterns_by_intent.get(intent, {})
+    if not patterns_by_slot:
+        return slots
+    tokens = tokenize(utterance)
+    if not tokens:
+        return slots
+    updated = dict(slots)
+    for slot_name in allowed_slots:
+        for pattern in patterns_by_slot.get(slot_name, []):
+            extracted = _extract_slot_with_context(tokens, pattern)
+            if extracted is None:
+                continue
+            existing = tokenize(updated.get(slot_name, ""))
+            if slot_name not in updated or len(tokenize(extracted)) > len(existing):
+                updated[slot_name] = extracted
+            break
+    return updated
+
+
+def _extract_slot_with_context(
+    tokens: list[str],
+    pattern: dict[str, tuple[str, ...]],
+) -> str | None:
+    prefix = tuple(pattern.get("prefix", ()))
+    suffix = tuple(pattern.get("suffix", ()))
+    starts = _candidate_starts(tokens, prefix)
+    for start in starts:
+        end = _candidate_end(tokens, suffix, start)
+        if end is None or end <= start:
+            continue
+        if end - start > 8:
+            continue
+        return " ".join(tokens[start:end])
+    return None
+
+
+def _candidate_starts(tokens: list[str], prefix: tuple[str, ...]) -> list[int]:
+    if not prefix:
+        return [0]
+    starts = []
+    width = len(prefix)
+    for index in range(0, len(tokens) - width + 1):
+        if tuple(tokens[index : index + width]) == prefix:
+            starts.append(index + width)
+    return starts
+
+
+def _candidate_end(tokens: list[str], suffix: tuple[str, ...], start: int) -> int | None:
+    if not suffix:
+        return len(tokens)
+    width = len(suffix)
+    for index in range(start, len(tokens) - width + 1):
+        if tuple(tokens[index : index + width]) == suffix:
+            return index
+    return None
 
 
 def train_slot_tagger(

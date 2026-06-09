@@ -401,6 +401,87 @@ def test_generate_run_report_includes_required_layer_summary_metrics(tmp_path: P
     assert metric_lookup[("layer_summary", "L4", "cost_usd_per_100_requests")] == "0.666667"
 
 
+def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -> None:
+    traces = [
+        TraceRecord(
+            request_id="r1",
+            utterance="play jazz",
+            gold_frame=Frame(intent="music_play"),
+            teacher_frame=Frame(intent="music_play"),
+            chosen_layer="L4",
+            final_frame=Frame(intent="music_play"),
+            layer_results=[
+                LayerResult(
+                    layer="L2",
+                    accepted=False,
+                    frame=None,
+                    confidence=0.12,
+                    latency_ms=2.0,
+                    metadata={
+                        "predicted_frame": {"intent": "music_play", "slots": {}},
+                        "slot_invalid_bio": False,
+                        "nearest_similarity": 0.9,
+                        "predicted_intent_similarity": 0.8,
+                        "intent_support_margin": 0.7,
+                    },
+                ),
+                LayerResult(
+                    layer="L4",
+                    accepted=True,
+                    frame=Frame(intent="music_play"),
+                    latency_ms=900.0,
+                ),
+            ],
+        ),
+        TraceRecord(
+            request_id="r2",
+            utterance="set alarm",
+            gold_frame=Frame(intent="alarm_set"),
+            teacher_frame=Frame(intent="alarm_set"),
+            chosen_layer="L4",
+            final_frame=Frame(intent="alarm_set"),
+            layer_results=[
+                LayerResult(
+                    layer="L2",
+                    accepted=False,
+                    frame=None,
+                    confidence=0.08,
+                    latency_ms=4.0,
+                    metadata={
+                        "predicted_frame": {"intent": "music_play", "slots": {}},
+                        "slot_invalid_bio": False,
+                        "nearest_similarity": 0.4,
+                        "predicted_intent_similarity": 0.2,
+                        "intent_support_margin": -0.3,
+                    },
+                ),
+                LayerResult(
+                    layer="L4",
+                    accepted=True,
+                    frame=Frame(intent="alarm_set"),
+                    latency_ms=900.0,
+                ),
+            ],
+        ),
+    ]
+    (tmp_path / "traces.jsonl").write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in traces),
+        encoding="utf-8",
+    )
+    (tmp_path / "settings.json").write_text("{}\n", encoding="utf-8")
+
+    result = generate_run_report(tmp_path)
+
+    summary = result.summary_path.read_text(encoding="utf-8")
+    metrics = list(csv.DictReader(result.metrics_csv_path.open(encoding="utf-8")))
+    metric_lookup = {(row["scope"], row["metric"]): row["value"] for row in metrics}
+    assert "## L2 Unguarded Diagnostics" in summary
+    assert "- threshold=0 accuracy: 0.500" in summary
+    assert metric_lookup[("l2_unguarded", "unguarded_accuracy")] == "0.5"
+    assert metric_lookup[("l2_unguarded", "p95_ms")] == "3.9"
+    assert metric_lookup[("l2_unguarded", "predicted_intent_similarity_p50")] == "0.5"
+
+
 def test_generate_run_report_includes_evolution_and_artifact_summary_tables(
     tmp_path: Path,
 ) -> None:

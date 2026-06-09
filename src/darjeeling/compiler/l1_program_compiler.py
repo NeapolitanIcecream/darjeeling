@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from difflib import unified_diff
@@ -204,6 +205,10 @@ def _write_context_files(
     payloads = {
         "teacher_train.jsonl": [trace.model_dump(mode="json") for trace in teacher_train],
         "hard_cases.jsonl": [trace.model_dump(mode="json") for trace in hard_cases],
+        "context_families.json": _context_families_payload(
+            teacher_train=teacher_train,
+            hard_cases=hard_cases,
+        ),
         "current_metrics.json": current_metrics,
         "objective.json": objective,
         "constraints.md": _constraints_text(),
@@ -231,6 +236,9 @@ def _build_l1_agent_prompt(*, context_dir: Path, workspace_crate_dir: Path) -> s
             "You are running as the L4 coding-agent compiler mode for L1.",
             "Edit only the Rust ProgramBank workspace provided for this job.",
             "Use the teacher-visible context files, objective, constraints, and command guide.",
+            "Start from `context_families.json`: it groups raw traces into schema-aware",
+            "pattern families and highlights current L1 behavior. Use raw JSONL files",
+            "only for examples and boundary checks.",
             "Prefer native Rust code paths: if/else trees, tight loops, tables,",
             "small state machines, or validators.",
             "Default to abstain when uncertain. Do not change outer evaluator or promotion logic.",
@@ -244,6 +252,120 @@ def _build_l1_agent_prompt(*, context_dir: Path, workspace_crate_dir: Path) -> s
             "- Identify any known risk or failed check.",
         ]
     )
+
+
+def _context_families_payload(
+    *,
+    teacher_train: list[TeacherTrace],
+    hard_cases: list[TeacherTrace],
+) -> dict[str, Any]:
+    hard_case_ids = {trace.request_id for trace in hard_cases}
+    grouped: dict[tuple[str, tuple[str, ...]], list[TeacherTrace]] = defaultdict(list)
+    for trace in teacher_train:
+        if trace.teacher_frame is None:
+            continue
+        signature = tuple(sorted(trace.teacher_frame.slots))
+        grouped[(trace.teacher_frame.intent, signature)].append(trace)
+
+    families = []
+    for (intent, slot_signature), traces in sorted(
+        grouped.items(),
+        key=lambda item: (
+            -sum(trace.request_id in hard_case_ids for trace in item[1]),
+            -len(item[1]),
+            item[0][0],
+            item[0][1],
+        ),
+    ):
+        l1_outcomes = Counter(_trace_l1_outcome(trace) for trace in traces)
+        chosen_layers = Counter(trace.chosen_layer for trace in traces)
+        token_counts = _content_token_counts(trace.utterance for trace in traces)
+        examples = sorted(
+            traces,
+            key=lambda trace: (
+                trace.request_id not in hard_case_ids,
+                trace.request_id,
+            ),
+        )[:6]
+        families.append(
+            {
+                "family_id": _family_id(intent, slot_signature),
+                "intent": intent,
+                "slot_signature": list(slot_signature),
+                "support": len(traces),
+                "hard_case_support": sum(trace.request_id in hard_case_ids for trace in traces),
+                "chosen_layer_counts": dict(sorted(chosen_layers.items())),
+                "l1_outcome_counts": dict(sorted(l1_outcomes.items())),
+                "common_tokens": [token for token, _count in token_counts.most_common(8)],
+                "examples": [
+                    {
+                        "request_id": trace.request_id,
+                        "utterance": trace.utterance,
+                        "teacher_frame": trace.teacher_frame.model_dump(mode="json")
+                        if trace.teacher_frame is not None
+                        else None,
+                        "chosen_layer": trace.chosen_layer,
+                        "l1_outcome": _trace_l1_outcome(trace),
+                    }
+                    for trace in examples
+                ],
+            }
+        )
+
+    payload = {
+        "schema_version": "l1-context-families-v1",
+        "teacher_train_count": len(teacher_train),
+        "hard_case_count": len(hard_cases),
+        "family_count": len(families),
+        "families": families,
+    }
+    assert_no_forbidden_context(payload)
+    return payload
+
+
+def _family_id(intent: str, slot_signature: tuple[str, ...]) -> str:
+    slots = ",".join(slot_signature) if slot_signature else "no_slots"
+    return f"{intent}|{slots}"
+
+
+def _trace_l1_outcome(trace: TeacherTrace) -> str:
+    l1_result = next((result for result in trace.layer_results if result.layer == "L1"), None)
+    if l1_result is None:
+        return "not_run"
+    if not l1_result.accepted:
+        return "abstain"
+    if l1_result.frame == trace.teacher_frame:
+        return "correct_accept"
+    return "wrong_accept"
+
+
+def _content_token_counts(utterances: Any) -> Counter[str]:
+    stop_words = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "for",
+        "in",
+        "is",
+        "me",
+        "my",
+        "of",
+        "on",
+        "please",
+        "the",
+        "to",
+        "what",
+        "you",
+    }
+    counts: Counter[str] = Counter()
+    for utterance in utterances:
+        for token in str(utterance).lower().replace(".", " ").split():
+            cleaned = "".join(char for char in token if char.isalnum() or char == "'")
+            if len(cleaned) < 2 or cleaned in stop_words:
+                continue
+            counts[cleaned] += 1
+    return counts
 
 
 def _run_dry_run_job(

@@ -44,7 +44,8 @@ Promoted artifact 中保存完整 source snapshot、binary 或 build instruction
 已实现第一版 `L4CodingAgentAdapter` / `run_l1_coding_agent_job`：
 
 - 将当前 Rust crate 复制到 generation-scoped candidate workspace。
-- 写入 `contexts/teacher_train.jsonl`、`hard_cases.jsonl`、`current_metrics.json`、`objective.json`、`constraints.md` 和 `commands.md`。
+- 写入 `contexts/teacher_train.jsonl`、`hard_cases.jsonl`、`context_families.json`、`current_metrics.json`、`objective.json`、`constraints.md` 和 `commands.md`。
+- `context_families.json` 使用 dataset-independent、schema-aware 聚合：按 teacher intent 与 slot signature 形成 family，记录 support、hard-case support、chosen layer counts、当前 L1 outcome counts、common tokens 和少量例子。Codex prompt 要求优先阅读该 summary，再按需查看 raw JSONL。
 - context 输入类型使用 `TeacherTrace`，并扫描 forbidden gold/eval/future 字段。
 - 支持 `dry-run` 模式，通过 fixture patch 修改 candidate workspace，用于测试 artifact packaging 和 state machine。
 - 支持 `codex-cli` 模式，调用 `codex --model <model> --sandbox <mode> -a <policy> exec --cd <workspace> --json -o agent_report.md -`，并记录 raw transcript、commands、diff、report 和 `provenance.json`。

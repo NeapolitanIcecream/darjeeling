@@ -379,6 +379,7 @@ def _write_summary_md(
         "- `curves.html`\n"
         "- `hard_cases.jsonl`\n\n"
         f"{_layer_summary_section(traces)}\n\n"
+        f"{_l2_unguarded_section(traces)}\n\n"
         f"{_evolution_summary_section(promotion_records)}\n\n"
         f"{
             _artifact_summary_section(
@@ -480,6 +481,7 @@ def _metrics_rows(
         )
 
     rows.extend(_latency_metric_rows(traces))
+    rows.extend(_l2_unguarded_metric_rows(traces))
     rows.extend(_l1_metric_rows(traces))
     rows.extend(_l1_benchmark_metric_rows(l1_benchmark))
     rows.extend(
@@ -571,6 +573,180 @@ def _layer_summary_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]
                 )
             )
     return rows
+
+
+def _l2_unguarded_section(traces: list[TraceRecord]) -> str:
+    stats = _l2_unguarded_stats(traces)
+    lines = ["## L2 Unguarded Diagnostics", ""]
+    if stats["evaluated"] == 0:
+        lines.append("No L2 observations found.")
+        return "\n".join(lines)
+    lines.extend(
+        [
+            f"- evaluated: {stats['evaluated']}",
+            f"- labeled: {stats['labeled']}",
+            f"- runtime accepted: {stats['runtime_accepted']}",
+            (
+                "- threshold=0 accuracy: "
+                f"{_format_layer_summary_value('unguarded_accuracy', stats['unguarded_accuracy'])}"
+            ),
+            (
+                "- threshold=0 wrong prediction rate: "
+                f"{
+                    _format_layer_summary_value(
+                        'unguarded_wrong_rate',
+                        stats['unguarded_wrong_rate'],
+                    )
+                }"
+            ),
+            (
+                "- L2 latency p50/p95: "
+                f"{_format_layer_summary_value('p50_ms', stats['p50_ms'])}/"
+                f"{_format_layer_summary_value('p95_ms', stats['p95_ms'])} ms"
+            ),
+            (
+                "- intent support similarity p50/p95: "
+                f"{
+                    _format_layer_summary_value(
+                        'predicted_intent_similarity_p50',
+                        stats['predicted_intent_similarity_p50'],
+                    )
+                }/"
+                f"{
+                    _format_layer_summary_value(
+                        'predicted_intent_similarity_p95',
+                        stats['predicted_intent_similarity_p95'],
+                    )
+                }"
+            ),
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _l2_unguarded_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]]:
+    stats = _l2_unguarded_stats(traces)
+    return [
+        _metric_row("l2_unguarded", "", "L2", metric, value)
+        for metric, value in stats.items()
+    ]
+
+
+def _l2_unguarded_stats(traces: list[TraceRecord]) -> dict[str, Any]:
+    evaluated = 0
+    labeled = 0
+    correct = 0
+    wrong = 0
+    runtime_accepted = 0
+    latencies: list[float] = []
+    guard_probabilities: list[float] = []
+    nearest_similarities: list[float] = []
+    predicted_intent_similarities: list[float] = []
+    intent_support_margins: list[float] = []
+    invalid_slot_outputs = 0
+    for trace in traces:
+        expected = _evaluation_label(trace)
+        for result in trace.layer_results:
+            if result.layer != "L2":
+                continue
+            predicted = _l2_predicted_frame(result)
+            if predicted is None:
+                continue
+            evaluated += 1
+            runtime_accepted += int(result.accepted)
+            latencies.append(result.latency_ms)
+            if isinstance(result.confidence, int | float):
+                guard_probabilities.append(float(result.confidence))
+            metadata = result.metadata or {}
+            if metadata.get("slot_invalid_bio") is True:
+                invalid_slot_outputs += 1
+            _append_numeric_metadata(
+                nearest_similarities,
+                metadata,
+                "nearest_similarity",
+            )
+            _append_numeric_metadata(
+                predicted_intent_similarities,
+                metadata,
+                "predicted_intent_similarity",
+            )
+            _append_numeric_metadata(
+                intent_support_margins,
+                metadata,
+                "intent_support_margin",
+            )
+            if expected is None:
+                continue
+            labeled += 1
+            if predicted == expected:
+                correct += 1
+            else:
+                wrong += 1
+    return {
+        "evaluated": evaluated,
+        "labeled": labeled,
+        "correct": correct,
+        "wrong": wrong,
+        "runtime_accepted": runtime_accepted,
+        "unguarded_accuracy": correct / labeled if labeled else None,
+        "unguarded_wrong_rate": wrong / labeled if labeled else None,
+        "runtime_accept_rate": runtime_accepted / evaluated if evaluated else 0.0,
+        "p50_ms": _percentile(latencies, 50) if latencies else None,
+        "p95_ms": _percentile(latencies, 95) if latencies else None,
+        "guard_probability_p50": _percentile(guard_probabilities, 50)
+        if guard_probabilities
+        else None,
+        "guard_probability_p95": _percentile(guard_probabilities, 95)
+        if guard_probabilities
+        else None,
+        "nearest_similarity_p50": _percentile(nearest_similarities, 50)
+        if nearest_similarities
+        else None,
+        "nearest_similarity_p95": _percentile(nearest_similarities, 95)
+        if nearest_similarities
+        else None,
+        "predicted_intent_similarity_p50": _percentile(
+            predicted_intent_similarities,
+            50,
+        )
+        if predicted_intent_similarities
+        else None,
+        "predicted_intent_similarity_p95": _percentile(
+            predicted_intent_similarities,
+            95,
+        )
+        if predicted_intent_similarities
+        else None,
+        "intent_support_margin_p50": _percentile(intent_support_margins, 50)
+        if intent_support_margins
+        else None,
+        "intent_support_margin_p95": _percentile(intent_support_margins, 95)
+        if intent_support_margins
+        else None,
+        "slot_invalid_bio": invalid_slot_outputs,
+    }
+
+
+def _append_numeric_metadata(
+    values: list[float],
+    metadata: dict[str, Any],
+    key: str,
+) -> None:
+    value = metadata.get(key)
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        values.append(float(value))
+
+
+def _l2_predicted_frame(result: Any) -> Frame | None:
+    payload = result.metadata.get("predicted_frame") if result.metadata else None
+    if payload is None and result.accepted:
+        return result.frame
+    if payload is None:
+        return None
+    try:
+        return Frame.model_validate(payload)
+    except ValueError:
+        return None
 
 
 def _evolution_summary_section(promotion_records: list[dict[str, Any]]) -> str:
@@ -2074,6 +2250,7 @@ def _l2_guard_calibration_evidence(
 ) -> str | None:
     if not l2_results:
         return None
+    unguarded = _l2_unguarded_stats(traces)
     labeled_accepts = []
     wrong_accepts = 0
     for trace in traces:
@@ -2093,6 +2270,22 @@ def _l2_guard_calibration_evidence(
                 f"({wrong_rate:.3f}) against teacher/gold-visible traces"
             )
     elif len(l2_results) >= 10:
+        if unguarded["labeled"]:
+            accuracy = unguarded["unguarded_accuracy"]
+            p95 = unguarded["p95_ms"]
+            if isinstance(accuracy, int | float) and accuracy >= 0.80:
+                return (
+                    "L2 produced "
+                    f"{len(l2_results)} results but accepted none; threshold=0 accuracy would be "
+                    f"{accuracy:.3f} over {unguarded['labeled']} labeled observations "
+                    f"with p95 latency {p95:.3f} ms"
+                )
+            if isinstance(accuracy, int | float):
+                return (
+                    "L2 produced "
+                    f"{len(l2_results)} results but accepted none; threshold=0 accuracy is only "
+                    f"{accuracy:.3f} over {unguarded['labeled']} labeled observations"
+                )
         return f"L2 produced {len(l2_results)} results but accepted none"
     return None
 
