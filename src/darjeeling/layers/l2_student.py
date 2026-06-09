@@ -57,6 +57,8 @@ class L2TrainingExample(BaseModel):
 class L2Prediction(BaseModel):
     frame: Frame
     guard_probability: float
+    raw_guard_probability: float = 0.0
+    guard_calibration_cap: float = 1.0
     top1_probability: float
     margin: float
     entropy: float
@@ -507,10 +509,14 @@ class L2StudentBundle:
             float(frame_source == "retrieval"),
         )
         features = _match_guard_feature_width(features, self.guard_model)
-        guard_probability = float(self.guard_model.predict_proba(features)[0][1])
+        raw_guard_probability = float(self.guard_model.predict_proba(features)[0][1])
+        guard_calibration_cap = _guard_calibration_cap(calibration)
+        guard_probability = min(raw_guard_probability, guard_calibration_cap)
         return L2Prediction(
             frame=prediction_frame,
             guard_probability=guard_probability,
+            raw_guard_probability=raw_guard_probability,
+            guard_calibration_cap=guard_calibration_cap,
             top1_probability=intent_result["top_probability"],
             margin=intent_result["margin"],
             entropy=intent_result["entropy"],
@@ -569,6 +575,8 @@ class L2StudentLayer:
                 metadata={
                     "predicted_frame": prediction.frame.model_dump(mode="json"),
                     "guard_probability": prediction.guard_probability,
+                    "raw_guard_probability": prediction.raw_guard_probability,
+                    "guard_calibration_cap": prediction.guard_calibration_cap,
                     "top1_probability": prediction.top1_probability,
                     "margin": prediction.margin,
                     "entropy": prediction.entropy,
@@ -939,6 +947,12 @@ def _score_intent_calibration(
             predicted_has_slots=float(bool(slots)),
         )
     return calibration_index.score(predicted_intent, slots)
+
+
+def _guard_calibration_cap(calibration: IntentCalibrationFeatures) -> float:
+    if calibration.predicted_signature_support <= 0.0:
+        return 1.0
+    return max(0.0, min(1.0, calibration.predicted_signature_frame_accuracy))
 
 
 def _score_frame_retrieval(
