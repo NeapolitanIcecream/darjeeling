@@ -171,8 +171,10 @@ L2 coding-agent path：
 
 - `L2_AGENT_MODE=disabled|dry-run|codex-cli` 控制 L4 coding agent 是否为 L2 生成 patch candidate。默认 disabled，不产生 live LLM cost。
 - `dry-run` 应用 fixture patch，只用于 harness 和 artifact 测试。
-- 用户决策：`codex-cli` 是 L2 evolve 主路径，优先级高于原 proposal 中更轻量的 direct config proposal。Codex 使用 GPT-5.5，独立于宿主机个人 config/rules，并使用更长 timeout；auth 仍由 Codex CLI 的 `CODEX_HOME` 机制提供。
-- `codex-cli` 在隔离 autoresearch-style workspace 中运行 Codex CLI。Agent 只能修改 `candidate/` 中的 L2-owned Python source、tests 和模块设计文档；Darjeeling 宿主仓库不直接暴露为可写目标。
+- `L2_AGENT_MODE` 是 legacy patch-generation path：它仍能产出可审计 patch，但 patch 指向 Darjeeling core 的 L2-owned 文件，因此不能作为 target-dependent L2 evolve 主线。
+- 用户决策：真正的 L2 evolve 主路径应拆成 Outer Darjeeling loop 和 Inner L2 target-evolution loop。Darjeeling core 必须 dataset-independent；target workspace 内的 L2 runtime code 可以 target-dependent，并由 L4 coding agent 多轮演化。
+- `codex-cli` 使用 GPT-5.5，独立于宿主机个人 config/rules，并使用更长 timeout；auth 仍由 Codex CLI 的 `CODEX_HOME` 机制提供。
+- Legacy `codex-cli` 在隔离 autoresearch-style workspace 中运行 Codex CLI。Agent 只能修改 `candidate/` 中的 L2-owned Python source、tests 和模块设计文档；Darjeeling 宿主仓库不直接暴露为可写目标。
 - Workspace 使用 `program.md + candidate/ + system/darjeeling/ + data/ + tools/`：
   - `program.md` 是稳定任务说明。
   - `candidate/` 是可 diff 的 L2 研究代码区。
@@ -185,6 +187,21 @@ L2 coding-agent path：
 - Agent patch adoption 以 replay/promotion success 为准；提高 raw L2 coverage 但引入 frame exactness regression 的 patch 必须撤回。
 - Dataset-specific intent/slot lexical patch 默认不纳入主线，除非 replay-backed hard case 证明必要，且实现方式可泛化。
 - 当前 compiler 只记录 agent patch artifact，不在同一 Python 进程中热加载 patch：`candidate_metrics["l2_agent_patch_runtime_applied"] = false`。真实采用 patch 必须由外层开发循环应用、提交 Git、重启实验。
+
+Inner L2 target-evolution path：
+
+- `edge-mvp l2 target-evolve` 是新的内层 target loop 入口。
+- Outer Darjeeling loop 负责 teacher-visible data split、workspace/provenance、outer promotion gate 和 core artifact 管理；不承载 target-specific L2 代码。
+- Inner target workspace 使用 `program.md + target/ + system/darjeeling/ + data/ + tools/`：
+  - `target/` 是唯一可写 target-dependent L2 runtime code。
+  - `system/darjeeling/` 是只读 core/evaluator copy。
+  - `data/train.jsonl` 可训练、可读。
+  - `data/inner_validation.jsonl` 可读，用于秒级多轮反馈。
+  - promotion holdout 不进入 agent workspace，存放在 outer job 的私有目录，只由 outer gate 读取。
+  - `tools/evaluate.py` 在固定 split 上训练 core L2 bundle，加载 `target/target_l2.py`，然后评估 inner validation；outer harness 使用同一 evaluator 加载私有 holdout 做 gate。
+- Inner loop 可以在同一批 target data 上连续跑多轮，不再受 `compile_every` 或 replay stream 速度限制。
+- target-dependent lexical/code patches 允许存在于 `target/`，但不能进入 Darjeeling core。是否采用由 holdout/promotion 指标决定，而不是由 dataset-independent core 规则决定。
+- 当前实现状态：已支持 `dry-run` 多轮和 target workspace evaluator；`codex-cli` 多轮入口已预留在 harness 中，但尚未作为主实验默认使用。
 
 Optuna tuning path：
 

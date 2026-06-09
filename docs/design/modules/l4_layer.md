@@ -148,8 +148,16 @@ Agent 权限：
 
 - L2 evolve 的主路径使用 L4 coding agent，而不是 direct API 直接生成完整设计。
 - 动态资料不一股脑塞进 prompt；它们放进 workspace，由 Codex 自己决定读哪些文件。
-- L2 dataset/runtime 相关代码放入隔离 research workspace 管理，agent 不直接修改 Darjeeling 宿主仓库。
+- L2 dataset/runtime 相关代码放入隔离 target workspace 管理，agent 不直接修改 Darjeeling 宿主仓库。
+- Darjeeling core 必须保持 dataset-independent；target workspace 内的 L2 runtime code 可以 target-dependent。
 - Codex CLI 使用 GPT-5.5、独立配置和更长 timeout；不能隐式继承宿主机个人配置。当前隔离对象是 config/rules/session persistence，auth 仍由 Codex CLI 的 `CODEX_HOME` 机制提供。
+
+Outer/Inner loop 分工：
+
+- Outer Darjeeling loop 负责 replay、teacher-visible split、workspace creation、provenance、promotion holdout、artifact registry 和 core invariants。
+- Inner L2 target-evolution loop 在固定 target workspace 内多轮运行：L4 coding agent 改 `target/`，本地 evaluator 训练/验证 L2，直到 inner validation 收敛或预算耗尽。
+- Inner loop 不等待新的 stream prefix，也不把 target-specific code 回写到 Darjeeling core。
+- `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 使用；promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer gate 使用。
 
 职责：
 
@@ -215,6 +223,7 @@ Agent 权限：
 - compiler generation 已在 `L2_AGENT_MODE` 非 disabled 时运行该 harness，并记录 `l2_agent_*` artifact paths 与 metrics。
 - `edge-mvp experiment l2-agent` 会开启 `L2_AGENT_MODE=codex-cli` 和 Optuna tuning，用于真实 L2 patch generation 实验。
 - 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。
+- 已新增 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve`，用于新的 target-dependent inner loop。该路径当前支持 dry-run 多轮、固定 split evaluator 和 target-only code scope；后续应把 Codex 多轮 evolve 作为主线实验入口，而不是继续依赖 outer `compile_every` cadence。
 
 ## Direct API session 策略
 

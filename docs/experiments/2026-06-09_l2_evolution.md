@@ -152,3 +152,53 @@ Conclusion for this follow-up:
   frame exactness and promotion success over raw L2 coverage, reject
   dataset-specific lexical patches by default, and consider a bounded agent
   budget/stop policy before spending another GPT-5.5 job.
+
+## Target-dependent inner loop correction
+
+The previous `l2_research/candidate` harness was useful for patch generation,
+but it still mixed two concerns:
+
+- It tied L2 evolution to outer replay generations, so the number of L4 agent
+  attempts was limited by `compile_every` and replay throughput.
+- It treated dataset-specific L2 code as if it were a Darjeeling-core patch,
+  which incorrectly applied dataset-independence rules to target runtime code.
+
+The corrected design is now implemented as `edge-mvp l2 target-evolve`:
+
+- Outer Darjeeling creates a fixed target split and owns provenance, private
+  promotion holdout, artifact adoption, and core invariants.
+- Inner L2 target evolution runs many rounds inside one isolated
+  `workspace/l2_target/`.
+- `target/` is the only writable target-dependent runtime code area.
+- `system/darjeeling/` is a read-only evaluator/core copy.
+- `data/train.jsonl` and `data/inner_validation.jsonl` are visible to the
+  agent; `promotion_holdout.jsonl` is stored under the outer job `private/`
+  directory and is not copied into the agent workspace.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-inner-smoke-r2 \
+  --rounds 5 \
+  --max-traces 500
+```
+
+Smoke result:
+
+- Runtime: about 8 seconds for 5 dry-run rounds over 500 trace rows.
+- Split: train 300, inner validation 100, private promotion holdout 100.
+- Inner validation stayed at 1 accepted / 1 correct / 0 wrong.
+- Promotion holdout stayed at 0 accepted.
+- Workspace manifest exposes only `train.jsonl` and `inner_validation.jsonl`;
+  holdout privacy was verified by file layout.
+
+Conclusion:
+
+- The architectural issue is fixed: L2 inner evolution can run many fast rounds
+  without waiting for a new replay prefix, and target-dependent code no longer
+  needs to be judged as Darjeeling-core code.
+- This dry-run smoke does not claim L2 quality improvement. The next meaningful
+  experiment must run `codex-cli` or target patches against this inner loop and
+  compare promotion-holdout success.

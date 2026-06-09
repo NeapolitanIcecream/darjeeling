@@ -14,6 +14,11 @@ from rich.console import Console
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.compiler.l2_distiller import l2_config_from_settings
+from darjeeling.compiler.l2_target_evolution import (
+    L2TargetEvolutionConfig,
+    L2TargetEvolutionMode,
+    run_l2_target_evolution,
+)
 from darjeeling.compiler.l2_tuner import L2TuneSpec, tune_l2_student
 from darjeeling.compiler.l3_prompt_optimizer import (
     l3_prompt_artifact_hash,
@@ -639,6 +644,56 @@ def l2_tune(
         f"tuned L2 with {result.n_trials_completed}/{result.n_trials_requested} "
         f"completed trials; best={result.best_value}; report={out}"
     )
+
+
+@l2_app.command("target-evolve")
+def l2_target_evolve(
+    traces: Annotated[Path, typer.Option(help="Trace JSONL file with teacher_frame labels.")],
+    out_dir: Annotated[Path, typer.Option(help="Output directory for target evolution artifacts.")],
+    rounds: Annotated[int, typer.Option(min=1, help="Inner evolution rounds.")] = 3,
+    mode: Annotated[
+        str,
+        typer.Option(help="Evolution mode: dry-run or codex-cli."),
+    ] = "dry-run",
+    dry_run_patch: Annotated[
+        list[Path] | None,
+        typer.Option(help="Patch to apply before a dry-run round; repeatable."),
+    ] = None,
+    max_traces: Annotated[
+        int | None,
+        typer.Option(min=1, help="Optional prefix of traces to use for the target split."),
+    ] = None,
+) -> None:
+    """Run an inner target-dependent L2 evolution loop over fixed trace splits."""
+
+    if mode not in {"dry-run", "codex-cli"}:
+        raise typer.BadParameter("mode must be dry-run or codex-cli")
+    evolution_mode: L2TargetEvolutionMode = "codex-cli" if mode == "codex-cli" else "dry-run"
+    settings = _load_cli_settings()
+    trace_records = read_traces(traces)
+    if max_traces is not None:
+        trace_records = trace_records[:max_traces]
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=out_dir,
+            rounds=rounds,
+            mode=evolution_mode,
+            dry_run_patches=tuple(dry_run_patch or ()),
+            codex_command=settings.l2_agent_codex_command,
+            codex_model=settings.l2_agent_model,
+            timeout_s=settings.l2_agent_timeout_s,
+            sandbox=settings.l2_agent_sandbox,
+            approval_policy=settings.l2_agent_approval_policy,
+            ignore_user_config=settings.l2_agent_ignore_user_config,
+            ignore_rules=settings.l2_agent_ignore_rules,
+            ephemeral=settings.l2_agent_ephemeral,
+            min_accepted_accuracy=settings.l2_min_guarded_accuracy,
+            max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
+        ),
+        traces=traces_to_teacher_view(trace_records),
+    )
+    console.print_json(data=summary)
 
 
 @experiments_app.command("main-evolution")

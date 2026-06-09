@@ -153,3 +153,18 @@ Semantic cache 是有价值的，但第一阶段不强制启用。先让 exact c
 - MVP 第一阶段 L0 exact cache 必须实现。
 - Semantic cache 作为第二阶段 artifact。
 - Report 中区分 exact cache 贡献和 semantic cache 贡献。
+
+## 决策 11：L2 evolve 使用 Target-dependent inner loop，不能改 Darjeeling core
+
+**状态：用户决策。**
+
+L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution loop。Darjeeling core 保持 dataset-independent；具体 target/dataset 的 L2 runtime code 放在隔离 target workspace，由 L4 coding agent 多轮修改、训练和评估。
+
+设计含义：
+
+- Outer Darjeeling loop 负责 replay、teacher-visible split、workspace/provenance、promotion holdout、artifact registry 和 core invariants。
+- Inner L2 target loop 在固定 workspace 内运行，不等待新的 stream prefix，也不受 `compile_every` 限制。
+- `target/` 是唯一可写 target-dependent code 区域；`system/darjeeling/` 是只读 core/evaluator copy。
+- `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 读；promotion holdout 存在 outer job 的私有目录，不进入 agent workspace，只由 outer gate 读。
+- Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 target holdout/promotion 指标决定是否采用。
+- 旧的 `L2_AGENT_MODE=codex-cli` patch harness 只能作为 legacy core-patch artifact 生成路径，不是 L2 evolve 主线。
