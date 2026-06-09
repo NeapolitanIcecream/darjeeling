@@ -111,6 +111,10 @@ class Settings(BaseSettings):
         default="teacher_train",
         validation_alias="L2_TRAINING_SCOPE",
     )
+    l2_frame_source: Literal["student", "retrieval"] = Field(
+        default="retrieval",
+        validation_alias="L2_FRAME_SOURCE",
+    )
     l2_max_features: int = Field(default=50_000, validation_alias="L2_MAX_FEATURES")
     l2_max_iter: int = Field(default=1000, validation_alias="L2_MAX_ITER")
     l2_mlp_hidden_layer_sizes: tuple[int, ...] = Field(
@@ -138,6 +142,10 @@ class Settings(BaseSettings):
     l2_tuning_validation_fraction: float = Field(
         default=0.25,
         validation_alias="L2_TUNING_VALIDATION_FRACTION",
+    )
+    l2_tuning_split_policy: Literal["chronological", "stratified_random"] = Field(
+        default="chronological",
+        validation_alias="L2_TUNING_SPLIT_POLICY",
     )
     l2_tuning_search_space: Literal["compact", "wide"] = Field(
         default="compact",

@@ -207,6 +207,7 @@ def test_l2_tune_cli_writes_optuna_report(
         return L2TuneResult(
             train_size=1,
             validation_size=1,
+            split_policy=spec.split_policy,
             n_trials_requested=spec.n_trials,
             n_trials_completed=1,
             best_trial_number=0,
@@ -241,3 +242,4 @@ def test_l2_tune_cli_writes_optuna_report(
     assert payload["n_trials_requested"] == 2
     assert captured["trace_count"] == 1
     assert captured["spec"].search_space == "wide"
+    assert captured["spec"].split_policy == "chronological"

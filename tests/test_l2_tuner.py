@@ -20,6 +20,7 @@ def test_l2_tuner_selects_best_config_and_reports_trials() -> None:
     assert result.schema_version == "l2-tune-v1"
     assert result.train_size >= 8
     assert result.validation_size >= 2
+    assert result.split_policy == "chronological"
     assert result.n_trials_requested == 3
     assert result.n_trials_completed >= 1
     assert result.best_trial_number is not None
@@ -58,6 +59,7 @@ def test_l2_tune_split_keeps_each_intent_in_train_and_validation() -> None:
     train, validation = split_l2_tune_traces(
         _teacher_traces(),
         validation_fraction=0.25,
+        split_policy="stratified_random",
         random_state=17,
     )
 
@@ -71,6 +73,27 @@ def test_l2_tune_split_keeps_each_intent_in_train_and_validation() -> None:
     assert {trace.request_id for trace in train}.isdisjoint(
         {trace.request_id for trace in validation}
     )
+
+
+def test_l2_tune_split_defaults_to_chronological_holdout() -> None:
+    train, validation = split_l2_tune_traces(
+        _teacher_traces(),
+        validation_fraction=0.25,
+        random_state=17,
+    )
+
+    assert [trace.request_id for trace in train] == [
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+        "m5",
+        "m6",
+        "a1",
+        "a2",
+        "a3",
+    ]
+    assert [trace.request_id for trace in validation] == ["a4", "a5", "a6"]
 
 
 def _teacher_traces() -> list[TeacherTrace]:

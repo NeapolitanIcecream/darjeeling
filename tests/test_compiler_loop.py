@@ -161,6 +161,7 @@ def test_compiler_generation_uses_optuna_l2_tuning_when_enabled(
         return L2TuneResult(
             train_size=4,
             validation_size=2,
+            split_policy=spec.split_policy,
             n_trials_requested=spec.n_trials,
             n_trials_completed=1,
             best_trial_number=0,
@@ -205,7 +206,9 @@ def test_compiler_generation_uses_optuna_l2_tuning_when_enabled(
     assert captured["trace_ids"] == ["m1", "a1", "m2", "a2", "m3", "a3"]
     assert captured["spec"].n_trials == 3
     assert captured["spec"].search_space == "wide"
+    assert captured["spec"].split_policy == "chronological"
     assert metrics["l2_tuning_mode"] == "optuna"
+    assert metrics["l2_tuning"]["split_policy"] == "chronological"
     assert metrics["l2_tuning_succeeded"] is True
     assert metrics["l2_tuning"]["best_value"] == 1.5
     assert metrics["l2_config"]["slot_model_family"] == "none"
@@ -224,6 +227,7 @@ def test_compiler_generation_can_train_l2_on_observed_lower_misses(
         return L2TuneResult(
             train_size=4,
             validation_size=2,
+            split_policy=spec.split_policy,
             n_trials_requested=spec.n_trials,
             n_trials_completed=1,
             best_trial_number=0,

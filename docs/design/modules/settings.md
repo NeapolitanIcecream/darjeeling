@@ -74,6 +74,7 @@ Replay/promotion：
 - `HARD_BUFFER_MAX_CASES`
 - `L2_ENABLED`
 - `L2_GUARD_MODE`: `learned | always_accept`
+- `L2_FRAME_SOURCE`: `retrieval | student`
 - `L2_INTENT_MODEL_FAMILY`: `sgd_logreg | mlp`
 - `L2_SLOT_MODEL_FAMILY`: `token_sgd | none`
 - `L2_MAX_FEATURES`
@@ -85,6 +86,7 @@ Replay/promotion：
 - `L2_TUNING_TRIALS`
 - `L2_TUNING_TIMEOUT_S`
 - `L2_TUNING_VALIDATION_FRACTION`
+- `L2_TUNING_SPLIT_POLICY`: `chronological | stratified_random`
 - `L2_TUNING_SEARCH_SPACE`
 - `L2_TUNING_LATENCY_WEIGHT`
 - `L2_TRAINING_SCOPE`: `teacher_train | lower_miss`

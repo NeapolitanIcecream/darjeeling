@@ -66,6 +66,28 @@ def test_l2_student_trains_from_teacher_frames_and_predicts_intent() -> None:
     assert [name for name, _transformer in feature_union.transformer_list] == ["word", "char"]
 
 
+def test_l2_retrieval_frame_source_returns_nearest_teacher_frame() -> None:
+    bundle = train_l2_student(
+        _examples(),
+        L2StudentConfig(
+            accept_threshold=0.0,
+            min_examples=4,
+            frame_source="retrieval",
+            slot_model_family="none",
+        ),
+    )
+
+    prediction = bundle.predict("alarm at nine tomorrow")
+
+    assert prediction.frame == Frame(
+        intent="alarm_set",
+        slots={"time": "nine tomorrow"},
+    )
+    assert prediction.frame_source == "retrieval"
+    assert prediction.retrieval_frame == prediction.frame
+    assert prediction.retrieval_similarity > 0.99
+
+
 def test_l2_student_trains_mlp_intent_family_and_reports_it() -> None:
     bundle = train_l2_student(
         _examples(),
@@ -290,6 +312,8 @@ def test_l2_student_layer_reports_intent_support_metadata() -> None:
     assert -1.0 <= result.metadata["intent_support_margin"] <= 1.0
     assert "predicted_intent_frame_accuracy" in result.metadata
     assert "predicted_signature_frame_accuracy" in result.metadata
+    assert result.metadata["frame_source"] in {"student", "retrieval"}
+    assert "retrieval_similarity" in result.metadata
 
 
 def test_l2_bundle_keeps_legacy_five_feature_guard_compatible() -> None:

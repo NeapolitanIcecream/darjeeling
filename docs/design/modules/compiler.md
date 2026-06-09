@@ -127,7 +127,7 @@ L2 Optuna tuning 在 compiler 中是显式开关：
 ```text
 L2_TUNING_MODE=optuna
 teacher_train or lower_miss subset
--> internal train/validation split
+-> internal train/validation split, default chronological future-like holdout
 -> Optuna trials over L2StudentConfig
 -> l2/l2_tuning.json
 -> train final L2 candidate on selected L2 training scope with best config
@@ -135,7 +135,7 @@ teacher_train or lower_miss subset
 -> outer replay promotion gate
 ```
 
-Optuna tuning 不能读取 `teacher_promotion_holdout`、gold eval 或 future stream。它产出的 best config 仍只是 candidate 输入，不能绕过外层 replay。
+Optuna tuning 不能读取 `teacher_promotion_holdout`、gold eval 或 future stream。默认 `L2_TUNING_SPLIT_POLICY=chronological`，用 teacher-visible training window 的尾部做 future-like validation；`stratified_random` 只作为 ablation。Optuna 产出的 best config 仍只是 candidate 输入，不能绕过外层 replay。
 
 `L2_TUNING_MIN_EXAMPLES` 控制 Optuna 的最低样本数。样本不足时 compiler 跳过 tuning、记录 `l2_tuning_skipped_reason`，但仍按 deterministic config 训练 L2 candidate，以保证 generation 继续产生可比较 artifact。
 

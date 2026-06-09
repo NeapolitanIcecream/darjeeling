@@ -218,6 +218,7 @@ def test_l2_config_from_proposal_accepts_only_bounded_fields() -> None:
     config = l2_config_from_proposal(
         {
             "slot_model_family": "none",
+            "frame_source": "student",
             "intent_model_family": "mlp",
             "mlp_hidden_layer_sizes": [32, 16],
             "mlp_alpha": 0.001,
@@ -230,6 +231,7 @@ def test_l2_config_from_proposal_accepts_only_bounded_fields() -> None:
     )
 
     assert config.slot_model_family == "none"
+    assert config.frame_source == "student"
     assert config.intent_model_family == "mlp"
     assert config.mlp_hidden_layer_sizes == (32, 16)
     assert config.mlp_alpha == 0.001

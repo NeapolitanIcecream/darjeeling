@@ -4,7 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import joblib
 import numpy as np
@@ -36,6 +36,7 @@ class L2StudentConfig(BaseModel):
     runtime_enabled: bool = True
     random_state: int = 17
     min_examples: int = 4
+    frame_source: Literal["student", "retrieval"] = "retrieval"
     intent_model_family: str = "sgd_logreg"
     word_ngram_range: tuple[int, int] = (1, 2)
     char_ngram_range: tuple[int, int] = (3, 5)
@@ -71,6 +72,12 @@ class L2Prediction(BaseModel):
     predicted_intent_slotless_rate: float = 0.0
     predicted_signature_frame_accuracy: float = 0.0
     predicted_signature_support: float = 0.0
+    frame_source: str = "student"
+    student_frame: Frame | None = None
+    retrieval_frame: Frame | None = None
+    retrieval_similarity: float = 0.0
+    retrieval_margin: float = 0.0
+    retrieval_intent_matches_student: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,13 @@ class IntentSupportFeatures:
     nearest_similarity: float = 0.0
     predicted_intent_similarity: float = 0.0
     intent_support_margin: float = 0.0
+
+
+@dataclass(frozen=True)
+class FrameRetrievalResult:
+    frame: Frame | None = None
+    nearest_similarity: float = 0.0
+    margin: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -153,6 +167,57 @@ class IntentPrototypeIndex:
         )
 
 
+class FramePrototypeIndex:
+    def __init__(
+        self,
+        *,
+        prototype_frames: tuple[Frame, ...],
+        prototype_matrix: Any,
+    ) -> None:
+        self.prototype_frames = prototype_frames
+        self.prototype_matrix = prototype_matrix
+
+    @classmethod
+    def from_examples(
+        cls,
+        intent_pipeline: Pipeline,
+        examples: list[L2TrainingExample],
+    ) -> FramePrototypeIndex:
+        feature_step = intent_pipeline.named_steps["features"]
+        texts = [example.utterance for example in examples]
+        matrix = normalize(feature_step.transform(texts), copy=True)
+        return cls(
+            prototype_frames=tuple(example.teacher_frame for example in examples),
+            prototype_matrix=matrix,
+        )
+
+    def nearest(
+        self,
+        intent_pipeline: Pipeline,
+        utterance: str,
+    ) -> FrameRetrievalResult:
+        if not self.prototype_frames:
+            return FrameRetrievalResult()
+        feature_step = intent_pipeline.named_steps["features"]
+        query = normalize(feature_step.transform([utterance]), copy=True)
+        similarities = (query @ self.prototype_matrix.T).toarray().ravel()
+        if similarities.size == 0:
+            return FrameRetrievalResult()
+        sorted_indices = np.argsort(similarities)[::-1]
+        top_index = int(sorted_indices[0])
+        top_similarity = float(similarities[top_index])
+        second_similarity = (
+            float(similarities[int(sorted_indices[1])])
+            if len(sorted_indices) > 1
+            else 0.0
+        )
+        return FrameRetrievalResult(
+            frame=self.prototype_frames[top_index],
+            nearest_similarity=top_similarity,
+            margin=top_similarity - second_similarity,
+        )
+
+
 class IntentCalibrationIndex:
     def __init__(
         self,
@@ -178,9 +243,11 @@ class IntentCalibrationIndex:
         slot_tagger: TokenSlotTagger | None,
         examples: list[L2TrainingExample],
         *,
+        frame_source: str = "student",
         slots_by_intent: dict[str, tuple[str, ...]] | None = None,
         slot_patterns_by_intent: dict[str, dict[str, list[dict[str, tuple[str, ...]]]]]
         | None = None,
+        frame_prototype_index: FramePrototypeIndex | None = None,
     ) -> IntentCalibrationIndex:
         slots_by_intent = slots_by_intent or {}
         slot_patterns_by_intent = slot_patterns_by_intent or {}
@@ -201,21 +268,31 @@ class IntentCalibrationIndex:
                 slots_by_intent,
                 slot_patterns_by_intent,
             )
-            predicted_frame = Frame(intent=predicted_intent, slots=slots)
+            student_frame = Frame(intent=predicted_intent, slots=slots)
+            retrieval = _score_frame_retrieval(
+                frame_prototype_index,
+                intent_pipeline,
+                example.utterance,
+            )
+            predicted_frame, _source = _select_prediction_frame(
+                student_frame,
+                retrieval,
+                frame_source=frame_source,
+            )
             intent_bucket = intent_stats.setdefault(
-                predicted_intent,
+                predicted_frame.intent,
                 {"total": 0, "frame_correct": 0, "intent_correct": 0, "slotless": 0},
             )
             intent_bucket["total"] += 1
             intent_bucket["frame_correct"] += int(predicted_frame == example.teacher_frame)
             intent_bucket["intent_correct"] += int(
-                predicted_intent == example.teacher_frame.intent
+                predicted_frame.intent == example.teacher_frame.intent
             )
-            intent_bucket["slotless"] += int(not slots)
+            intent_bucket["slotless"] += int(not predicted_frame.slots)
 
-            signature = _slot_signature(slots)
+            signature = _slot_signature(predicted_frame.slots)
             signature_bucket = signature_stats.setdefault(
-                (predicted_intent, signature),
+                (predicted_frame.intent, signature),
                 {"total": 0, "frame_correct": 0},
             )
             signature_bucket["total"] += 1
@@ -342,6 +419,7 @@ class L2StudentBundle:
         | None = None,
         intent_support_index: IntentPrototypeIndex | None = None,
         intent_calibration_index: IntentCalibrationIndex | None = None,
+        frame_prototype_index: FramePrototypeIndex | None = None,
     ) -> None:
         self.intent_pipeline = intent_pipeline
         self.slot_tagger = slot_tagger
@@ -351,6 +429,7 @@ class L2StudentBundle:
         self.slot_patterns_by_intent = slot_patterns_by_intent or {}
         self.intent_support_index = intent_support_index
         self.intent_calibration_index = intent_calibration_index
+        self.frame_prototype_index = frame_prototype_index
 
     def predict(self, utterance: str) -> L2Prediction:
         intent_result = predict_intent(self.intent_pipeline, utterance)
@@ -367,16 +446,27 @@ class L2StudentBundle:
             getattr(self, "slots_by_intent", {}),
             getattr(self, "slot_patterns_by_intent", {}),
         )
+        student_frame = Frame(intent=predicted_intent, slots=slots)
+        retrieval = _score_frame_retrieval(
+            getattr(self, "frame_prototype_index", None),
+            self.intent_pipeline,
+            utterance,
+        )
+        prediction_frame, frame_source = _select_prediction_frame(
+            student_frame,
+            retrieval,
+            frame_source=self.config.frame_source,
+        )
         support = _score_intent_support(
             getattr(self, "intent_support_index", None),
             self.intent_pipeline,
             utterance,
-            predicted_intent,
+            prediction_frame.intent,
         )
         calibration = _score_intent_calibration(
             getattr(self, "intent_calibration_index", None),
-            predicted_intent,
-            slots,
+            prediction_frame.intent,
+            prediction_frame.slots,
         )
         features = guard_features(
             intent_result["top_probability"],
@@ -395,11 +485,18 @@ class L2StudentBundle:
             calibration.predicted_intent_slotless_rate,
             calibration.predicted_signature_frame_accuracy,
             calibration.predicted_signature_support,
+            retrieval.nearest_similarity,
+            retrieval.margin,
+            float(
+                retrieval.frame is not None
+                and retrieval.frame.intent == student_frame.intent
+            ),
+            float(frame_source == "retrieval"),
         )
         features = _match_guard_feature_width(features, self.guard_model)
         guard_probability = float(self.guard_model.predict_proba(features)[0][1])
         return L2Prediction(
-            frame=Frame(intent=predicted_intent, slots=slots),
+            frame=prediction_frame,
             guard_probability=guard_probability,
             top1_probability=intent_result["top_probability"],
             margin=intent_result["margin"],
@@ -417,6 +514,15 @@ class L2StudentBundle:
             predicted_intent_slotless_rate=calibration.predicted_intent_slotless_rate,
             predicted_signature_frame_accuracy=calibration.predicted_signature_frame_accuracy,
             predicted_signature_support=calibration.predicted_signature_support,
+            frame_source=frame_source,
+            student_frame=student_frame,
+            retrieval_frame=retrieval.frame,
+            retrieval_similarity=retrieval.nearest_similarity,
+            retrieval_margin=retrieval.margin,
+            retrieval_intent_matches_student=float(
+                retrieval.frame is not None
+                and retrieval.frame.intent == student_frame.intent
+            ),
         )
 
     def save(self, path: Path) -> None:
@@ -474,8 +580,25 @@ class L2StudentLayer:
                         prediction.predicted_signature_frame_accuracy
                     ),
                     "predicted_signature_support": prediction.predicted_signature_support,
+                    "frame_source": prediction.frame_source,
+                    "student_frame": (
+                        prediction.student_frame.model_dump(mode="json")
+                        if prediction.student_frame is not None
+                        else None
+                    ),
+                    "retrieval_frame": (
+                        prediction.retrieval_frame.model_dump(mode="json")
+                        if prediction.retrieval_frame is not None
+                        else None
+                    ),
+                    "retrieval_similarity": prediction.retrieval_similarity,
+                    "retrieval_margin": prediction.retrieval_margin,
+                    "retrieval_intent_matches_student": (
+                        prediction.retrieval_intent_matches_student
+                    ),
                     "accept_threshold": self.bundle.config.accept_threshold,
                     "runtime_enabled": runtime_enabled,
+                    "frame_source_config": self.bundle.config.frame_source,
                     "intent_model": self.bundle.config.intent_model_family,
                     "slot_model": "token_sgd" if self.bundle.slot_tagger else "none",
                 },
@@ -522,12 +645,18 @@ def train_l2_student(
         calibration_intent_pipeline,
         train_examples,
     )
+    calibration_frame_prototypes = FramePrototypeIndex.from_examples(
+        calibration_intent_pipeline,
+        train_examples,
+    )
     calibration_intent_reliability = IntentCalibrationIndex.from_examples(
         calibration_intent_pipeline,
         calibration_slot_tagger,
         guard_examples,
+        frame_source=config.frame_source,
         slots_by_intent=calibration_slots_by_intent,
         slot_patterns_by_intent=calibration_slot_patterns,
+        frame_prototype_index=calibration_frame_prototypes,
     )
     guard_model = train_guard(
         calibration_intent_pipeline,
@@ -538,6 +667,7 @@ def train_l2_student(
         slot_patterns_by_intent=calibration_slot_patterns,
         intent_support_index=calibration_intent_support,
         intent_calibration_index=calibration_intent_reliability,
+        frame_prototype_index=calibration_frame_prototypes,
     )
     runtime_intent_pipeline = train_intent_pipeline(examples, config)
     runtime_slot_tagger = train_slot_tagger(examples, config)
@@ -553,6 +683,10 @@ def train_l2_student(
             examples,
         ),
         intent_calibration_index=calibration_intent_reliability,
+        frame_prototype_index=FramePrototypeIndex.from_examples(
+            runtime_intent_pipeline,
+            examples,
+        ),
     )
 
 
@@ -638,6 +772,7 @@ def train_guard(
     | None = None,
     intent_support_index: IntentPrototypeIndex | None = None,
     intent_calibration_index: IntentCalibrationIndex | None = None,
+    frame_prototype_index: FramePrototypeIndex | None = None,
 ) -> LogisticRegression | ConstantGuard:
     slots_by_intent = slots_by_intent or {}
     slot_patterns_by_intent = slot_patterns_by_intent or {}
@@ -658,17 +793,27 @@ def train_guard(
             slots_by_intent,
             slot_patterns_by_intent,
         )
-        predicted_frame = Frame(intent=predicted_intent, slots=slots)
+        student_frame = Frame(intent=predicted_intent, slots=slots)
+        retrieval = _score_frame_retrieval(
+            frame_prototype_index,
+            intent_pipeline,
+            example.utterance,
+        )
+        predicted_frame, frame_source = _select_prediction_frame(
+            student_frame,
+            retrieval,
+            frame_source=config.frame_source,
+        )
         support = _score_intent_support(
             intent_support_index,
             intent_pipeline,
             example.utterance,
-            predicted_intent,
+            predicted_frame.intent,
         )
         calibration = _score_intent_calibration(
             intent_calibration_index,
-            predicted_intent,
-            slots,
+            predicted_frame.intent,
+            predicted_frame.slots,
         )
         feature_rows.append(
             [
@@ -688,6 +833,13 @@ def train_guard(
                 calibration.predicted_intent_slotless_rate,
                 calibration.predicted_signature_frame_accuracy,
                 calibration.predicted_signature_support,
+                retrieval.nearest_similarity,
+                retrieval.margin,
+                float(
+                    retrieval.frame is not None
+                    and retrieval.frame.intent == student_frame.intent
+                ),
+                float(frame_source == "retrieval"),
             ]
         )
         correct_labels.append(int(predicted_frame == example.teacher_frame))
@@ -718,6 +870,10 @@ def guard_features(
     predicted_intent_slotless_rate: float = 0.0,
     predicted_signature_frame_accuracy: float = 0.0,
     predicted_signature_support: float = 0.0,
+    retrieval_similarity: float = 0.0,
+    retrieval_margin: float = 0.0,
+    retrieval_intent_matches_student: float = 0.0,
+    retrieval_frame_source: float = 0.0,
 ) -> np.ndarray:
     return np.asarray(
         [
@@ -738,6 +894,10 @@ def guard_features(
                 predicted_intent_slotless_rate,
                 predicted_signature_frame_accuracy,
                 predicted_signature_support,
+                retrieval_similarity,
+                retrieval_margin,
+                retrieval_intent_matches_student,
+                retrieval_frame_source,
             ]
         ],
         dtype=float,
@@ -766,6 +926,31 @@ def _score_intent_calibration(
             predicted_has_slots=float(bool(slots)),
         )
     return calibration_index.score(predicted_intent, slots)
+
+
+def _score_frame_retrieval(
+    frame_prototype_index: FramePrototypeIndex | None,
+    intent_pipeline: Pipeline,
+    utterance: str,
+) -> FrameRetrievalResult:
+    if frame_prototype_index is None:
+        return FrameRetrievalResult()
+    return frame_prototype_index.nearest(intent_pipeline, utterance)
+
+
+def _select_prediction_frame(
+    student_frame: Frame,
+    retrieval: FrameRetrievalResult,
+    *,
+    frame_source: str,
+) -> tuple[Frame, str]:
+    if frame_source == "student":
+        return student_frame, "student"
+    if frame_source == "retrieval":
+        if retrieval.frame is not None:
+            return retrieval.frame, "retrieval"
+        return student_frame, "student"
+    raise ValueError(f"unsupported L2 frame_source: {frame_source}")
 
 
 def _match_guard_feature_width(features: np.ndarray, guard_model: Any) -> np.ndarray:

@@ -79,6 +79,8 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 - `workload-locality`
 - `hard-buffer`
 
+`edge-mvp l2 tune` 支持 `--split-policy chronological|stratified_random`。默认 `chronological`，用于让 tuning validation 更接近后续 stream；`stratified_random` 仅用于 ablation 或小样本诊断。
+
 `no-guard` 是诊断性 ablation：它设置 `L2_GUARD_MODE=always_accept` 和 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能进入该隔离 experiment runtime，报告 threshold 移除后的真实错误率和时延。该配置不用于主线 evolution。
 
 `l2-mlp` 是确定性 MLP family 实验：它设置 `L2_INTENT_MODEL_FAMILY=mlp`，不要求 live L4 proposal，用于把 MLP candidate 与默认 `sgd_logreg` 在同一 replay/report 框架下比较。

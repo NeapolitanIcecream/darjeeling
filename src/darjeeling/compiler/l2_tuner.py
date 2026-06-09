@@ -25,6 +25,7 @@ class L2TuneSpec(BaseModel):
     n_trials: int = Field(default=16, ge=1)
     timeout_s: float | None = Field(default=None, gt=0.0)
     validation_fraction: float = Field(default=0.25, gt=0.0, lt=0.8)
+    split_policy: Literal["chronological", "stratified_random"] = "chronological"
     random_state: int = 17
     search_space: Literal["compact", "wide"] = "compact"
     max_wrong_accept_rate: float = Field(default=0.05, ge=0.0, le=1.0)
@@ -48,6 +49,7 @@ class L2TuneResult(BaseModel):
     schema_version: str = "l2-tune-v1"
     train_size: int
     validation_size: int
+    split_policy: str
     n_trials_requested: int
     n_trials_completed: int
     best_trial_number: int | None = None
@@ -70,6 +72,7 @@ def tune_l2_student(
     train_traces, validation_traces = split_l2_tune_traces(
         traces,
         validation_fraction=spec.validation_fraction,
+        split_policy=spec.split_policy,
         random_state=spec.random_state,
     )
     train_examples = training_examples_from_teacher_traces(train_traces)
@@ -160,6 +163,7 @@ def tune_l2_student(
     return L2TuneResult(
         train_size=len(train_examples),
         validation_size=len(training_examples_from_teacher_traces(validation_traces)),
+        split_policy=spec.split_policy,
         n_trials_requested=spec.n_trials,
         n_trials_completed=len(completed_reports),
         best_trial_number=best_report.number if best_report is not None else None,
@@ -180,6 +184,7 @@ def split_l2_tune_traces(
     traces: list[TeacherTrace],
     *,
     validation_fraction: float,
+    split_policy: Literal["chronological", "stratified_random"] = "chronological",
     random_state: int,
 ) -> tuple[list[TeacherTrace], list[TeacherTrace]]:
     labeled = [trace for trace in traces if trace.teacher_frame is not None]
@@ -192,6 +197,20 @@ def split_l2_tune_traces(
         by_intent[trace.teacher_frame.intent].append(trace)
     if len(by_intent) < 2:
         raise ValueError("L2 tuning requires at least two teacher intents")
+
+    if split_policy == "chronological":
+        validation_count = max(1, round(len(labeled) * validation_fraction))
+        validation_count = min(validation_count, len(labeled) - 1)
+        train = labeled[:-validation_count]
+        validation = labeled[-validation_count:]
+        if len({trace.teacher_frame.intent for trace in train if trace.teacher_frame}) < 2:
+            raise ValueError("L2 tuning chronological train split has fewer than two intents")
+        if not validation:
+            raise ValueError("L2 tuning validation split is empty")
+        return train, validation
+
+    if split_policy != "stratified_random":
+        raise ValueError(f"unsupported L2 tuning split_policy: {split_policy}")
 
     rng = random.Random(random_state)
     train: list[TeacherTrace] = []
@@ -229,6 +248,10 @@ def _sample_l2_config(
         "slot_model_family",
         ["token_sgd", "none"],
     )
+    frame_source = trial.suggest_categorical(
+        "frame_source",
+        ["retrieval", "student"],
+    )
     max_features_choices = (
         [1_000, 3_000, 5_000, 10_000]
         if spec.search_space == "compact"
@@ -254,6 +277,7 @@ def _sample_l2_config(
         update={
             "intent_model_family": intent_model_family,
             "slot_model_family": slot_model_family,
+            "frame_source": frame_source,
             "max_features": int(max_features),
             "max_iter": int(max_iter),
             "word_ngram_range": (1, int(word_upper)),

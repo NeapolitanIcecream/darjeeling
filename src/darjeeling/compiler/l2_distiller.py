@@ -20,6 +20,7 @@ L2_CONFIG_PROPOSAL_SCHEMA: dict[str, Any] = {
     "properties": {
         "intent_model_family": {"type": "string", "enum": ["sgd_logreg", "mlp"]},
         "slot_model_family": {"type": "string", "enum": ["token_sgd", "none"]},
+        "frame_source": {"type": "string", "enum": ["student", "retrieval"]},
         "min_examples": {"type": "integer", "minimum": 2},
         "max_features": {"type": "integer", "minimum": 100},
         "max_iter": {"type": "integer", "minimum": 10},
@@ -49,6 +50,7 @@ L2_CONFIG_PROPOSAL_SCHEMA: dict[str, Any] = {
 
 def l2_config_from_settings(settings: Any) -> L2StudentConfig:
     return L2StudentConfig(
+        frame_source=settings.l2_frame_source,
         intent_model_family=settings.l2_intent_model_family,
         slot_model_family=settings.l2_slot_model_family,
         max_features=settings.l2_max_features,
@@ -68,6 +70,7 @@ def l2_config_from_proposal(
     allowed_fields = {
         "intent_model_family",
         "slot_model_family",
+        "frame_source",
         "min_examples",
         "max_features",
         "max_iter",
@@ -95,6 +98,8 @@ def l2_config_from_proposal(
         raise ValueError(f"unsupported L2 intent_model_family: {config.intent_model_family}")
     if config.slot_model_family not in {"token_sgd", "none"}:
         raise ValueError(f"unsupported L2 slot_model_family: {config.slot_model_family}")
+    if config.frame_source not in {"student", "retrieval"}:
+        raise ValueError(f"unsupported L2 frame_source: {config.frame_source}")
     return config
 
 

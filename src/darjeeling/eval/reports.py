@@ -657,12 +657,14 @@ def _l2_tuning_section(current_manifest: ArtifactManifest | None) -> str:
             f"- trials completed/requested: {tuning.get('n_trials_completed')}/"
             f"{tuning.get('n_trials_requested')}",
             f"- train/validation size: {tuning.get('train_size')}/{tuning.get('validation_size')}",
+            f"- split policy: {tuning.get('split_policy')}",
             f"- best trial/value: {tuning.get('best_trial_number')}/{tuning.get('best_value')}",
         ]
     )
     if isinstance(config, dict):
         lines.extend(
             [
+                f"- selected frame source: {config.get('frame_source')}",
                 f"- selected intent model: {config.get('intent_model_family')}",
                 f"- selected slot model: {config.get('slot_model_family')}",
                 f"- selected max_features: {config.get('max_features')}",

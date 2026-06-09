@@ -593,6 +593,10 @@ def l2_tune(
         float,
         typer.Option(min=0.05, max=0.75, help="Teacher-visible tuning holdout fraction."),
     ] = 0.25,
+    split_policy: Annotated[
+        str,
+        typer.Option(help="Tuning split policy: chronological or stratified_random."),
+    ] = "chronological",
     search_space: Annotated[
         str,
         typer.Option(help="Tuning search space: compact or wide."),
@@ -606,6 +610,8 @@ def l2_tune(
 
     if search_space not in {"compact", "wide"}:
         raise typer.BadParameter("search_space must be compact or wide")
+    if split_policy not in {"chronological", "stratified_random"}:
+        raise typer.BadParameter("split_policy must be chronological or stratified_random")
     settings = _load_cli_settings()
     base_config = l2_config_from_settings(settings)
     trace_records = read_traces(traces)
@@ -616,6 +622,7 @@ def l2_tune(
             n_trials=n_trials,
             timeout_s=timeout_s,
             validation_fraction=validation_fraction,
+            split_policy=split_policy,
             random_state=base_config.random_state,
             search_space=search_space,
             max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,

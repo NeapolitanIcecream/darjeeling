@@ -193,6 +193,7 @@ def run_compiler_generation(
     candidate_metrics["l2_guard_mode"] = settings.l2_guard_mode
     candidate_metrics["l2_tuning_mode"] = settings.l2_tuning_mode
     candidate_metrics["l2_tuning_min_examples"] = settings.l2_tuning_min_examples
+    candidate_metrics["l2_tuning_split_policy"] = settings.l2_tuning_split_policy
     candidate_metrics["l4_proposal_mode"] = settings.l4_proposal_mode
     l2_config = l2_config_from_settings(settings)
     guard_search_spec = GuardSearchSpec(
@@ -276,6 +277,7 @@ def run_compiler_generation(
                     n_trials=settings.l2_tuning_trials,
                     timeout_s=settings.l2_tuning_timeout_s,
                     validation_fraction=settings.l2_tuning_validation_fraction,
+                    split_policy=settings.l2_tuning_split_policy,
                     random_state=l2_config.random_state,
                     search_space=settings.l2_tuning_search_space,
                     max_wrong_accept_rate=guard_search_spec.max_wrong_accept_rate,
@@ -298,6 +300,7 @@ def run_compiler_generation(
                     "schema_version": tune_result.schema_version,
                     "train_size": tune_result.train_size,
                     "validation_size": tune_result.validation_size,
+                    "split_policy": tune_result.split_policy,
                     "n_trials_requested": tune_result.n_trials_requested,
                     "n_trials_completed": tune_result.n_trials_completed,
                     "best_trial_number": tune_result.best_trial_number,

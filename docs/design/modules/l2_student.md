@@ -31,6 +31,11 @@ Slot：
 - `mlp_token_classifier`
 - `none`
 
+Frame source：
+
+- `retrieval`（默认）：从 teacher-visible prototype 中取最近邻 teacher frame，作为高精度 semantic-cache 式吸收路径。
+- `student`：使用 intent classifier + slot tagger 直接生成 frame，保留为 ablation 和后续模型家族演进路径。
+
 Decision tree 只允许在 L2，不允许在 L1。
 
 ## 阶段边界
@@ -40,6 +45,10 @@ Decision tree 只允许在 L2，不允许在 L1。
 第一版 `token_sgd` 的设计目标是让 L2 的吸收评估从 intent-only 推进到 frame-level：slot 训练标签来自 teacher frame 中 slot string 在 utterance token 序列里的精确连续对齐，预测时用 BIO tag 重构 slot span，并把 slot 平均概率与 invalid BIO flag 输入 guard。
 
 当前 runtime intent classifier 使用 word + char n-gram TF-IDF 特征；`word_ngram_range` 与 `char_ngram_range` 都是实际训练参数。Intent family 当前已实现 `sgd_logreg` 和 `mlp` 两种：`sgd_logreg` 使用 `SGDClassifier(loss="log_loss")`，`mlp` 使用 sklearn `MLPClassifier`，隐藏层、alpha、early stopping 和 max iter 由 bounded config 控制。Guard 校准仍使用 train/guard split，但最终 runtime intent classifier 与 slot tagger 会在全部 teacher-visible examples 上重训，以减少小窗口下的数据浪费。
+
+当前主线 frame source 是 `retrieval`。原因是实验显示直接 student 生成开放 slot frame 的 forced accuracy 很低，错误主要集中在 slot exact match；retrieval 路径把 L2 收缩为高精度 semantic-cache 式层，只在 replay 证明安全时吸收请求。`student` 路径继续保留，因为后续 L4 coding agent 可以演进更强的 slot extractor 或模型 family。
+
+Retrieval prototype index 使用同一套 TF-IDF feature space 保存 teacher-visible utterance 及其 teacher frame。Guard/calibration 训练时，prototype index 只来自 internal train split，guard split 不会进入自己的 retrieval index；runtime artifact 才使用完整 teacher-visible train window。Promotion holdout、gold eval 和 future stream 仍不可见。
 
 L2 artifact 同时保存 intent prototype index：用同一套 TF-IDF feature space 存储 teacher-visible utterance prototype 及其 teacher intent。Runtime 预测时计算：
 
@@ -60,6 +69,7 @@ guard 并写入 trace metadata：
 - predicted intent 下 slotless prediction 的比例。
 - predicted `(intent, slot-name signature)` 的 frame exact accuracy。
 - predicted `(intent, slot-name signature)` 的 support。
+- retrieval nearest similarity、similarity margin、retrieval intent 是否匹配 student intent、frame source flag。
 
 这不是直接 hardcode 某个 intent 可以接收，而是让 learned guard 能把 L2 收缩到历史上可靠的子域。最终是否接收仍由 deterministic threshold search 和外层 promotion replay 决定。
 
@@ -110,6 +120,10 @@ Guard features：
 - predicted intent slotless rate（已实现）
 - predicted slot signature frame exact accuracy（已实现）
 - predicted slot signature support（已实现）
+- retrieval nearest similarity（已实现）
+- retrieval similarity margin（已实现）
+- retrieval intent matches student intent（已实现）
+- retrieval frame-source flag（已实现）
 - slot alignment failure signals
 - utterance length bucket
 
@@ -145,16 +159,17 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 
 - `L4_PROPOSAL_MODE=disabled` 为默认值，不调用 L4 proposal。
 - `L4_PROPOSAL_MODE=live` 时，compiler 请求 L2 config proposal。
-- Proposal 只允许影响白名单字段：`intent_model_family`、`slot_model_family`、`min_examples`、`max_features`、`max_iter`、`mlp_hidden_layer_sizes`、`mlp_alpha`、`mlp_early_stopping`、`word_ngram_range`、`char_ngram_range`。
+- Proposal 只允许影响白名单字段：`frame_source`、`intent_model_family`、`slot_model_family`、`min_examples`、`max_features`、`max_iter`、`mlp_hidden_layer_sizes`、`mlp_alpha`、`mlp_early_stopping`、`word_ngram_range`、`char_ngram_range`。
 - Proposal 不直接决定 accept threshold；threshold 仍由 deterministic grid search 选择。
 
 Optuna tuning path：
 
 - `edge-mvp l2 tune --traces <trace.jsonl> --out <report.json>` 是 L4 coding agent 可调用的本地工具接口。
 - `L2_TUNING_MODE=optuna` 时，compiler 在每个 generation 中先对 L2 training scope 做内部 train/validation split，再运行 Optuna search，最后用 best config 训练 runtime candidate。
-- Tuning report 使用 `l2-tune-v1`，记录每个 trial 的 params、最终 `L2StudentConfig`、validation unguarded/guarded metrics 和 p95 latency。
+- Tuning report 使用 `l2-tune-v1`，记录每个 trial 的 params、最终 `L2StudentConfig`、split policy、validation unguarded/guarded metrics 和 p95 latency。
 - Optuna 不能读取 promotion holdout、MASSIVE gold、final eval 或 future stream；它只优化 teacher-visible train window 的内部 validation。
 - `candidate_metrics["l2_tuning"]` 记录 trial 数、best value、best metrics；`artifact_paths["l2_tuning"]` 指向完整 tuning report。
+- Tuning validation 默认使用 `chronological` split，即用 teacher-visible train window 的尾部模拟 future stream。`stratified_random` 只作为 ablation 开关保留；它会让每个 intent 更均匀，但容易高估真实 L0/L1 miss 后续分布。
 - Compact search 和小样本窗口默认不启用 MLP `early_stopping`，因为 sklearn 会在过小 validation split 上拒绝训练，浪费 trial budget。
 - `L2_TUNING_MIN_EXAMPLES` 是 tuning 的硬门槛；样本不足时 compiler 仍训练 deterministic L2 candidate，但跳过 Optuna 并记录 skip reason，避免用几十个样本制造虚假的 tuning 结论。
 
