@@ -236,6 +236,25 @@ def test_l2_slot_patterns_fill_missing_schema_slots() -> None:
     ) == {"definition_word": "hesitant"}
 
 
+def test_l2_slot_patterns_match_question_is_contractions() -> None:
+    examples = [
+        L2TrainingExample(
+            utterance="what is on my shopping list",
+            teacher_frame=Frame(intent="lists_query", slots={"list_name": "shopping"}),
+        )
+    ]
+    slots_by_intent = slots_by_intent_from_examples(examples)
+    patterns = slot_patterns_by_intent_from_examples(examples)
+
+    assert apply_slot_patterns(
+        "lists_query",
+        "what's on my to do list",
+        {},
+        slots_by_intent,
+        patterns,
+    ) == {"list_name": "to do"}
+
+
 def test_l2_bundle_drops_slots_not_seen_for_predicted_intent() -> None:
     class FakeIntentPipeline:
         classes_ = ["music_play", "alarm_set"]

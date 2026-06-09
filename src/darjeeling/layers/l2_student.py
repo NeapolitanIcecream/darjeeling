@@ -1118,11 +1118,53 @@ def _candidate_starts(tokens: list[str], prefix: tuple[str, ...]) -> list[int]:
     if not prefix:
         return [0]
     starts = []
-    width = len(prefix)
-    for index in range(0, len(tokens) - width + 1):
-        if tuple(tokens[index : index + width]) == prefix:
+    for index in range(len(tokens)):
+        width = _prefix_match_width(tokens, index, prefix)
+        if width is not None:
             starts.append(index + width)
     return starts
+
+
+_IS_CONTRACTION_STEMS = frozenset({"what", "who", "where", "when", "why", "how"})
+
+
+def _prefix_match_width(
+    tokens: list[str],
+    start: int,
+    prefix: tuple[str, ...],
+) -> int | None:
+    token_index = start
+    for expected in prefix:
+        if token_index >= len(tokens):
+            return None
+        actual = tokens[token_index]
+        if actual == expected or (
+            expected == "is" and _is_question_is_contraction(actual)
+        ):
+            token_index += 1
+            continue
+        contraction_stem = _question_is_contraction_stem(expected)
+        if (
+            contraction_stem is not None
+            and actual == contraction_stem
+            and token_index + 1 < len(tokens)
+            and tokens[token_index + 1] == "is"
+        ):
+            token_index += 2
+            continue
+        return None
+    return token_index - start
+
+
+def _is_question_is_contraction(token: str) -> bool:
+    return _question_is_contraction_stem(token) is not None
+
+
+def _question_is_contraction_stem(token: str) -> str | None:
+    if not token.endswith("'s"):
+        return None
+    stem = token[:-2]
+    return stem if stem in _IS_CONTRACTION_STEMS else None
 
 
 def _candidate_end(tokens: list[str], suffix: tuple[str, ...], start: int) -> int | None:
