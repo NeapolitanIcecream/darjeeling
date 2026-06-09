@@ -18,7 +18,7 @@ def test_l2_guard_accepts_at_threshold() -> None:
     assert GuardDecision(probability=0.99, threshold=0.93).accepted
 
 
-def test_l2_guard_optimizer_prefers_lowest_safe_coverage_threshold() -> None:
+def test_l2_guard_optimizer_prefers_highest_safe_coverage_threshold() -> None:
     predictions = {
         "correct-high": SimpleNamespace(
             frame=Frame(intent="music_play"),
@@ -48,7 +48,7 @@ def test_l2_guard_optimizer_prefers_lowest_safe_coverage_threshold() -> None:
     )
 
     assert selection is not None
-    assert selection.threshold == 0.720001
+    assert selection.threshold == 0.82
     assert selection.evaluation.coverage == 2 / 3
     assert selection.evaluation.wrong_accept_rate == 0.0
 
@@ -78,37 +78,7 @@ def test_l2_guard_optimizer_uses_observed_probabilities_between_grid_points() ->
     )
 
     assert selection is not None
-    assert selection.threshold == 0.800001
-    assert selection.evaluation.accepted == 1
-    assert selection.evaluation.wrong_accept_rate == 0.0
-
-
-def test_l2_guard_optimizer_prefers_lowest_threshold_for_same_safe_accepts() -> None:
-    predictions = {
-        "correct": SimpleNamespace(
-            frame=Frame(intent="music_play"),
-            guard_probability=0.82,
-        ),
-        "wrong": SimpleNamespace(
-            frame=Frame(intent="music_play"),
-            guard_probability=0.40,
-        ),
-    }
-    bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
-    traces = [
-        _teacher_trace("r1", "correct", "music_play"),
-        _teacher_trace("r2", "wrong", "alarm_set"),
-    ]
-
-    selection = select_l2_accept_threshold(
-        bundle,
-        traces,
-        grid=[0.80],
-        max_wrong_accept_rate=0.0,
-    )
-
-    assert selection is not None
-    assert selection.threshold == 0.400001
+    assert selection.threshold == 0.81
     assert selection.evaluation.accepted == 1
     assert selection.evaluation.wrong_accept_rate == 0.0
 

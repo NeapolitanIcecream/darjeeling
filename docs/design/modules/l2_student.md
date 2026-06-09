@@ -145,7 +145,7 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 - 默认优先在 chronological residual validation 上校准 threshold：用 calibration train prefix 模拟 L0 exact cache，过滤 validation 中 exact repeat 和已记录的 L0/L1 accepted 请求，只在会真正到达 L2 的 residual validation traces 上评估 L2。
 - 如果 residual validation 为空或 calibration train 不足以训练 L2，则回退到旧的 training-scope search，并在 `candidate_metrics["l2_guard_calibration"]` 中记录 fallback reason。
 - 先过滤 `wrong_accept_rate <= l2_max_wrong_accept_rate` 且 `accepted_accuracy >= l2_min_guarded_accuracy` 的候选。
-- 若存在非零覆盖且 calibration-window zero-observed-wrong 的候选，优先在这组里选 coverage 最高的阈值；否则再在 eligible 候选里按 coverage、accepted accuracy 和 wrong accept 排序。同等安全、同等覆盖和同等 accuracy 时，选择更低 threshold，以便在 validation accept set 不变时给未来相邻 residual 留出吸收空间。
+- 若存在非零覆盖且 calibration-window zero-observed-wrong 的候选，优先在这组里选 coverage 最高的阈值；否则再在 eligible 候选里按 coverage、accepted accuracy、wrong accept、threshold 排序。
 - 选中的 threshold 写入 `L2StudentConfig.accept_threshold`，并记录到 `candidate_metrics["l2_guard_search"]`。
 - 若 teacher-visible examples 少于 `L2_MIN_RUNTIME_EXAMPLES`，compiler 仍训练 L2、记录 unguarded/guard diagnostics，但将 `L2StudentConfig.runtime_enabled=false`，runtime 只记录 prediction metadata，不接收。
 - Compiler 同时记录 `candidate_metrics["l2_unguarded_train"]`，即 threshold=0 时的 train-window frame accuracy、wrong accept 和 coverage，用于区分 student 本体质量问题与 guard 过严问题。

@@ -149,7 +149,7 @@ def select_l2_accept_threshold(
             key=lambda item: (
                 item.coverage,
                 item.accepted_accuracy,
-                -item.threshold,
+                item.threshold,
             ),
         )
     elif eligible:
@@ -159,7 +159,7 @@ def select_l2_accept_threshold(
                 item.coverage,
                 item.accepted_accuracy,
                 -item.wrong_accept_rate,
-                -item.threshold,
+                item.threshold,
             ),
         )
     else:
