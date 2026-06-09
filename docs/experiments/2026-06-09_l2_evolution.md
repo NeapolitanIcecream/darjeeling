@@ -1476,3 +1476,87 @@ Interpretation:
 - Next L2 quality work should use the larger visible diagnostics to design
   broader target abstain/postprocess logic or a better search space. Private
   selection/promotion evidence must remain outer-summary-only.
+
+## Safety-first veto and fold default correction
+
+The next target-only patch tested a stricter L4-agent objective order: first fix
+visible wrong accepts at the current conservative threshold, then consider any
+coverage expansion. The patch was derived only from the visible baseline wrong
+accept in `runs/l2-target-visible-folds-weather-3k-r2`:
+
+```text
+docs/experiments/patches/l2_target_currency_slotless_veto_r1.patch
+```
+
+It vetoes accepted `qa_currency` predictions with empty slots when the utterance
+contains exchange-rate/currency cues. This targets:
+
+```text
+what is the exchange rate of currency in u. k.
+teacher: qa_currency(place_name="u. k.")
+predicted: qa_currency({})
+```
+
+3-fold command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-currency-slotless-veto-3k-r2 \
+  --budget-profile fixed-inner \
+  --rounds 1 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --visible-validation-folds 3 \
+  --dry-run-patch docs/experiments/patches/l2_target_currency_slotless_veto_r1.patch
+```
+
+Result:
+
+- Visible validation improved from 12 / 11 / 1 to 11 / 11 / 0 and passed.
+- All three visible folds passed: 6 / 6 / 0, 2 / 2 / 0, 3 / 3 / 0.
+- Private promotion passed: 4 / 4 / 0.
+- Private selection still failed: 8 / 7 / 1.
+- `selection_gate_diagnosis=selection_wrong_accepts_for_inner_passing_rounds`.
+
+Interpretation:
+
+- Safety-first veto works as a local objective: it fixes the observed visible
+  wrong accept without increasing raw coverage.
+- It is necessary but not sufficient. Private selection still found a hidden
+  wrong accept, and that example must not be used as target-patch input.
+
+Then we tried `--visible-validation-folds 5`. The first implementation coupled
+fold count to total validation size, so 5 folds implicitly changed the split to
+roughly 40% train / 40% visible validation / 10% selection / 10% promotion. That
+made the L2 bundle itself less stable and produced many visible wrong accepts.
+
+Design correction:
+
+- `N=1` keeps the 60/20/10/10 split.
+- `N>1` now uses capped 50/30/10/10.
+- Increasing `N` only divides the same capped visible pool into more folds; it
+  does not continue shrinking train.
+- `fixed-inner` now defaults to 5 visible validation folds. `standard` and
+  `smoke` remain at 1 fold unless explicitly overridden.
+
+Post-correction 5-fold result:
+
+- Run: `runs/l2-target-currency-slotless-veto-3k-fold5-r2`.
+- Split: train 1509, visible folds 192 / 187 / 182 / 175 / 166, private
+  selection 299, private promotion 290.
+- Visible validation failed: 32 / 18 / 14.
+- Private selection failed: 12 / 7 / 5.
+- Private promotion failed: 11 / 7 / 4.
+- The command applied the patch successfully and had no workspace scope
+  violation.
+
+Interpretation:
+
+- More folds with a capped visible pool act as a useful audit, not a training
+  starvation knob.
+- The safety-first patch should not be adopted. It demonstrated the right
+  objective order, but broader visible validation shows the current L2 model
+  still has multiple high-confidence slot/intent errors.
+- Next L2 quality work should use 5-fold fixed-inner diagnostics by default and
+  design broader abstain/postprocess logic from visible examples only.

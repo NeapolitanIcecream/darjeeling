@@ -696,15 +696,16 @@ def l2_target_evolve(
         typer.Option(help="Target split policy: chronological or intent-stratified."),
     ] = "chronological",
     visible_validation_folds: Annotated[
-        int,
+        int | None,
         typer.Option(
             min=1,
             help=(
                 "Number of agent-visible validation folds. Values above 1 create "
-                "inner_validation_shadow_* files and gate on their aggregate."
+                "inner_validation_shadow_* files and gate on their aggregate. "
+                "Defaults are profile-specific."
             ),
         ),
-    ] = 1,
+    ] = None,
     inner_patience_rounds: Annotated[
         int | None,
         typer.Option(
@@ -774,6 +775,10 @@ def l2_target_evolve(
         budget_profile=resolved_budget_profile,
         max_agent_rounds=max_agent_rounds,
     )
+    resolved_visible_validation_folds = _resolve_l2_target_visible_validation_folds(
+        budget_profile=resolved_budget_profile,
+        visible_validation_folds=visible_validation_folds,
+    )
     settings = _load_cli_settings()
     trace_records = read_traces(traces)
     if max_traces is not None:
@@ -793,7 +798,7 @@ def l2_target_evolve(
             local_search_timeout_s=local_search_timeout_s,
             budget_profile=resolved_budget_profile,
             split_policy=resolved_split_policy,
-            visible_validation_folds=visible_validation_folds,
+            visible_validation_folds=resolved_visible_validation_folds,
             max_agent_rounds=resolved_max_agent_rounds,
             sandbox=settings.l2_agent_sandbox,
             approval_policy=settings.l2_agent_approval_policy,
@@ -858,6 +863,18 @@ def _resolve_l2_target_agent_rounds(
         return 3
     if budget_profile == "fixed-inner":
         return 16
+    return 1
+
+
+def _resolve_l2_target_visible_validation_folds(
+    *,
+    budget_profile: L2TargetBudgetProfile,
+    visible_validation_folds: int | None,
+) -> int:
+    if visible_validation_folds is not None:
+        return visible_validation_folds
+    if budget_profile == "fixed-inner":
+        return 5
     return 1
 
 

@@ -8,6 +8,7 @@ from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.cli import (
     _resolve_l2_target_agent_rounds,
     _resolve_l2_target_budget,
+    _resolve_l2_target_visible_validation_folds,
     app,
 )
 from darjeeling.compiler.l2_target_evolution import (
@@ -291,6 +292,50 @@ def test_l2_target_visible_validation_folds_stay_visible_not_private(
     assert "visible validation gate" in round_state["candidate_selection_gate"]
     assert "selection_holdout" not in json.dumps(round_state)
     assert "promotion_holdout" not in json.dumps(round_state)
+
+
+def test_l2_target_extra_visible_folds_do_not_keep_shrinking_train_split() -> None:
+    traces = [
+        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        if index % 2 == 0
+        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        for index in range(100)
+    ]
+
+    three_fold = split_l2_target_traces(
+        traces_to_teacher_view(traces),
+        visible_validation_folds=3,
+    )
+    five_fold = split_l2_target_traces(
+        traces_to_teacher_view(traces),
+        visible_validation_folds=5,
+    )
+
+    assert len(three_fold["train"]) == 50
+    assert len(five_fold["train"]) == 50
+    assert len(three_fold["selection_holdout"]) == 10
+    assert len(five_fold["selection_holdout"]) == 10
+    assert len(three_fold["promotion_holdout"]) == 10
+    assert len(five_fold["promotion_holdout"]) == 10
+    assert sum(
+        len(value)
+        for key, value in three_fold.items()
+        if key.startswith("inner_validation")
+    ) == 30
+    assert sum(
+        len(value)
+        for key, value in five_fold.items()
+        if key.startswith("inner_validation")
+    ) == 30
+    assert {
+        key for key in five_fold if key.startswith("inner_validation")
+    } == {
+        "inner_validation",
+        "inner_validation_shadow_1",
+        "inner_validation_shadow_2",
+        "inner_validation_shadow_3",
+        "inner_validation_shadow_4",
+    }
 
 
 def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Path) -> None:
@@ -587,6 +632,18 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
         budget_profile="fixed-inner",
         max_agent_rounds=None,
     ) is None
+    assert _resolve_l2_target_visible_validation_folds(
+        budget_profile="standard",
+        visible_validation_folds=None,
+    ) == 1
+    assert _resolve_l2_target_visible_validation_folds(
+        budget_profile="fixed-inner",
+        visible_validation_folds=None,
+    ) == 5
+    assert _resolve_l2_target_visible_validation_folds(
+        budget_profile="fixed-inner",
+        visible_validation_folds=3,
+    ) == 3
     assert l2_target_evolution._effective_max_agent_rounds(  # noqa: SLF001
         L2TargetEvolutionConfig(
             source_repo_dir=Path.cwd(),
@@ -811,6 +868,8 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert summary["budget_policy"]["profile"] == "fixed-inner"
     assert summary["budget_policy"]["inner_patience_rounds"] == 0
     assert summary["budget_policy"]["local_search_trials"] == 256
+    assert summary["budget_policy"]["visible_validation_folds"] == 5
+    assert summary["data_split_policy"]["visible_validation_folds"] == 5
     assert summary["budget_policy"]["stop_on_selection_gate"] is False
     assert summary["budget_policy"]["max_agent_rounds"] is None
     assert summary["data_split"]["train"] > 0

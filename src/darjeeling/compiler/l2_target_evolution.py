@@ -449,7 +449,7 @@ def _split_l2_target_traces_chronological(
 
     private_selection_count = max(1, int(len(labeled) * 0.10))
     private_promotion_count = max(1, int(len(labeled) * 0.10))
-    visible_ratio = min(0.40, 0.20 + (0.05 * (visible_validation_folds - 1)))
+    visible_ratio = 0.20 if visible_validation_folds == 1 else 0.30
     visible_total = max(visible_validation_folds, int(len(labeled) * visible_ratio))
     max_visible_total = len(labeled) - private_selection_count - private_promotion_count - 4
     if max_visible_total < visible_validation_folds:
@@ -527,10 +527,7 @@ def _intent_stratified_group_counts(
     split_count = 1 + visible_validation_folds + 2
     if size < split_count:
         return (size, *([0] * (split_count - 1)))
-    train_ratio = 0.60 if visible_validation_folds == 1 else max(
-        0.40,
-        0.60 - (0.05 * (visible_validation_folds - 1)),
-    )
+    train_ratio = 0.60 if visible_validation_folds == 1 else 0.50
     private_ratio = 0.10
     visible_ratio = 1.0 - train_ratio - (2 * private_ratio)
     ratios = [
