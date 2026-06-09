@@ -31,6 +31,7 @@ L2TargetSplitPolicy = Literal["chronological", "intent-stratified"]
 DEFAULT_TARGET_EVOLVE_ROUNDS = 12
 DEFAULT_TARGET_LOCAL_SEARCH_TRIALS = 96
 DEFAULT_TARGET_INNER_PATIENCE_ROUNDS = 4
+DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS = 3
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class L2TargetEvolutionConfig:
     budget_profile: L2TargetBudgetProfile = "standard"
     split_policy: L2TargetSplitPolicy = "chronological"
     visible_validation_folds: int = 1
+    visible_cross_audit_folds: int = 0
     max_agent_rounds: int | None = None
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
@@ -74,6 +76,8 @@ def run_l2_target_evolution(
         raise ValueError("local_search_trials must be at least 1")
     if config.visible_validation_folds < 1:
         raise ValueError("visible_validation_folds must be at least 1")
+    if config.visible_cross_audit_folds == 1 or config.visible_cross_audit_folds < 0:
+        raise ValueError("visible_cross_audit_folds must be 0 or at least 2")
     if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
         raise ValueError("max_agent_rounds must be non-negative")
     max_agent_rounds = _effective_max_agent_rounds(config)
@@ -299,6 +303,7 @@ def run_l2_target_evolution(
             ),
             "inner_validation": inner_result,
             "train_audit": _candidate_train_audit(candidate),
+            "visible_cross_audit": candidate.get("visible_cross_audit"),
             "selection_delta_vs_baseline": _metric_delta(
                 selection_result,
                 baseline["selection_holdout"],
@@ -362,6 +367,7 @@ def run_l2_target_evolution(
             "max_agent_rounds": max_agent_rounds,
             "profile": config.budget_profile,
             "visible_validation_folds": config.visible_validation_folds,
+            "visible_cross_audit_folds": config.visible_cross_audit_folds,
         },
         "agent_budget": _agent_budget_payload(
             config=config,
@@ -666,8 +672,21 @@ def evaluate_target_workspace(
     holdout_path: Path | None = None,
     min_accepted_accuracy: float = 0.93,
     max_wrong_accept_rate: float = 0.05,
+    visible_cross_audit_folds: int = DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS,
 ) -> dict[str, Any]:
     train_traces = _read_teacher_jsonl(workspace_root / "data" / "train.jsonl")
+    target_module = load_target_module(workspace_root / "target" / "target_l2.py")
+    overrides = target_config_overrides(target_module)
+    config = L2StudentConfig(**overrides)
+    if split == "visible_cross_audit":
+        return _evaluate_visible_cross_audit(
+            workspace_root=workspace_root,
+            target_module=target_module,
+            config=config,
+            fold_count=visible_cross_audit_folds,
+            min_accepted_accuracy=min_accepted_accuracy,
+            max_wrong_accept_rate=max_wrong_accept_rate,
+        )
     if split in {"selection_holdout", "promotion_holdout"}:
         if holdout_path is None:
             raise ValueError(f"{split} evaluation requires a private holdout_path")
@@ -684,9 +703,6 @@ def evaluate_target_workspace(
             raise ValueError(f"unsupported target evaluation split: {split}")
         validation_path = workspace_root / "data" / f"{split}.jsonl"
         validation_sets = [(split, _read_teacher_jsonl(validation_path))]
-    target_module = load_target_module(workspace_root / "target" / "target_l2.py")
-    overrides = target_config_overrides(target_module)
-    config = L2StudentConfig(**overrides)
     bundle = train_l2_student(training_examples_from_teacher_traces(train_traces), config)
     validation_traces = [
         trace for _, traces_for_split in validation_sets for trace in traces_for_split
@@ -720,6 +736,237 @@ def evaluate_target_workspace(
             _visible_metric_summary(metric) for metric in fold_metrics
         ]
     return payload
+
+
+def _evaluate_visible_cross_audit(
+    *,
+    workspace_root: Path,
+    target_module: Any,
+    config: L2StudentConfig,
+    fold_count: int,
+    min_accepted_accuracy: float,
+    max_wrong_accept_rate: float,
+) -> dict[str, Any]:
+    if fold_count < 2:
+        raise ValueError("visible_cross_audit requires at least 2 folds")
+    visible_traces = _visible_training_and_validation_traces(workspace_root)
+    folds = _intent_stratified_cross_audit_folds(visible_traces, fold_count)
+    fold_metrics: list[dict[str, Any]] = []
+    for index, validation_traces in enumerate(folds):
+        train_traces = [
+            trace
+            for fold_index, traces_for_fold in enumerate(folds)
+            if fold_index != index
+            for trace in traces_for_fold
+        ]
+        if len(train_traces) < 4 or not validation_traces:
+            continue
+        bundle = train_l2_student(
+            training_examples_from_teacher_traces(train_traces),
+            config,
+        )
+        fold_metrics.append(
+            _evaluate_trained_target(
+                bundle=bundle,
+                target_module=target_module,
+                split=f"visible_cross_audit_fold_{index + 1}",
+                train_size=len(train_traces),
+                validation_traces=validation_traces,
+                min_accepted_accuracy=min_accepted_accuracy,
+                max_wrong_accept_rate=max_wrong_accept_rate,
+            ),
+        )
+    return _aggregate_visible_cross_audit_metrics(
+        fold_metrics=fold_metrics,
+        fold_count=fold_count,
+        visible_size=len(visible_traces),
+        min_accepted_accuracy=min_accepted_accuracy,
+        max_wrong_accept_rate=max_wrong_accept_rate,
+    )
+
+
+def _visible_training_and_validation_traces(workspace_root: Path) -> list[TeacherTrace]:
+    return [
+        *_read_teacher_jsonl(workspace_root / "data" / "train.jsonl"),
+        *[
+            trace
+            for path in _visible_validation_paths(workspace_root)
+            for trace in _read_teacher_jsonl(path)
+        ],
+    ]
+
+
+def _intent_stratified_cross_audit_folds(
+    traces: list[TeacherTrace],
+    fold_count: int,
+) -> list[list[TeacherTrace]]:
+    folds: list[list[TeacherTrace]] = [[] for _ in range(fold_count)]
+    grouped: dict[str, list[TeacherTrace]] = {}
+    for trace in traces:
+        intent = trace.teacher_frame.intent if trace.teacher_frame is not None else ""
+        grouped.setdefault(intent, []).append(trace)
+    for group in grouped.values():
+        for index, trace in enumerate(group):
+            folds[index % fold_count].append(trace)
+    if any(not fold for fold in folds):
+        folds = [[] for _ in range(fold_count)]
+        for index, trace in enumerate(traces):
+            folds[index % fold_count].append(trace)
+    return folds
+
+
+def _aggregate_visible_cross_audit_metrics(
+    *,
+    fold_metrics: list[dict[str, Any]],
+    fold_count: int,
+    visible_size: int,
+    min_accepted_accuracy: float,
+    max_wrong_accept_rate: float,
+) -> dict[str, Any]:
+    accepted = sum(int(metric["accepted"]) for metric in fold_metrics)
+    correct = sum(int(metric["correct_accepts"]) for metric in fold_metrics)
+    wrong = sum(int(metric["wrong_accepts"]) for metric in fold_metrics)
+    vetoed = sum(int(metric["vetoed_accepts"]) for metric in fold_metrics)
+    validation_size = sum(int(metric["validation_size"]) for metric in fold_metrics)
+    accepted_accuracy = correct / accepted if accepted else None
+    wrong_accept_rate = wrong / accepted if accepted else 0.0
+    passes_gate = bool(
+        accepted
+        and accepted_accuracy is not None
+        and accepted_accuracy >= min_accepted_accuracy
+        and wrong_accept_rate <= max_wrong_accept_rate
+    )
+    wrong_examples = _top_guard_examples(
+        [
+            example
+            for metric in fold_metrics
+            for example in metric.get("wrong_examples", [])
+        ],
+    )
+    veto_examples = _top_guard_examples(
+        [
+            example
+            for metric in fold_metrics
+            for example in metric.get("veto_examples", [])
+        ],
+    )
+    near_miss_examples = _top_guard_examples(
+        [
+            example
+            for metric in fold_metrics
+            for example in metric.get("near_miss_examples", [])
+        ],
+    )
+    safety_backlog = _aggregate_safety_backlogs(
+        split="visible_cross_audit",
+        validation_size=validation_size,
+        backlogs=[
+            metric["safety_backlog"]
+            for metric in fold_metrics
+            if isinstance(metric.get("safety_backlog"), dict)
+        ],
+    )
+    return {
+        "split": "visible_cross_audit",
+        "train_size": visible_size,
+        "validation_size": validation_size,
+        "accepted": accepted,
+        "correct_accepts": correct,
+        "wrong_accepts": wrong,
+        "vetoed_accepts": vetoed,
+        "coverage": accepted / validation_size if validation_size else 0.0,
+        "accepted_accuracy": accepted_accuracy,
+        "wrong_accept_rate": wrong_accept_rate,
+        "passes_gate": passes_gate,
+        "gate_role": "diagnostic_only_not_selection_or_adoption_gate",
+        "visible_cross_audit_folds_requested": fold_count,
+        "visible_cross_audit_folds_completed": len(fold_metrics),
+        "wrong_examples": wrong_examples,
+        "veto_examples": veto_examples,
+        "near_miss_examples": near_miss_examples,
+        "family_diagnostics": None,
+        "safety_backlog": safety_backlog,
+        "folds": [_visible_metric_summary(metric) for metric in fold_metrics],
+    }
+
+
+def _aggregate_safety_backlogs(
+    *,
+    split: str,
+    validation_size: int,
+    backlogs: list[dict[str, Any]],
+    limit: int = 8,
+) -> dict[str, Any]:
+    by_intent: dict[str, dict[str, Any]] = {}
+    for backlog in backlogs:
+        for item in backlog.get("items", []):
+            intent = str(item["teacher_intent"])
+            aggregate = by_intent.setdefault(
+                intent,
+                {
+                    "teacher_intent": intent,
+                    "total": 0,
+                    "accepted_correct": 0,
+                    "accepted_wrong": 0,
+                    "intent_correct_slot_wrong": 0,
+                    "max_wrong_guard_probability": 0.0,
+                    "top_predicted_intents": item.get("top_predicted_intents", []),
+                    "wrong_examples": [],
+                    "recommended_action": item.get(
+                        "recommended_action",
+                        (
+                            "tighten accept_prediction or add exact postprocess "
+                            "before any coverage expansion"
+                        ),
+                    ),
+                },
+            )
+            aggregate["total"] += int(item.get("total") or 0)
+            aggregate["accepted_correct"] += int(item.get("accepted_correct") or 0)
+            aggregate["accepted_wrong"] += int(item.get("accepted_wrong") or 0)
+            aggregate["intent_correct_slot_wrong"] += int(
+                item.get("intent_correct_slot_wrong") or 0,
+            )
+            aggregate["max_wrong_guard_probability"] = max(
+                float(aggregate["max_wrong_guard_probability"]),
+                float(item.get("max_wrong_guard_probability") or 0.0),
+            )
+            aggregate["wrong_examples"].extend(item.get("wrong_examples", []))
+    items = []
+    for aggregate in by_intent.values():
+        accepted_total = aggregate["accepted_correct"] + aggregate["accepted_wrong"]
+        examples = _top_guard_examples(aggregate["wrong_examples"], limit=3)
+        items.append(
+            {
+                **aggregate,
+                "wrong_accept_share": aggregate["accepted_wrong"] / accepted_total
+                if accepted_total
+                else 0.0,
+                "wrong_examples": examples,
+            },
+        )
+    items.sort(
+        key=lambda item: (
+            int(item["accepted_wrong"]),
+            float(item["wrong_accept_share"]),
+            int(item["intent_correct_slot_wrong"]),
+            float(item["max_wrong_guard_probability"]),
+            item["teacher_intent"],
+        ),
+        reverse=True,
+    )
+    return {
+        "schema_version": "l2-target-safety-backlog-v1",
+        "split": split,
+        "validation_size": validation_size,
+        "visibility": "visible_validation_only",
+        "priority": "fix_visible_accepted_wrong_before_coverage_expansion",
+        "item_limit": limit,
+        "items": items[:limit],
+        "empty_reason": None
+        if items
+        else "no_visible_accepted_wrong_families",
+    }
 
 
 def _visible_validation_paths(workspace_root: Path) -> list[Path]:
@@ -891,6 +1138,17 @@ def _evaluate_target_candidate(
         min_accepted_accuracy=config.min_accepted_accuracy,
         max_wrong_accept_rate=config.max_wrong_accept_rate,
     )
+    visible_cross_audit_result = (
+        evaluate_target_workspace(
+            workspace_root=workspace_root,
+            split="visible_cross_audit",
+            min_accepted_accuracy=config.min_accepted_accuracy,
+            max_wrong_accept_rate=config.max_wrong_accept_rate,
+            visible_cross_audit_folds=config.visible_cross_audit_folds,
+        )
+        if config.visible_cross_audit_folds >= 2
+        else None
+    )
     private_results = {
         split_name: evaluate_target_workspace(
             workspace_root=workspace_root,
@@ -905,6 +1163,7 @@ def _evaluate_target_candidate(
         "label": label,
         "inner_validation": inner_result,
         "train_audit": train_audit_result,
+        "visible_cross_audit": visible_cross_audit_result,
         **private_results,
     }
 
@@ -1169,6 +1428,11 @@ def _target_diagnostics_payload(
         if recent_rounds
         else _candidate_train_audit(baseline)
     )
+    latest_cross_audit = (
+        _candidate_visible_cross_audit(recent_rounds[-1])
+        if recent_rounds
+        else _candidate_visible_cross_audit(baseline)
+    )
     return {
         "schema_version": "l2-target-diagnostics-v1",
         "visibility": "visible_validation_only",
@@ -1191,6 +1455,16 @@ def _target_diagnostics_payload(
         "latest_train_audit_safety_backlog": _metric_safety_backlog(
             latest_train_audit or {},
         ),
+        "baseline_visible_cross_audit": _metric_family_diagnostics(
+            _candidate_visible_cross_audit(baseline),
+        ),
+        "baseline_visible_cross_audit_safety_backlog": _metric_safety_backlog(
+            _candidate_visible_cross_audit(baseline) or {},
+        ),
+        "latest_visible_cross_audit": _metric_family_diagnostics(latest_cross_audit),
+        "latest_visible_cross_audit_safety_backlog": _metric_safety_backlog(
+            latest_cross_audit or {},
+        ),
         "round_history": [
             {
                 "round": round_result["round"],
@@ -1203,6 +1477,9 @@ def _target_diagnostics_payload(
                 ),
                 "train_audit_safety_backlog": _metric_safety_backlog(
                     _candidate_train_audit(round_result),
+                ),
+                "visible_cross_audit_safety_backlog": _metric_safety_backlog(
+                    _candidate_visible_cross_audit(round_result) or {},
                 ),
             }
             for round_result in recent_rounds
@@ -1218,6 +1495,11 @@ def _candidate_train_audit(candidate: dict[str, Any]) -> dict[str, Any]:
     fallback["split"] = "train_audit"
     fallback["gate_role"] = "diagnostic_only_not_selection_or_adoption_gate"
     return fallback
+
+
+def _candidate_visible_cross_audit(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    metric = candidate.get("visible_cross_audit")
+    return metric if isinstance(metric, dict) else None
 
 
 def _metric_family_diagnostics(metric: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1266,6 +1548,7 @@ def _write_target_state_files(
             "local_search_space": config.local_search_space,
             "max_agent_rounds": _effective_max_agent_rounds(config),
             "visible_validation_folds": config.visible_validation_folds,
+            "visible_cross_audit_folds": config.visible_cross_audit_folds,
         },
         "agent_budget": _agent_budget_payload(
             config=config,
@@ -1281,9 +1564,16 @@ def _write_target_state_files(
         ),
         "baseline_inner_validation": _visible_metric_summary(baseline["inner_validation"]),
         "baseline_train_audit": _visible_metric_summary(_candidate_train_audit(baseline)),
+        "baseline_visible_cross_audit": _optional_visible_metric_summary(
+            _candidate_visible_cross_audit(baseline),
+        ),
         "train_audit_policy": (
             "visible train audit is diagnostic-only; it may guide safety work but is not "
             "a candidate selection or adoption gate"
+        ),
+        "visible_cross_audit_policy": (
+            "visible cross-audit is diagnostic-only; it retrains on visible folds to "
+            "simulate selection-like pressure without exposing private holdouts"
         ),
         "round_history": [_visible_round_summary(round_result) for round_result in round_results],
         "private_holdout_visibility": (
@@ -1377,6 +1667,8 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
                 "AND private promotion holdout gate"
             ),
             "visible_validation_folds": config.visible_validation_folds,
+            "visible_cross_audit_folds": config.visible_cross_audit_folds,
+            "visible_cross_audit_role": "diagnostic_only_not_selection_or_adoption_gate",
         },
         "workspace_scope": _workspace_scope_policy_payload(),
         "optimization_order": [
@@ -1401,6 +1693,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
             "target-dependent code derived from visible train and validation-fold files",
             "config_overrides for bounded L2StudentConfig parameters",
             "local Optuna/config search over visible train and inner validation only",
+            "visible cross-audit diagnostics for selection-like safety pressure",
             "postprocess_frame fixes that preserve exact frame correctness",
             "accept_prediction veto logic that abstains when uncertain",
             "near_miss_examples-driven mechanisms that still pass visible validation gate",
@@ -1545,6 +1838,15 @@ def _target_commands_text() -> str:
             "",
             "The same fallback can evaluate train audit with `--split train_audit`.",
             "",
+            "Evaluate visible cross-audit diagnostics when enabled:",
+            "",
+            "```bash",
+            "uv run --project system/darjeeling python tools/evaluate.py \\",
+            "  --split visible_cross_audit \\",
+            f"  --visible-cross-audit-folds {DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS} \\",
+            "  --out runs/visible_cross_audit.json",
+            "```",
+            "",
             "Run local Optuna config search on visible train/validation folds only:",
             "",
             "```bash",
@@ -1603,7 +1905,16 @@ def _visible_round_summary(round_result: dict[str, Any]) -> dict[str, Any]:
         "inner_delta_vs_baseline": round_result["inner_delta_vs_baseline"],
         "inner_validation": _visible_metric_summary(round_result["inner_validation"]),
         "train_audit": _visible_metric_summary(_candidate_train_audit(round_result)),
+        "visible_cross_audit": _optional_visible_metric_summary(
+            _candidate_visible_cross_audit(round_result),
+        ),
     }
+
+
+def _optional_visible_metric_summary(metric: dict[str, Any] | None) -> dict[str, Any] | None:
+    if metric is None:
+        return None
+    return _visible_metric_summary(metric)
 
 
 def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
@@ -1624,6 +1935,9 @@ def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
         "near_miss_examples": metric.get("near_miss_examples", []),
         "family_diagnostics": metric.get("family_diagnostics"),
         "safety_backlog": _metric_safety_backlog(metric),
+        "visible_cross_audit_folds_completed": metric.get(
+            "visible_cross_audit_folds_completed",
+        ),
     }
 
 
@@ -1676,18 +1990,29 @@ def evaluate_target_workspace_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument(
         "--split",
-        choices=["inner_validation", "visible_validation", "train_audit"],
+        choices=[
+            "inner_validation",
+            "visible_validation",
+            "train_audit",
+            "visible_cross_audit",
+        ],
         required=True,
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--min-accepted-accuracy", type=float, default=0.93)
     parser.add_argument("--max-wrong-accept-rate", type=float, default=0.05)
+    parser.add_argument(
+        "--visible-cross-audit-folds",
+        type=int,
+        default=DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS,
+    )
     args = parser.parse_args(argv)
     payload = evaluate_target_workspace(
         workspace_root=args.workspace,
         split=args.split,
         min_accepted_accuracy=args.min_accepted_accuracy,
         max_wrong_accept_rate=args.max_wrong_accept_rate,
+        visible_cross_audit_folds=args.visible_cross_audit_folds,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -2113,6 +2438,8 @@ def _target_program_text() -> str:
             "  visible accepted-wrong families before working on near-miss coverage.",
             "  `latest_train_audit_safety_backlog` is diagnostic-only visible",
             "  train feedback for broadening safety rules; it is not a gate.",
+            "  `latest_visible_cross_audit_safety_backlog` retrains on visible",
+            "  folds to expose selection-like risks without using private holdouts.",
             "- `data/commands.md` lists local commands.",
             "- `tools/evaluate.py` trains/evaluates the target code in seconds.",
             "- `tools/search_config.py` runs visible-data Optuna config search.",
@@ -2137,8 +2464,8 @@ def _target_program_text() -> str:
             "accepted-wrong families before coverage expansion or broad threshold",
             "changes.",
             "If visible validation backlog is empty but candidate selection still",
-            "fails, use the visible train audit backlog to design broader safety",
-            "rules; do not inspect private holdout rows.",
+            "fails, use visible cross-audit and train-audit backlogs to design",
+            "broader safety rules; do not inspect private holdout rows.",
             "`target.accept_prediction` may veto uncertain guard accepts; it cannot",
             "force accepts that the core guard rejected.",
             "Private selection and promotion holdouts are outside this workspace and",

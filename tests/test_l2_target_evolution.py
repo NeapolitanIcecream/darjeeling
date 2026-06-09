@@ -8,6 +8,7 @@ from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.cli import (
     _resolve_l2_target_agent_rounds,
     _resolve_l2_target_budget,
+    _resolve_l2_target_visible_cross_audit_folds,
     _resolve_l2_target_visible_validation_folds,
     app,
 )
@@ -745,6 +746,22 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
         budget_profile="fixed-inner",
         visible_validation_folds=3,
     ) == 3
+    assert _resolve_l2_target_visible_cross_audit_folds(
+        budget_profile="standard",
+        visible_cross_audit_folds=None,
+    ) == 0
+    assert _resolve_l2_target_visible_cross_audit_folds(
+        budget_profile="smoke",
+        visible_cross_audit_folds=None,
+    ) == 0
+    assert _resolve_l2_target_visible_cross_audit_folds(
+        budget_profile="fixed-inner",
+        visible_cross_audit_folds=None,
+    ) == 3
+    assert _resolve_l2_target_visible_cross_audit_folds(
+        budget_profile="fixed-inner",
+        visible_cross_audit_folds=4,
+    ) == 4
     assert l2_target_evolution._effective_max_agent_rounds(  # noqa: SLF001
         L2TargetEvolutionConfig(
             source_repo_dir=Path.cwd(),
@@ -970,9 +987,13 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert summary["budget_policy"]["inner_patience_rounds"] == 0
     assert summary["budget_policy"]["local_search_trials"] == 256
     assert summary["budget_policy"]["visible_validation_folds"] == 5
+    assert summary["budget_policy"]["visible_cross_audit_folds"] == 3
     assert summary["data_split_policy"]["visible_validation_folds"] == 5
     assert summary["budget_policy"]["stop_on_selection_gate"] is False
     assert summary["budget_policy"]["max_agent_rounds"] is None
+    assert summary["baseline"]["visible_cross_audit"]["gate_role"] == (
+        "diagnostic_only_not_selection_or_adoption_gate"
+    )
     assert summary["data_split"]["train"] > 0
 
 

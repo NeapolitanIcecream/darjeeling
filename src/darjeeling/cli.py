@@ -19,6 +19,7 @@ from darjeeling.compiler.l2_target_evolution import (
     DEFAULT_TARGET_EVOLVE_ROUNDS,
     DEFAULT_TARGET_INNER_PATIENCE_ROUNDS,
     DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
+    DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS,
     L2TargetBudgetProfile,
     L2TargetEvolutionConfig,
     L2TargetEvolutionMode,
@@ -706,6 +707,17 @@ def l2_target_evolve(
             ),
         ),
     ] = None,
+    visible_cross_audit_folds: Annotated[
+        int | None,
+        typer.Option(
+            min=0,
+            help=(
+                "Visible diagnostic-only cross-audit folds. 0 disables; values "
+                "above 1 retrain on visible folds to expose selection-like safety "
+                "pressure without reading private holdouts. Defaults are profile-specific."
+            ),
+        ),
+    ] = None,
     inner_patience_rounds: Annotated[
         int | None,
         typer.Option(
@@ -779,6 +791,10 @@ def l2_target_evolve(
         budget_profile=resolved_budget_profile,
         visible_validation_folds=visible_validation_folds,
     )
+    resolved_visible_cross_audit_folds = _resolve_l2_target_visible_cross_audit_folds(
+        budget_profile=resolved_budget_profile,
+        visible_cross_audit_folds=visible_cross_audit_folds,
+    )
     settings = _load_cli_settings()
     trace_records = read_traces(traces)
     if max_traces is not None:
@@ -799,6 +815,7 @@ def l2_target_evolve(
             budget_profile=resolved_budget_profile,
             split_policy=resolved_split_policy,
             visible_validation_folds=resolved_visible_validation_folds,
+            visible_cross_audit_folds=resolved_visible_cross_audit_folds,
             max_agent_rounds=resolved_max_agent_rounds,
             sandbox=settings.l2_agent_sandbox,
             approval_policy=settings.l2_agent_approval_policy,
@@ -876,6 +893,18 @@ def _resolve_l2_target_visible_validation_folds(
     if budget_profile == "fixed-inner":
         return 5
     return 1
+
+
+def _resolve_l2_target_visible_cross_audit_folds(
+    *,
+    budget_profile: L2TargetBudgetProfile,
+    visible_cross_audit_folds: int | None,
+) -> int:
+    if visible_cross_audit_folds is not None:
+        return visible_cross_audit_folds
+    if budget_profile == "fixed-inner":
+        return DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS
+    return 0
 
 
 @l2_app.command("promote-target")

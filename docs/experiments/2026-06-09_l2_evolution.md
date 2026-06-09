@@ -1787,3 +1787,63 @@ Interpretation:
   such as cross-audit folds over train+visible data, before asking L4 to design
   more target rules. This keeps private holdout private while exposing more
   selection-like safety pressure to the agent.
+
+## Visible cross-audit diagnostics
+
+The next implementation added a diagnostic-only `visible_cross_audit` split to
+`edge-mvp l2 target-evolve`. When enabled, the harness uses only visible
+train+validation rows, splits them into intent-stratified held-out folds,
+re-trains an L2 bundle per fold, and evaluates the current target code on the
+held-out visible fold. The result is written into `round_state.json` and
+`target_diagnostics.json` as `latest_visible_cross_audit_safety_backlog`; it is
+not part of `_inner_score`, candidate selection, or adoption.
+
+This specifically addresses the failure mode where the fixed visible validation
+folds are clean but private selection still finds wrong accepts.
+
+Validation command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-visible-cross-audit-3k-r1 \
+  --budget-profile fixed-inner \
+  --rounds 3 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --dry-run-patch docs/experiments/patches/l2_target_visible_safety_backlog_veto_r1.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_train_audit_slot_risk_veto_r2.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_slot_support_policy_v3.patch
+```
+
+Result:
+
+- `fixed-inner` resolved to 5 visible validation folds and 3 visible
+  cross-audit folds.
+- Round 1: visible validation 18 / 18 / 0, train audit 160 / 142 / 18,
+  visible cross-audit 60 / 40 / 20, selection 11 / 7 / 4, promotion 11 / 7 / 4.
+- Round 2: visible validation 18 / 18 / 0, train audit 153 / 142 / 11,
+  visible cross-audit 60 / 40 / 20, selection 11 / 7 / 4, promotion 10 / 7 / 3.
+- Round 3: visible validation 18 / 18 / 0, train audit 136 / 133 / 3,
+  visible cross-audit 59 / 39 / 20, selection 10 / 6 / 4, promotion 9 / 7 / 2.
+- The run remained non-adopted:
+  `selection_gate_diagnosis=selection_wrong_accepts_for_inner_passing_rounds`.
+- `latest_visible_cross_audit_safety_backlog` exposed visible held-out wrong
+  accepts in families such as `play_radio`, `email_query`, `calendar_remove`,
+  `lists_query`, `iot_hue_lightoff`, `audio_volume_up`,
+  `iot_hue_lightchange`, and `alarm_remove`.
+
+Interpretation:
+
+- Cross-audit found 20 visible held-out wrong accepts even though ordinary
+  visible validation was 18 / 18 / 0. That matches the private selection
+  failure mode without leaking private selection rows or aggregates into the
+  agent workspace.
+- The prior target patches improved visible train audit and promotion somewhat,
+  but did not reduce private selection wrong accepts. The likely bottleneck is
+  now structural slot exactness under retraining variation, not only missing
+  literal vetoes for the original visible validation fold.
+- The next real L2-evolve experiment should use this cross-audit backlog as the
+  visible agent signal and should run a longer fixed-inner loop. The current
+  3-round dry-run sequence is still only a harness/protocol validation, not
+  evidence that L4/Codex-driven target evolution has been exhausted.
