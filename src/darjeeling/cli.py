@@ -663,6 +663,17 @@ def l2_target_evolve(
         int | None,
         typer.Option(min=1, help="Optional prefix of traces to use for the target split."),
     ] = None,
+    inner_patience_rounds: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Stop after this many non-improving inner-validation rounds; 0 disables.",
+        ),
+    ] = 2,
+    stop_on_promotion_gate: Annotated[
+        bool,
+        typer.Option(help="Stop early when the private promotion holdout gate passes."),
+    ] = True,
 ) -> None:
     """Run an inner target-dependent L2 evolution loop over fixed trace splits."""
 
@@ -690,6 +701,8 @@ def l2_target_evolve(
             ephemeral=settings.l2_agent_ephemeral,
             min_accepted_accuracy=settings.l2_min_guarded_accuracy,
             max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
+            inner_patience_rounds=inner_patience_rounds,
+            stop_on_promotion_gate=stop_on_promotion_gate,
         ),
         traces=traces_to_teacher_view(trace_records),
     )

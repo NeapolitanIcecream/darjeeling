@@ -44,6 +44,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
             job_dir=tmp_path / "job",
             rounds=3,
             mode="dry-run",
+            inner_patience_rounds=0,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
@@ -51,9 +52,12 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     workspace = tmp_path / "job" / "workspace" / "l2_target"
     assert summary["schema_version"] == "l2-target-evolution-v1"
     assert summary["rounds_completed"] == 3
+    assert summary["stop_reason"] == "round_budget_exhausted"
     assert summary["target_code_scope"] == "target/"
+    assert summary["baseline"]["label"] == "baseline"
     assert (workspace / "target" / "target_l2.py").exists()
     assert (workspace / "system" / "darjeeling" / "src").exists()
+    assert (workspace / "system" / "darjeeling" / "README.md").exists()
     assert not (workspace / "candidate").exists()
     assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
     assert (tmp_path / "job" / "private" / "promotion_holdout.jsonl").exists()
@@ -68,6 +72,14 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "train.jsonl",
     }
     assert manifest["private_data_files_not_in_workspace"] == ["promotion_holdout.jsonl"]
+    assert set(manifest["visible_state_files"]) == {
+        "commands.md",
+        "objective.json",
+        "round_state.json",
+    }
+    assert (workspace / "data" / "objective.json").exists()
+    round_state = json.loads((workspace / "data" / "round_state.json").read_text())
+    assert "promotion_holdout" not in json.dumps(round_state)
 
 
 def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Path) -> None:
@@ -111,6 +123,24 @@ def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Pa
     assert summary["rounds_completed"] == 2
 
 
+def test_l2_target_evolution_stops_after_inner_patience(tmp_path: Path) -> None:
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=5,
+            mode="dry-run",
+            inner_patience_rounds=1,
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    assert summary["rounds_requested"] == 5
+    assert summary["rounds_completed"] == 1
+    assert summary["stop_reason"] == "inner_validation_patience_exhausted"
+    assert summary["rounds"][0]["inner_improved"] is False
+
+
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     traces_path = tmp_path / "traces.jsonl"
     traces_path.write_text(
@@ -135,4 +165,5 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
     assert summary["rounds_completed"] == 2
+    assert summary["budget_policy"]["inner_patience_rounds"] == 2
     assert summary["data_split"]["train"] > 0

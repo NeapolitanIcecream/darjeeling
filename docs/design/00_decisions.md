@@ -167,4 +167,6 @@ L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution loop。Darj
 - `target/` 是唯一可写 target-dependent code 区域；`system/darjeeling/` 是只读 core/evaluator copy。
 - `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 读；promotion holdout 存在 outer job 的私有目录，不进入 agent workspace，只由 outer gate 读。
 - Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 target holdout/promotion 指标决定是否采用。
+- Inner loop 必须先评估 baseline，再评估 target rounds；可见 round history 只包含 inner validation 聚合，不包含 promotion holdout 聚合。
+- L4 agent budget 由 outer harness 控制：`rounds` 是最大轮数，默认连续两轮没有 inner validation improvement 就停止，promotion gate 通过也停止。
 - 旧的 `L2_AGENT_MODE=codex-cli` patch harness 只能作为 legacy core-patch artifact 生成路径，不是 L2 evolve 主线。

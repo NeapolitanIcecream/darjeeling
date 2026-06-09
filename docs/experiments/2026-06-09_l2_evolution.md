@@ -202,3 +202,53 @@ Conclusion:
 - This dry-run smoke does not claim L2 quality improvement. The next meaningful
   experiment must run `codex-cli` or target patches against this inner loop and
   compare promotion-holdout success.
+
+## Target-evolution budget policy smoke
+
+The next iteration added baseline-first evaluation and an outer budget policy:
+
+- Evaluate the unmodified `target/` baseline before any agent or patch round.
+- Treat `rounds` as a hard maximum, not as a commitment to spend every round.
+- Stop when the private promotion holdout passes its gate.
+- Stop after `inner_patience_rounds` consecutive rounds without inner validation
+  improvement. The default is 2.
+- Keep agent-visible `data/round_state.json` limited to inner validation
+  aggregates; holdout rows and holdout aggregate feedback remain outside the
+  workspace.
+- Score inner validation with wrong accepts before coverage, so raw coverage
+  gains with worse frame exactness are not counted as improvement.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-budget-smoke-r1 \
+  --rounds 5 \
+  --max-traces 500
+```
+
+Smoke result:
+
+- Runtime: about 5 seconds.
+- Requested rounds: 5.
+- Completed rounds: 2.
+- Stop reason: `inner_validation_patience_exhausted`.
+- Baseline inner validation: 1 accepted / 1 correct / 0 wrong.
+- Baseline promotion holdout: 0 accepted.
+- Rounds 1 and 2 had no inner improvement and no holdout improvement.
+- `data/round_state.json` exposed only inner validation history; private holdout
+  stayed in `private/promotion_holdout.jsonl`.
+- The generated workspace commands were verified with
+  `uv run --project system/darjeeling python tools/inspect_context.py` and
+  `uv run --project system/darjeeling python tools/evaluate.py --split inner_validation`;
+  copying `README.md` into `system/darjeeling/` was required because the
+  project metadata declares it as the package readme.
+
+Conclusion:
+
+- The cost-control behavior now works in the no-op case: the harness does not
+  keep spending rounds when the target code is not improving.
+- This still does not solve the L2 quality bottleneck. The next quality-bearing
+  experiment should run a real `codex-cli` target evolution job or apply a
+  target-only patch that can beat the baseline under the same gates.

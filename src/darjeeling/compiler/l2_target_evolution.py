@@ -38,6 +38,8 @@ class L2TargetEvolutionConfig:
     ephemeral: bool = True
     min_accepted_accuracy: float = 0.93
     max_wrong_accept_rate: float = 0.05
+    inner_patience_rounds: int = 2
+    stop_on_promotion_gate: bool = True
 
 
 def run_l2_target_evolution(
@@ -47,6 +49,8 @@ def run_l2_target_evolution(
 ) -> dict[str, Any]:
     if config.rounds < 1:
         raise ValueError("rounds must be at least 1")
+    if config.inner_patience_rounds < 0:
+        raise ValueError("inner_patience_rounds must be non-negative")
     job_dir = config.job_dir
     workspace_root = job_dir / "workspace" / "l2_target"
     rounds_dir = job_dir / "rounds"
@@ -71,9 +75,37 @@ def run_l2_target_evolution(
         split=split,
     )
 
+    baseline = _evaluate_target_candidate(
+        workspace_root=workspace_root,
+        holdout_path=holdout_path,
+        config=config,
+        label="baseline",
+    )
+    (rounds_dir / "baseline.json").write_text(
+        json.dumps(baseline, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
     command_results: list[dict[str, Any]] = []
     round_results: list[dict[str, Any]] = []
+    best_inner = baseline["inner_validation"]
+    no_inner_improvement_rounds = 0
+    stop_reason = "round_budget_exhausted"
+    if config.stop_on_promotion_gate and baseline["promotion_holdout"]["passes_gate"]:
+        stop_reason = "baseline_promotion_gate_passed"
+
     for round_index in range(1, config.rounds + 1):
+        if stop_reason != "round_budget_exhausted":
+            break
+        _write_target_state_files(
+            workspace_root=workspace_root,
+            config=config,
+            round_index=round_index,
+            state_kind="before_round",
+            baseline=baseline,
+            round_results=round_results,
+            no_inner_improvement_rounds=no_inner_improvement_rounds,
+        )
         if config.mode == "dry-run":
             patch_index = round_index - 1
             if patch_index < len(config.dry_run_patches):
@@ -85,6 +117,7 @@ def run_l2_target_evolution(
                     )
                 )
                 if command_results[-1]["return_code"] != 0:
+                    stop_reason = "dry_run_patch_failed"
                     break
         else:
             transcript_path = transcript_dir / f"round_{round_index:03d}.jsonl"
@@ -99,24 +132,36 @@ def run_l2_target_evolution(
                 )
             )
             if command_results[-1]["return_code"] != 0:
+                stop_reason = "agent_command_failed"
                 break
 
-        inner_result = evaluate_target_workspace(
+        candidate = _evaluate_target_candidate(
             workspace_root=workspace_root,
-            split="inner_validation",
-            min_accepted_accuracy=config.min_accepted_accuracy,
-            max_wrong_accept_rate=config.max_wrong_accept_rate,
-        )
-        promotion_result = evaluate_target_workspace(
-            workspace_root=workspace_root,
-            split="promotion_holdout",
             holdout_path=holdout_path,
-            min_accepted_accuracy=config.min_accepted_accuracy,
-            max_wrong_accept_rate=config.max_wrong_accept_rate,
+            config=config,
+            label=f"round_{round_index:03d}",
         )
+        inner_result = candidate["inner_validation"]
+        promotion_result = candidate["promotion_holdout"]
+        inner_improved = _is_inner_improvement(inner_result, best_inner)
+        if inner_improved:
+            best_inner = inner_result
+            no_inner_improvement_rounds = 0
+        else:
+            no_inner_improvement_rounds += 1
         round_payload = {
             "round": round_index,
+            "inner_improved": inner_improved,
+            "inner_score": list(_inner_score(inner_result)),
+            "inner_delta_vs_baseline": _metric_delta(
+                inner_result,
+                baseline["inner_validation"],
+            ),
             "inner_validation": inner_result,
+            "promotion_delta_vs_baseline": _metric_delta(
+                promotion_result,
+                baseline["promotion_holdout"],
+            ),
             "promotion_holdout": promotion_result,
         }
         (rounds_dir / f"round_{round_index:03d}.json").write_text(
@@ -124,6 +169,26 @@ def run_l2_target_evolution(
             encoding="utf-8",
         )
         round_results.append(round_payload)
+        if config.stop_on_promotion_gate and promotion_result["passes_gate"]:
+            stop_reason = "promotion_gate_passed"
+            break
+        if (
+            round_index < config.rounds
+            and config.inner_patience_rounds
+            and no_inner_improvement_rounds >= config.inner_patience_rounds
+        ):
+            stop_reason = "inner_validation_patience_exhausted"
+            break
+
+    _write_target_state_files(
+        workspace_root=workspace_root,
+        config=config,
+        round_index=len(round_results) + 1,
+        state_kind="final",
+        baseline=baseline,
+        round_results=round_results,
+        no_inner_improvement_rounds=no_inner_improvement_rounds,
+    )
 
     summary = {
         "schema_version": "l2-target-evolution-v1",
@@ -131,8 +196,14 @@ def run_l2_target_evolution(
         "mode": config.mode,
         "rounds_requested": config.rounds,
         "rounds_completed": len(round_results),
+        "stop_reason": stop_reason,
+        "budget_policy": {
+            "inner_patience_rounds": config.inner_patience_rounds,
+            "stop_on_promotion_gate": config.stop_on_promotion_gate,
+        },
         "workspace": str(workspace_root),
         "data_split": {key: len(value) for key, value in split.items()},
+        "baseline": baseline,
         "rounds": round_results,
         "best_round": _best_round(round_results),
         "target_code_scope": "target/",
@@ -201,6 +272,11 @@ def prepare_l2_target_workspace(
         "tools_dir": "tools",
         "data_files": sorted(path.name for path in (workspace_root / "data").iterdir()),
         "private_data_files_not_in_workspace": ["promotion_holdout.jsonl"],
+        "visible_state_files": [
+            "objective.json",
+            "round_state.json",
+            "commands.md",
+        ],
     }
     (workspace_root / "workspace_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -289,6 +365,181 @@ def evaluate_target_workspace(
     }
 
 
+def _evaluate_target_candidate(
+    *,
+    workspace_root: Path,
+    holdout_path: Path,
+    config: L2TargetEvolutionConfig,
+    label: str,
+) -> dict[str, Any]:
+    inner_result = evaluate_target_workspace(
+        workspace_root=workspace_root,
+        split="inner_validation",
+        min_accepted_accuracy=config.min_accepted_accuracy,
+        max_wrong_accept_rate=config.max_wrong_accept_rate,
+    )
+    promotion_result = evaluate_target_workspace(
+        workspace_root=workspace_root,
+        split="promotion_holdout",
+        holdout_path=holdout_path,
+        min_accepted_accuracy=config.min_accepted_accuracy,
+        max_wrong_accept_rate=config.max_wrong_accept_rate,
+    )
+    return {
+        "label": label,
+        "inner_validation": inner_result,
+        "promotion_holdout": promotion_result,
+    }
+
+
+def _write_target_state_files(
+    *,
+    workspace_root: Path,
+    config: L2TargetEvolutionConfig,
+    round_index: int,
+    state_kind: Literal["before_round", "final"],
+    baseline: dict[str, Any],
+    round_results: list[dict[str, Any]],
+    no_inner_improvement_rounds: int,
+) -> None:
+    data_dir = workspace_root / "data"
+    objective = _target_objective_payload(config)
+    state = {
+        "schema_version": "l2-target-round-state-v1",
+        "state_kind": state_kind,
+        "next_round": round_index,
+        "rounds_requested": config.rounds,
+        "no_inner_improvement_rounds": no_inner_improvement_rounds,
+        "budget_policy": {
+            "inner_patience_rounds": config.inner_patience_rounds,
+            "stop_on_promotion_gate": config.stop_on_promotion_gate,
+        },
+        "baseline_inner_validation": _visible_metric_summary(baseline["inner_validation"]),
+        "round_history": [_visible_round_summary(round_result) for round_result in round_results],
+        "private_holdout_visibility": "not available in this workspace",
+    }
+    (data_dir / "objective.json").write_text(
+        json.dumps(objective, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (data_dir / "round_state.json").write_text(
+        json.dumps(state, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (data_dir / "commands.md").write_text(_target_commands_text(), encoding="utf-8")
+
+
+def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]:
+    return {
+        "schema_version": "l2-target-objective-v1",
+        "primary_objective": "increase safe L2 accepts on unseen target traffic",
+        "gates": {
+            "min_accepted_accuracy": config.min_accepted_accuracy,
+            "max_wrong_accept_rate": config.max_wrong_accept_rate,
+        },
+        "optimization_order": [
+            "zero or lower wrong accepts",
+            "accepted accuracy at or above gate",
+            "coverage increase only after safety gates",
+            "lower latency for equally safe behavior",
+        ],
+        "invalid_strategies": [
+            "raw coverage increase with lower frame exactness",
+            "changes outside target/",
+            "using promotion holdout rows or aggregate feedback",
+            "hardcoding MASSIVE-specific behavior from outside visible data",
+        ],
+        "allowed_strategies": [
+            "target-dependent code derived from visible train/inner validation files",
+            "config_overrides for bounded L2StudentConfig parameters",
+            "postprocess_frame fixes that preserve exact frame correctness",
+            "mechanisms that abstain when uncertain",
+        ],
+    }
+
+
+def _target_commands_text() -> str:
+    return "\n".join(
+        [
+            "# Commands",
+            "",
+            "Evaluate the visible inner-validation split:",
+            "",
+            "```bash",
+            "uv run --project system/darjeeling python tools/evaluate.py \\",
+            "  --split inner_validation \\",
+            "  --out runs/inner_validation.json",
+            "```",
+            "",
+            "Inspect visible workspace context:",
+            "",
+            "```bash",
+            "uv run --project system/darjeeling python tools/inspect_context.py",
+            "```",
+            "",
+            "Only edit files under `target/`.",
+        ]
+    )
+
+
+def _visible_round_summary(round_result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "round": round_result["round"],
+        "inner_improved": round_result["inner_improved"],
+        "inner_score": round_result["inner_score"],
+        "inner_delta_vs_baseline": round_result["inner_delta_vs_baseline"],
+        "inner_validation": _visible_metric_summary(round_result["inner_validation"]),
+    }
+
+
+def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "split": metric["split"],
+        "train_size": metric["train_size"],
+        "validation_size": metric["validation_size"],
+        "accepted": metric["accepted"],
+        "correct_accepts": metric["correct_accepts"],
+        "wrong_accepts": metric["wrong_accepts"],
+        "coverage": metric["coverage"],
+        "accepted_accuracy": metric["accepted_accuracy"],
+        "wrong_accept_rate": metric["wrong_accept_rate"],
+        "passes_gate": metric["passes_gate"],
+    }
+
+
+def _metric_delta(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "accepted": current["accepted"] - baseline["accepted"],
+        "correct_accepts": current["correct_accepts"] - baseline["correct_accepts"],
+        "wrong_accepts": current["wrong_accepts"] - baseline["wrong_accepts"],
+        "coverage": current["coverage"] - baseline["coverage"],
+        "accepted_accuracy": _optional_float_delta(
+            current["accepted_accuracy"],
+            baseline["accepted_accuracy"],
+        ),
+        "wrong_accept_rate": current["wrong_accept_rate"] - baseline["wrong_accept_rate"],
+    }
+
+
+def _optional_float_delta(current: float | None, baseline: float | None) -> float | None:
+    if current is None or baseline is None:
+        return None
+    return current - baseline
+
+
+def _is_inner_improvement(current: dict[str, Any], best: dict[str, Any]) -> bool:
+    return _inner_score(current) > _inner_score(best)
+
+
+def _inner_score(metric: dict[str, Any]) -> tuple[bool, int, float, float]:
+    return (
+        bool(metric["passes_gate"]),
+        -int(metric["wrong_accepts"]),
+        float(metric["accepted_accuracy"] or 0.0),
+        float(metric["coverage"]),
+    )
+
+
 def evaluate_target_workspace_cli(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -315,7 +566,13 @@ def _copy_system_workspace(source_repo_dir: Path, system_repo_dir: Path) -> None
     if system_repo_dir.exists():
         shutil.rmtree(system_repo_dir)
     system_repo_dir.mkdir(parents=True, exist_ok=True)
-    for rel_path in [Path("src"), Path("tests"), Path("pyproject.toml"), Path("uv.lock")]:
+    for rel_path in [
+        Path("src"),
+        Path("tests"),
+        Path("pyproject.toml"),
+        Path("uv.lock"),
+        Path("README.md"),
+    ]:
         source_path = source_repo_dir / rel_path
         target_path = system_repo_dir / rel_path
         if not source_path.exists():
@@ -366,12 +623,21 @@ def _target_program_text() -> str:
             "- `system/darjeeling/` is read-only Darjeeling core/evaluator code.",
             "- `data/train.jsonl` is visible training data.",
             "- `data/inner_validation.jsonl` is visible fast feedback data.",
+            "- `data/objective.json` defines gates and invalid strategies.",
+            "- `data/round_state.json` contains visible inner-validation history.",
+            "- `data/commands.md` lists local commands.",
             "- `tools/evaluate.py` trains/evaluates the target code in seconds.",
             "",
             "Optimize generalization from the visible train and inner-validation data.",
+            "Wrong accepts are worse than abstentions. A raw coverage increase is not",
+            "useful if frame exactness or wrong-accept safety gets worse.",
             "Promotion holdout is outside this workspace and only the outer harness can",
-            "read it. It is acceptable for `target/` to contain target-specific code;",
-            "do not move that code into core.",
+            "read it; do not try to access parent directories to inspect it.",
+            "",
+            "It is acceptable for `target/` to contain target-dependent code derived",
+            "from visible train and inner-validation data. Do not hardcode behavior",
+            "from MASSIVE or any external dataset knowledge that is not visible here.",
+            "Do not move target-specific code into core.",
         ]
     )
 
@@ -398,6 +664,10 @@ def _inspect_tool_text() -> str:
 
 ROOT = Path(__file__).resolve().parents[1]
 for path in sorted((ROOT / "data").iterdir()):
+    print(f"{path.name}: {path.stat().st_size} bytes")
+print("")
+print("Editable target files:")
+for path in sorted((ROOT / "target").iterdir()):
     print(f"{path.name}: {path.stat().st_size} bytes")
 """
 
