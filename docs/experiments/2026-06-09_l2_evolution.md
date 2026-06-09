@@ -704,3 +704,78 @@ Interpretation:
 - The next quality-bearing run should spend the larger inner-loop budget on
   `local-search` and/or GPT-5.5 target-code rounds, not on outer replay
   generations.
+
+## Local-search quality run and email-from postprocess
+
+A quality-bearing `local-search` run used the corrected 96-trial default:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-local-search-r3 \
+  --mode local-search \
+  --rounds 1 \
+  --max-traces 500 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Runtime: about 65 seconds.
+- Optuna completed 96/96 compact trials and applied trial 50.
+- Inner validation improved from 1/1/0 to 4/4/0 and passed gate.
+- Private selection passed: 1 accepted / 1 correct / 0 wrong.
+- Private promotion failed: 1 accepted / 0 correct / 1 wrong.
+- The promotion wrong was `do i have any emails from robert`, predicted as
+  `email_query` with no `person` slot.
+- A private diagnostic scan of all 96 unique trial configs found 48 configs that
+  passed private selection, but 0 that passed private promotion. This means the
+  compact config search space alone did not contain an adoptable candidate.
+
+The visible inner split contains a directly related teacher-visible example:
+`please check email from matrimony` -> `email_query(person=matrimony)`.
+Therefore the next dry-run patch tested a target-local `postprocess_frame`
+rule derived from visible target data: when the predicted intent is
+`email_query`, predicted slots are empty, and the utterance has
+`from <term>`, fill `person=<term>` except for a small non-person term list.
+
+Patch:
+
+```text
+docs/experiments/patches/l2_target_email_from_postprocess_r1.patch
+```
+
+Command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-email-from-postprocess-r2 \
+  --rounds 1 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_email_from_postprocess_r1.patch \
+  --max-traces 500 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Runtime: about 5 seconds.
+- Inner validation: 4 accepted / 4 correct / 0 wrong.
+- Private selection: 1 accepted / 1 correct / 0 wrong.
+- Private promotion: 1 accepted / 1 correct / 0 wrong.
+- `selection_decision.selected=true`.
+- `adoption_decision.adopted=true`.
+
+Interpretation:
+
+- This is the first target-evolution run in this sequence with an adoptable L2
+  target candidate.
+- The useful mechanism was not more threshold tuning. It was target-owned slot
+  postprocessing layered on top of a tuned config.
+- This supports the design split: Optuna/local-search should find conservative
+  operating points; L4 target-code evolution should add precise, visible-data
+  derived postprocess or abstain logic for frame exactness.
+- The result is still a 500-row target-loop proof, not a final system result.
+  The next step is to replay the adopted target behavior at 3k/10k scale or wire
+  target adoption into the artifact promotion path.
