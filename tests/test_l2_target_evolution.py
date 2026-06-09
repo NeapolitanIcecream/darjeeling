@@ -75,6 +75,9 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
             "selection_holdout": 1,
             "promotion_holdout": 2,
         },
+        "visible_validation_splits": ["inner_validation"],
+        "visible_validation_folds": 1,
+        "visible_validation_visibility": "agent_workspace_visible",
         "private_splits": ["selection_holdout", "promotion_holdout"],
         "private_split_visibility": "outer_harness_only",
     }
@@ -93,13 +96,13 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "target_specific_code_is_not_rejected_for_dataset_dependence": True,
         "target_code_visibility_rule": (
             "target code may be derived from data/train.jsonl and "
-            "data/inner_validation.jsonl only"
+            "visible data/inner_validation*.jsonl only"
         ),
         "private_holdout_visibility": (
             "selection/promotion holdouts remain outside the agent workspace"
         ),
         "adoption_authority": (
-            "visible inner gate, private selection/promotion gates, and final outer replay"
+            "visible validation gate, private selection/promotion gates, and final outer replay"
         ),
     }
     assert summary["adoption_decision"]["adopted"] is False
@@ -166,7 +169,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     objective = json.loads((workspace / "data" / "objective.json").read_text())
     program_text = (workspace / "program.md").read_text(encoding="utf-8")
     assert "candidate_selection_gate" in round_state
-    assert "visible inner validation gate" in round_state["candidate_selection_gate"]
+    assert "visible validation gate" in round_state["candidate_selection_gate"]
     assert "early_stop_policy" in round_state
     assert "does not stop the inner loop" in round_state["early_stop_policy"]
     assert "candidate_selection" in objective["gates"]
@@ -184,7 +187,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "near_miss_examples" in program_text
     assert "target_diagnostics.json" in program_text
     assert target_diagnostics["schema_version"] == "l2-target-diagnostics-v1"
-    assert target_diagnostics["visibility"] == "visible_inner_validation_only"
+    assert target_diagnostics["visibility"] == "visible_validation_only"
     assert target_diagnostics["baseline_inner_validation"]["split"] == "inner_validation"
     assert "families" in target_diagnostics["baseline_inner_validation"]
     assert (
@@ -230,6 +233,64 @@ def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
     for split_name in ["inner_validation", "selection_holdout", "promotion_holdout"]:
         intents = {trace.teacher_frame.intent for trace in split[split_name]}
         assert intents == {"alarm_set", "weather_query"}
+
+
+def test_l2_target_visible_validation_folds_stay_visible_not_private(
+    tmp_path: Path,
+) -> None:
+    traces = [
+        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        if index % 3 == 0
+        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        for index in range(30)
+    ]
+
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=1,
+            mode="dry-run",
+            visible_validation_folds=3,
+            inner_patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(traces),
+    )
+
+    workspace = tmp_path / "job" / "workspace" / "l2_target"
+    manifest = json.loads((workspace / "workspace_manifest.json").read_text())
+    round_state = json.loads((workspace / "data" / "round_state.json").read_text())
+    visible_metric = summary["rounds"][0]["inner_validation"]
+
+    assert summary["budget_policy"]["visible_validation_folds"] == 3
+    assert summary["data_split_policy"]["visible_validation_splits"] == [
+        "inner_validation",
+        "inner_validation_shadow_1",
+        "inner_validation_shadow_2",
+    ]
+    assert manifest["visible_validation_splits"] == [
+        "inner_validation",
+        "inner_validation_shadow_1",
+        "inner_validation_shadow_2",
+    ]
+    assert set(manifest["data_files"]) >= {
+        "inner_validation.jsonl",
+        "inner_validation_shadow_1.jsonl",
+        "inner_validation_shadow_2.jsonl",
+        "train.jsonl",
+    }
+    assert not (workspace / "data" / "selection_holdout.jsonl").exists()
+    assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
+    assert visible_metric["split"] == "visible_validation"
+    assert visible_metric["visible_validation_splits"] == [
+        "inner_validation",
+        "inner_validation_shadow_1",
+        "inner_validation_shadow_2",
+    ]
+    assert len(visible_metric["visible_validation_folds"]) == 3
+    assert "visible validation gate" in round_state["candidate_selection_gate"]
+    assert "selection_holdout" not in json.dumps(round_state)
+    assert "promotion_holdout" not in json.dumps(round_state)
 
 
 def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Path) -> None:
@@ -438,7 +499,7 @@ def test_l2_target_evolution_local_search_uses_visible_workspace_only(
     )
     assert report["trials_requested"] == 2
     assert report["private_holdout_visibility"] == (
-        "local search used only visible train and inner_validation data"
+        "local search used only visible train and validation-fold data"
     )
     assert "selection_holdout" not in report_path.read_text(encoding="utf-8")
     assert "promotion_holdout" not in report_path.read_text(encoding="utf-8")
@@ -635,7 +696,7 @@ def test_l2_target_evaluator_reports_guard_near_misses(tmp_path: Path) -> None:
     assert all("would_be_correct" in example for example in result["near_miss_examples"])
 
 
-def test_l2_target_selection_requires_visible_inner_gate() -> None:
+def test_l2_target_selection_requires_visible_validation_gate() -> None:
     round_result = {
         "round": 1,
         "inner_validation": {"passes_gate": False},

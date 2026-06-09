@@ -695,6 +695,16 @@ def l2_target_evolve(
         str,
         typer.Option(help="Target split policy: chronological or intent-stratified."),
     ] = "chronological",
+    visible_validation_folds: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help=(
+                "Number of agent-visible validation folds. Values above 1 create "
+                "inner_validation_shadow_* files and gate on their aggregate."
+            ),
+        ),
+    ] = 1,
     inner_patience_rounds: Annotated[
         int | None,
         typer.Option(
@@ -783,6 +793,7 @@ def l2_target_evolve(
             local_search_timeout_s=local_search_timeout_s,
             budget_profile=resolved_budget_profile,
             split_policy=resolved_split_policy,
+            visible_validation_folds=visible_validation_folds,
             max_agent_rounds=resolved_max_agent_rounds,
             sandbox=settings.l2_agent_sandbox,
             approval_policy=settings.l2_agent_approval_policy,

@@ -625,15 +625,15 @@ uv run edge-mvp l2 target-evolve \
 Result:
 
 - Runtime: about 4 seconds.
-- Patched inner validation: 6 accepted / 4 correct / 2 wrong, so visible inner
-  gate failed.
+- Patched inner validation: 6 accepted / 4 correct / 2 wrong, so the visible
+  validation gate failed.
 - Raw private selection holdout: 2 accepted / 2 correct / 0 wrong, with one
   vetoed risky email query.
 - Private promotion holdout: 0 accepted, with one vetoed risky email query.
 - The run therefore set `passes_private_selection_gate=true` but
   `passes_candidate_selection_gate=false`.
 - `selection_decision.selected=false`, because candidate selection now requires
-  both visible inner gate and private selection gate.
+  both visible validation and private selection gates.
 
 Design correction:
 
@@ -1084,7 +1084,7 @@ inner validation:
 
 - `family_diagnostics` is included in inner validation metrics.
 - `data/target_diagnostics.json` is written into the target workspace.
-- The workspace version is `visible_inner_validation_only`; private selection
+- The workspace version is `visible_validation_only`; private selection
   and promotion holdout diagnostics stay outside the agent workspace.
 - Each family records rejected-correct, vetoed-correct, accepted-wrong,
   intent-correct-slot-wrong, top predicted intents, and up to three examples per
@@ -1379,3 +1379,100 @@ Interpretation:
   staged only with `--allow-non-adopted` for outer replay diagnosis, or rerun on
   a larger target split. Promotion authority remains with promotion holdout plus
   outer e2e replay.
+
+## 3k target-patch ladder and visible validation gap
+
+The next 3k target-evolve ladder tested whether the 500-row promotion sparsity
+was only a small-split artifact. It used `--split-policy intent-stratified` and
+then applied only target-local patches derived from visible inner-validation
+wrong examples. Private selection/promotion wrong examples were inspected only
+after runs finished and were not used to write the next patch.
+
+Patch ladder:
+
+```text
+docs/experiments/patches/l2_target_weather_visible_inner_guard_delta_r1.patch
+docs/experiments/patches/l2_target_email_weather_visible_inner_guard_delta_r1.patch
+docs/experiments/patches/l2_target_email_audio_visible_inner_guard_delta_r1.patch
+```
+
+Results:
+
+| run | visible patch state | visible inner | private selection | private promotion | decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `runs/l2-target-intent-stratified-weather-3k-r1` | existing weather threshold/slot patches | 33 / 13 / 20 | 16 / 5 / 11 | 16 / 8 / 8 | rejected |
+| `runs/l2-target-intent-stratified-weather-3k-r2` | + weather visible-inner guard | 26 / 13 / 13 | 14 / 5 / 9 | 15 / 8 / 7 | rejected |
+| `runs/l2-target-intent-stratified-weather-3k-r3` | + email/weather visible-inner guard | 15 / 13 / 2 | 9 / 5 / 4 | 11 / 8 / 3 | rejected |
+| `runs/l2-target-intent-stratified-weather-3k-r4` | + email/audio visible-inner guard | 13 / 13 / 0 | 8 / 5 / 3 | 11 / 8 / 3 | rejected |
+
+Numbers are `accepted / correct / wrong` for the best relevant late round.
+
+Interpretation:
+
+- The old single visible inner split can be overfit by a sequence of
+  visible-example-derived guards. In r4, visible inner passed with 0 wrong
+  accepts, but private selection still observed 3 wrong accepts.
+- This does not mean private holdout should be shown to the agent. It means the
+  agent-visible validation surface was too thin.
+- The right design response is a stronger visible validation gate, not private
+  feedback leakage.
+
+## Visible validation folds
+
+The harness now supports `--visible-validation-folds N`.
+
+Design change:
+
+- `N=1` preserves the old `inner_validation.jsonl` behavior.
+- `N>1` creates additional agent-visible `inner_validation_shadow_*.jsonl`
+  files and evaluates the aggregate `visible_validation` metric.
+- `target_diagnostics.json`, `round_state.json`, `tools/evaluate.py`, and
+  `tools/search_config.py` use the visible validation aggregate when multiple
+  folds exist.
+- Private selection and promotion holdouts remain outside the workspace and are
+  still used only by the outer harness.
+
+3k rerun:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-visible-folds-weather-3k-r2 \
+  --budget-profile fixed-inner \
+  --rounds 7 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --visible-validation-folds 3 \
+  --dry-run-patch docs/experiments/patches/l2_target_email_audio_veto_r3.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_weather_threshold_delta_r1.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_weather_slot_guard_delta_r1.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_weather_visible_inner_guard_delta_r1.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_email_weather_visible_inner_guard_delta_r1.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_email_audio_visible_inner_guard_delta_r1.patch
+```
+
+Result:
+
+- Split: train 1504, visible validation folds 298 / 296 / 283, private
+  selection 315, private promotion 304.
+- Baseline visible aggregate: 12 accepted / 11 correct / 1 wrong, fail. The
+  primary `inner_validation` fold alone would have passed at 6 / 6 / 0; shadow
+  fold 1 exposed the wrong accept.
+- No target round passed the visible validation gate.
+- Best private-selection round was still unsafe: visible aggregate
+  31 / 14 / 17, private selection 9 / 1 / 8, private promotion 12 / 7 / 5.
+- Late rounds improved but remained unsafe: rounds 6/7 visible aggregate
+  19 / 13 / 6, private selection 4 / 1 / 3, private promotion 10 / 7 / 3.
+- `selection_gate_diagnosis=visible_validation_gate_failed`.
+- `target_diagnostics.visibility=visible_validation_only`.
+
+Interpretation:
+
+- The new visible validation gate catches the r4 failure mode before private
+  selection is needed. This fixes the validation-protocol issue exposed by the
+  single-inner ladder.
+- It does not solve L2 quality. The current target patches are still too narrow
+  and too accept-heavy under the larger visible validation pool.
+- Next L2 quality work should use the larger visible diagnostics to design
+  broader target abstain/postprocess logic or a better search space. Private
+  selection/promotion evidence must remain outer-summary-only.

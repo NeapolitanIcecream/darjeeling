@@ -1,0 +1,33 @@
+--- a/target/target_l2.py
++++ b/target/target_l2.py
+@@ -237,6 +237,10 @@ _EMAIL_PERSON_VALUE_RISK_TERMS = _EMAIL_QUERY_TERMS | {
+     "subject",
+ }
+ _EMAIL_EXTRA_SLOT_CUE_TERMS = {"address", "contact", "information", "subject"}
++_EMAIL_RELATION_PREFIX_TERMS = {
++    "my",
++    "our",
++}
+ 
+ 
+ def _tokens(utterance: str) -> list[str]:
+@@ -279,6 +283,8 @@ def _accept_email_query(utterance: str, slots: dict[str, Any]) -> bool:
+         return False
+     if person and len(person_tokens) > 3:
+         return False
++    if person_tokens & _EMAIL_RELATION_PREFIX_TERMS:
++        return False
+     if tokens & _EMAIL_EXTRA_SLOT_CUE_TERMS:
+         return False
+     return True
+@@ -287,7 +293,10 @@ def _accept_email_query(utterance: str, slots: dict[str, Any]) -> bool:
+ def _accept_audio_volume(utterance: str, intent: str, slots: dict[str, Any]) -> bool:
+     slot_names = set(slots)
+     if slot_names - {"change_amount"}:
+         return False
++    change_amount_tokens = set(_tokens(str(slots.get("change_amount", ""))))
++    if change_amount_tokens and change_amount_tokens <= _AUDIO_AMOUNT_STOP_TERMS:
++        return False
+     tokens = set(_tokens(utterance))
+     if intent == "audio_volume_up":
+         return bool(tokens & {"increase", "louder", "raise", "raised", "up"}) and not bool(

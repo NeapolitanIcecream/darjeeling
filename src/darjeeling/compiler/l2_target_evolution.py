@@ -48,6 +48,7 @@ class L2TargetEvolutionConfig:
     local_search_space: L2TargetSearchSpace = "compact"
     budget_profile: L2TargetBudgetProfile = "standard"
     split_policy: L2TargetSplitPolicy = "chronological"
+    visible_validation_folds: int = 1
     max_agent_rounds: int | None = None
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
@@ -71,6 +72,8 @@ def run_l2_target_evolution(
         raise ValueError("inner_patience_rounds must be non-negative")
     if config.local_search_trials < 1:
         raise ValueError("local_search_trials must be at least 1")
+    if config.visible_validation_folds < 1:
+        raise ValueError("visible_validation_folds must be at least 1")
     if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
         raise ValueError("max_agent_rounds must be non-negative")
     max_agent_rounds = _effective_max_agent_rounds(config)
@@ -86,7 +89,11 @@ def run_l2_target_evolution(
     transcript_dir.mkdir(parents=True, exist_ok=True)
     private_dir.mkdir(parents=True, exist_ok=True)
 
-    split = split_l2_target_traces(traces, policy=config.split_policy)
+    split = split_l2_target_traces(
+        traces,
+        policy=config.split_policy,
+        visible_validation_folds=config.visible_validation_folds,
+    )
     private_paths = {
         "selection_holdout": private_dir / "selection_holdout.jsonl",
         "promotion_holdout": private_dir / "promotion_holdout.jsonl",
@@ -353,6 +360,7 @@ def run_l2_target_evolution(
             "local_search_space": config.local_search_space,
             "max_agent_rounds": max_agent_rounds,
             "profile": config.budget_profile,
+            "visible_validation_folds": config.visible_validation_folds,
         },
         "agent_budget": _agent_budget_payload(
             config=config,
@@ -401,71 +409,139 @@ def split_l2_target_traces(
     traces: list[TeacherTrace],
     *,
     policy: L2TargetSplitPolicy = "chronological",
+    visible_validation_folds: int = 1,
 ) -> dict[str, list[TeacherTrace]]:
+    if visible_validation_folds < 1:
+        raise ValueError("visible_validation_folds must be at least 1")
     labeled = [trace for trace in traces if trace.teacher_frame is not None]
     if len(labeled) < 10:
         raise ValueError("target evolution requires at least 10 teacher-labeled traces")
     if policy == "intent-stratified":
-        return _split_l2_target_traces_by_intent(labeled)
+        return _split_l2_target_traces_by_intent(
+            labeled,
+            visible_validation_folds=visible_validation_folds,
+        )
     if policy != "chronological":
         raise ValueError(f"unsupported target split policy: {policy}")
-    return _split_l2_target_traces_chronological(labeled)
+    return _split_l2_target_traces_chronological(
+        labeled,
+        visible_validation_folds=visible_validation_folds,
+    )
 
 
 def _split_l2_target_traces_chronological(
     labeled: list[TeacherTrace],
+    *,
+    visible_validation_folds: int = 1,
 ) -> dict[str, list[TeacherTrace]]:
-    train_end = max(4, int(len(labeled) * 0.60))
-    inner_end = max(train_end + 1, int(len(labeled) * 0.80))
-    selection_end = max(inner_end + 1, int(len(labeled) * 0.90))
-    selection_end = min(selection_end, len(labeled) - 1)
-    inner_end = min(inner_end, selection_end - 1)
-    return {
-        "train": labeled[:train_end],
-        "inner_validation": labeled[train_end:inner_end],
-        "selection_holdout": labeled[inner_end:selection_end],
-        "promotion_holdout": labeled[selection_end:],
-    }
+    if visible_validation_folds == 1:
+        train_end = max(4, int(len(labeled) * 0.60))
+        inner_end = max(train_end + 1, int(len(labeled) * 0.80))
+        selection_end = max(inner_end + 1, int(len(labeled) * 0.90))
+        selection_end = min(selection_end, len(labeled) - 1)
+        inner_end = min(inner_end, selection_end - 1)
+        return {
+            "train": labeled[:train_end],
+            "inner_validation": labeled[train_end:inner_end],
+            "selection_holdout": labeled[inner_end:selection_end],
+            "promotion_holdout": labeled[selection_end:],
+        }
+
+    private_selection_count = max(1, int(len(labeled) * 0.10))
+    private_promotion_count = max(1, int(len(labeled) * 0.10))
+    visible_ratio = min(0.40, 0.20 + (0.05 * (visible_validation_folds - 1)))
+    visible_total = max(visible_validation_folds, int(len(labeled) * visible_ratio))
+    max_visible_total = len(labeled) - private_selection_count - private_promotion_count - 4
+    if max_visible_total < visible_validation_folds:
+        return _split_l2_target_traces_chronological(
+            labeled,
+            visible_validation_folds=1,
+        )
+    visible_total = min(visible_total, max_visible_total)
+    train_end = len(labeled) - visible_total - private_selection_count - private_promotion_count
+    visible_counts = _distribute_count(visible_total, visible_validation_folds)
+    split: dict[str, list[TeacherTrace]] = {"train": labeled[:train_end]}
+    cursor = train_end
+    for split_name, count in zip(
+        _visible_validation_split_names(visible_validation_folds),
+        visible_counts,
+        strict=True,
+    ):
+        split[split_name] = labeled[cursor : cursor + count]
+        cursor += count
+    selection_end = cursor + private_selection_count
+    split["selection_holdout"] = labeled[cursor:selection_end]
+    split["promotion_holdout"] = labeled[selection_end:]
+    return split
 
 
 def _split_l2_target_traces_by_intent(
     labeled: list[TeacherTrace],
+    *,
+    visible_validation_folds: int = 1,
 ) -> dict[str, list[TeacherTrace]]:
     split: dict[str, list[TeacherTrace]] = {
         "train": [],
-        "inner_validation": [],
-        "selection_holdout": [],
-        "promotion_holdout": [],
     }
+    for name in _visible_validation_split_names(visible_validation_folds):
+        split[name] = []
+    split["selection_holdout"] = []
+    split["promotion_holdout"] = []
     grouped: dict[str, list[TeacherTrace]] = {}
     for trace in labeled:
         intent = trace.teacher_frame.intent if trace.teacher_frame is not None else ""
         grouped.setdefault(intent, []).append(trace)
     for group in grouped.values():
-        counts = _intent_stratified_group_counts(len(group))
+        counts = _intent_stratified_group_counts(
+            len(group),
+            visible_validation_folds=visible_validation_folds,
+        )
         start = 0
         for split_name, count in zip(split, counts, strict=True):
             end = start + count
             split[split_name].extend(group[start:end])
             start = end
     private_or_validation_splits = [
-        "inner_validation",
+        *_visible_validation_split_names(visible_validation_folds),
         "selection_holdout",
         "promotion_holdout",
     ]
     if any(not split[name] for name in private_or_validation_splits):
-        return _split_l2_target_traces_chronological(labeled)
+        return _split_l2_target_traces_chronological(
+            labeled,
+            visible_validation_folds=visible_validation_folds,
+        )
     if len(split["train"]) < 4:
-        return _split_l2_target_traces_chronological(labeled)
+        return _split_l2_target_traces_chronological(
+            labeled,
+            visible_validation_folds=visible_validation_folds,
+        )
     return split
 
 
-def _intent_stratified_group_counts(size: int) -> tuple[int, int, int, int]:
-    if size < 4:
-        return (size, 0, 0, 0)
-    counts = [max(1, int(size * ratio)) for ratio in (0.60, 0.20, 0.10, 0.10)]
+def _intent_stratified_group_counts(
+    size: int,
+    *,
+    visible_validation_folds: int = 1,
+) -> tuple[int, ...]:
+    split_count = 1 + visible_validation_folds + 2
+    if size < split_count:
+        return (size, *([0] * (split_count - 1)))
+    train_ratio = 0.60 if visible_validation_folds == 1 else max(
+        0.40,
+        0.60 - (0.05 * (visible_validation_folds - 1)),
+    )
+    private_ratio = 0.10
+    visible_ratio = 1.0 - train_ratio - (2 * private_ratio)
+    ratios = [
+        train_ratio,
+        *([visible_ratio / visible_validation_folds] * visible_validation_folds),
+        private_ratio,
+        private_ratio,
+    ]
+    counts = [max(1, int(size * ratio)) for ratio in ratios]
     while sum(counts) > size:
-        for index in [0, 1, 2, 3]:
+        for index in range(len(counts)):
             if sum(counts) <= size:
                 break
             if counts[index] > 1:
@@ -473,22 +549,51 @@ def _intent_stratified_group_counts(size: int) -> tuple[int, int, int, int]:
     while sum(counts) < size:
         deficits = [
             (size * ratio) - count
-            for ratio, count in zip((0.60, 0.20, 0.10, 0.10), counts, strict=True)
+            for ratio, count in zip(ratios, counts, strict=True)
         ]
-        index = max(range(4), key=lambda item: deficits[item])
+        index = max(range(len(counts)), key=lambda item: deficits[item])
         counts[index] += 1
-    return (counts[0], counts[1], counts[2], counts[3])
+    return tuple(counts)
+
+
+def _distribute_count(total: int, buckets: int) -> list[int]:
+    base = total // buckets
+    remainder = total % buckets
+    return [base + (1 if index < remainder else 0) for index in range(buckets)]
+
+
+def _visible_validation_split_names(count: int) -> list[str]:
+    if count < 1:
+        raise ValueError("visible validation split count must be at least 1")
+    return [
+        "inner_validation",
+        *[f"inner_validation_shadow_{index}" for index in range(1, count)],
+    ]
+
+
+def _visible_validation_split_names_from_split(
+    split: dict[str, list[TeacherTrace]],
+) -> list[str]:
+    return [
+        key
+        for key in split
+        if key == "inner_validation" or key.startswith("inner_validation_shadow_")
+    ]
 
 
 def _target_split_policy_payload(
     policy: L2TargetSplitPolicy,
     split: dict[str, list[TeacherTrace]],
 ) -> dict[str, Any]:
+    visible_validation_splits = _visible_validation_split_names_from_split(split)
     return {
         "schema_version": "l2-target-split-policy-v1",
         "policy": policy,
         "group_key": "teacher_frame.intent" if policy == "intent-stratified" else None,
         "split_counts": {key: len(value) for key, value in split.items()},
+        "visible_validation_splits": visible_validation_splits,
+        "visible_validation_folds": len(visible_validation_splits),
+        "visible_validation_visibility": "agent_workspace_visible",
         "private_splits": ["selection_holdout", "promotion_holdout"],
         "private_split_visibility": "outer_harness_only",
     }
@@ -512,7 +617,8 @@ def prepare_l2_target_workspace(
         _target_l2_template(),
         encoding="utf-8",
     )
-    for name in ["train", "inner_validation"]:
+    visible_validation_splits = _visible_validation_split_names_from_split(split)
+    for name in ["train", *visible_validation_splits]:
         _write_jsonl(
             workspace_root / "data" / f"{name}.jsonl",
             [trace.model_dump(mode="json") for trace in split[name]],
@@ -537,6 +643,7 @@ def prepare_l2_target_workspace(
         "data_dir": "data",
         "tools_dir": "tools",
         "data_files": sorted(path.name for path in (workspace_root / "data").iterdir()),
+        "visible_validation_splits": visible_validation_splits,
         "private_data_files_not_in_workspace": [
             "selection_holdout.jsonl",
             "promotion_holdout.jsonl",
@@ -557,7 +664,7 @@ def prepare_l2_target_workspace(
 def evaluate_target_workspace(
     *,
     workspace_root: Path,
-    split: Literal["inner_validation", "selection_holdout", "promotion_holdout"],
+    split: str,
     holdout_path: Path | None = None,
     min_accepted_accuracy: float = 0.93,
     max_wrong_accept_rate: float = 0.05,
@@ -566,14 +673,88 @@ def evaluate_target_workspace(
     if split in {"selection_holdout", "promotion_holdout"}:
         if holdout_path is None:
             raise ValueError(f"{split} evaluation requires a private holdout_path")
-        validation_path = holdout_path
+        validation_sets = [(split, _read_teacher_jsonl(holdout_path))]
+    elif split == "visible_validation":
+        validation_sets = [
+            (path.stem, _read_teacher_jsonl(path))
+            for path in _visible_validation_paths(workspace_root)
+        ]
     else:
+        if not _is_visible_validation_split_name(split):
+            raise ValueError(f"unsupported target evaluation split: {split}")
         validation_path = workspace_root / "data" / f"{split}.jsonl"
-    validation_traces = _read_teacher_jsonl(validation_path)
+        validation_sets = [(split, _read_teacher_jsonl(validation_path))]
     target_module = load_target_module(workspace_root / "target" / "target_l2.py")
     overrides = target_config_overrides(target_module)
     config = L2StudentConfig(**overrides)
     bundle = train_l2_student(training_examples_from_teacher_traces(train_traces), config)
+    validation_traces = [
+        trace for _, traces_for_split in validation_sets for trace in traces_for_split
+    ]
+    payload = _evaluate_trained_target(
+        bundle=bundle,
+        target_module=target_module,
+        split=split,
+        train_size=len(train_traces),
+        validation_traces=validation_traces,
+        min_accepted_accuracy=min_accepted_accuracy,
+        max_wrong_accept_rate=max_wrong_accept_rate,
+    )
+    if split == "visible_validation":
+        fold_metrics = [
+            _evaluate_trained_target(
+                bundle=bundle,
+                target_module=target_module,
+                split=split_name,
+                train_size=len(train_traces),
+                validation_traces=split_traces,
+                min_accepted_accuracy=min_accepted_accuracy,
+                max_wrong_accept_rate=max_wrong_accept_rate,
+            )
+            for split_name, split_traces in validation_sets
+        ]
+        payload["visible_validation_splits"] = [name for name, _ in validation_sets]
+        payload["visible_validation_folds"] = [
+            _visible_metric_summary(metric) for metric in fold_metrics
+        ]
+    return payload
+
+
+def _visible_validation_paths(workspace_root: Path) -> list[Path]:
+    data_dir = workspace_root / "data"
+    paths = [
+        path
+        for path in data_dir.glob("inner_validation*.jsonl")
+        if _is_visible_validation_split_name(path.stem)
+    ]
+    return sorted(paths, key=lambda path: _visible_validation_sort_key(path.stem))
+
+
+def _visible_validation_sort_key(name: str) -> tuple[int, str]:
+    if name == "inner_validation":
+        return (0, name)
+    return (1, name)
+
+
+def _is_visible_validation_split_name(name: str) -> bool:
+    return name == "inner_validation" or name.startswith("inner_validation_shadow_")
+
+
+def _visible_gate_split(workspace_root: Path) -> str:
+    paths = _visible_validation_paths(workspace_root)
+    return "visible_validation" if len(paths) > 1 else "inner_validation"
+
+
+def _evaluate_trained_target(
+    *,
+    bundle: Any,
+    target_module: Any,
+    split: str,
+    train_size: int,
+    validation_traces: list[TeacherTrace],
+    min_accepted_accuracy: float,
+    max_wrong_accept_rate: float,
+) -> dict[str, Any]:
 
     accepted = 0
     correct = 0
@@ -664,7 +845,7 @@ def evaluate_target_workspace(
     )
     return {
         "split": split,
-        "train_size": len(train_traces),
+        "train_size": train_size,
         "validation_size": total,
         "accepted": accepted,
         "correct_accepts": correct,
@@ -693,9 +874,10 @@ def _evaluate_target_candidate(
     config: L2TargetEvolutionConfig,
     label: str,
 ) -> dict[str, Any]:
+    visible_gate_split = _visible_gate_split(workspace_root)
     inner_result = evaluate_target_workspace(
         workspace_root=workspace_root,
-        split="inner_validation",
+        split=visible_gate_split,
         min_accepted_accuracy=config.min_accepted_accuracy,
         max_wrong_accept_rate=config.max_wrong_accept_rate,
     )
@@ -904,7 +1086,7 @@ def _target_diagnostics_payload(
     )
     return {
         "schema_version": "l2-target-diagnostics-v1",
-        "visibility": "visible_inner_validation_only",
+        "visibility": "visible_validation_only",
         "state_kind": state_kind,
         "next_round": round_index,
         "round_history_window": "last_6",
@@ -952,6 +1134,7 @@ def _write_target_state_files(
             "local_search_timeout_s": config.local_search_timeout_s,
             "local_search_space": config.local_search_space,
             "max_agent_rounds": _effective_max_agent_rounds(config),
+            "visible_validation_folds": config.visible_validation_folds,
         },
         "agent_budget": _agent_budget_payload(
             config=config,
@@ -959,7 +1142,7 @@ def _write_target_state_files(
             agent_rounds_succeeded=agent_rounds_succeeded,
         ),
         "candidate_selection_gate": (
-            "visible inner validation gate and private selection holdout gate must both pass"
+            "visible validation gate and private selection holdout gate must both pass"
         ),
         "early_stop_policy": (
             "private selection is evaluated for outer candidate selection, but does not stop "
@@ -1051,24 +1234,25 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
             "min_accepted_accuracy": config.min_accepted_accuracy,
             "max_wrong_accept_rate": config.max_wrong_accept_rate,
             "candidate_selection": (
-                "visible inner validation gate AND private selection holdout gate"
+                "visible validation gate AND private selection holdout gate"
             ),
             "adoption": (
-                "visible inner validation gate AND private selection holdout gate "
+                "visible validation gate AND private selection holdout gate "
                 "AND private promotion holdout gate"
             ),
+            "visible_validation_folds": config.visible_validation_folds,
         },
         "workspace_scope": _workspace_scope_policy_payload(),
         "optimization_order": [
             "zero or lower wrong accepts",
-            "visible inner validation gate must pass before candidate selection",
+            "visible validation gate must pass before candidate selection",
             "accepted accuracy at or above gate",
             "coverage increase only after safety gates",
             "lower latency for equally safe behavior",
         ],
         "invalid_strategies": [
             "raw coverage increase with lower frame exactness",
-            "lowering threshold when visible inner validation gate fails",
+            "lowering threshold when visible validation gate fails",
             "treating private selection success alone as candidate success",
             "candidate code changes outside target/",
             "modifying data/, tools/, system/darjeeling/, or program.md",
@@ -1076,12 +1260,12 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
             "hardcoding MASSIVE-specific behavior from outside visible data",
         ],
         "allowed_strategies": [
-            "target-dependent code derived from visible train/inner validation files",
+            "target-dependent code derived from visible train and validation-fold files",
             "config_overrides for bounded L2StudentConfig parameters",
             "local Optuna/config search over visible train and inner validation only",
             "postprocess_frame fixes that preserve exact frame correctness",
             "accept_prediction veto logic that abstains when uncertain",
-            "near_miss_examples-driven mechanisms that still pass visible inner gate",
+            "near_miss_examples-driven mechanisms that still pass visible validation gate",
             "target-specific lexical or state-machine rules derived from visible target data",
         ],
     }
@@ -1094,13 +1278,13 @@ def _target_code_policy_payload() -> dict[str, Any]:
         "target_specific_code_is_not_rejected_for_dataset_dependence": True,
         "target_code_visibility_rule": (
             "target code may be derived from data/train.jsonl and "
-            "data/inner_validation.jsonl only"
+            "visible data/inner_validation*.jsonl only"
         ),
         "private_holdout_visibility": (
             "selection/promotion holdouts remain outside the agent workspace"
         ),
         "adoption_authority": (
-            "visible inner gate, private selection/promotion gates, and final outer replay"
+            "visible validation gate, private selection/promotion gates, and final outer replay"
         ),
     }
 
@@ -1196,12 +1380,12 @@ def _target_commands_text() -> str:
         [
             "# Commands",
             "",
-            "Evaluate the visible inner-validation split:",
+            "Evaluate all visible validation folds:",
             "",
             "```bash",
             "uv run --project system/darjeeling python tools/evaluate.py \\",
-            "  --split inner_validation \\",
-            "  --out runs/inner_validation.json",
+            "  --split visible_validation \\",
+            "  --out runs/visible_validation.json",
             "```",
             "",
             "If `uv` cannot use its dependency cache but a Python >=3.11 environment",
@@ -1209,10 +1393,11 @@ def _target_commands_text() -> str:
             "",
             "```bash",
             "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=system/darjeeling/src \\",
-            "  python tools/evaluate.py --split inner_validation --out runs/inner_validation.json",
+            "  python tools/evaluate.py --split visible_validation \\",
+            "  --out runs/visible_validation.json",
             "```",
             "",
-            "Run local Optuna config search on visible train/inner validation only:",
+            "Run local Optuna config search on visible train/validation folds only:",
             "",
             "```bash",
             "uv run --project system/darjeeling python tools/search_config.py \\",
@@ -1326,7 +1511,11 @@ def evaluate_target_workspace_cli(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
-    parser.add_argument("--split", choices=["inner_validation"], required=True)
+    parser.add_argument(
+        "--split",
+        choices=["inner_validation", "visible_validation"],
+        required=True,
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--min-accepted-accuracy", type=float, default=0.93)
     parser.add_argument("--max-wrong-accept-rate", type=float, default=0.05)
@@ -1352,7 +1541,7 @@ def run_local_target_search(
     min_accepted_accuracy: float = 0.93,
     max_wrong_accept_rate: float = 0.05,
 ) -> dict[str, Any]:
-    """Tune target-owned L2 config using only visible train/inner validation data."""
+    """Tune target-owned L2 config using only visible train/validation data."""
 
     if trials < 1:
         raise ValueError("trials must be at least 1")
@@ -1363,7 +1552,7 @@ def run_local_target_search(
     original_config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else None
     current_inner = evaluate_target_workspace(
         workspace_root=workspace_root,
-        split="inner_validation",
+        split=_visible_gate_split(workspace_root),
         min_accepted_accuracy=min_accepted_accuracy,
         max_wrong_accept_rate=max_wrong_accept_rate,
     )
@@ -1384,7 +1573,7 @@ def run_local_target_search(
         try:
             metric = evaluate_target_workspace(
                 workspace_root=workspace_root,
-                split="inner_validation",
+                split=_visible_gate_split(workspace_root),
                 min_accepted_accuracy=min_accepted_accuracy,
                 max_wrong_accept_rate=max_wrong_accept_rate,
             )
@@ -1454,11 +1643,11 @@ def run_local_target_search(
                     L2StudentConfig(**best_report["config"]),
                 )
                 applied = True
-                applied_reason = "best visible inner-validation config improved current target"
+                applied_reason = "best visible validation config improved current target"
             else:
                 _restore_target_config_json(config_path, original_config_text)
                 applied_reason = (
-                    "best visible inner-validation config did not improve current target"
+                    "best visible validation config did not improve current target"
                 )
         else:
             _restore_target_config_json(config_path, original_config_text)
@@ -1478,7 +1667,7 @@ def run_local_target_search(
             "applied": applied,
             "applied_reason": applied_reason,
             "private_holdout_visibility": (
-                "local search used only visible train and inner_validation data"
+                "local search used only visible train and validation-fold data"
             ),
             "trials": reports,
         }
@@ -1751,25 +1940,27 @@ def _target_program_text() -> str:
             "- `system/darjeeling/` is read-only Darjeeling core/evaluator code.",
             "- `data/train.jsonl` is visible training data.",
             "- `data/inner_validation.jsonl` is visible fast feedback data.",
+            "- `data/inner_validation_shadow_*.jsonl` are additional visible",
+            "  validation folds when present.",
             "- `data/objective.json` defines gates and invalid strategies.",
-            "- `data/round_state.json` contains visible inner-validation history.",
-            "- `data/target_diagnostics.json` summarizes visible inner-validation",
+            "- `data/round_state.json` contains visible validation history.",
+            "- `data/target_diagnostics.json` summarizes visible validation",
             "  opportunities and risks by teacher intent family.",
             "- `data/commands.md` lists local commands.",
             "- `tools/evaluate.py` trains/evaluates the target code in seconds.",
             "- `tools/search_config.py` runs visible-data Optuna config search.",
             "",
-            "Optimize generalization from the visible train and inner-validation data.",
+            "Optimize generalization from the visible train and validation-fold data.",
             "Wrong accepts are worse than abstentions. A raw coverage increase is not",
             "useful if frame exactness or wrong-accept safety gets worse.",
-            "A target round is selectable only if visible inner validation passes",
+            "A target round is selectable only if visible validation passes",
             "and the outer private selection holdout passes. Private selection",
-            "alone is not success if visible inner validation has wrong accepts.",
+            "alone is not success if visible validation has wrong accepts.",
             "Adoption also requires the private promotion holdout to pass.",
             "By default, private selection is an outer selection signal, not an",
             "inner-loop early-stop signal; keep improving target code until the",
-            "round budget or visible inner-validation patience is exhausted.",
-            "Use `near_miss_examples` from visible inner validation to find safe",
+            "round budget or visible validation patience is exhausted.",
+            "Use `near_miss_examples` from visible validation to find safe",
             "coverage opportunities, and use `wrong_examples` / `veto_examples`",
             "to tighten safety. Do not lower threshold globally unless the visible",
             "inner gate still passes.",
@@ -1782,7 +1973,7 @@ def _target_program_text() -> str:
             "directories to inspect them.",
             "",
             "It is acceptable for `target/` to contain target-dependent code derived",
-            "from visible train and inner-validation data. This is not a",
+            "from visible train and validation-fold data. This is not a",
             "Darjeeling-core dataset-independence violation. It becomes invalid only",
             "if it moves into core code, uses private holdout rows or aggregates, or",
             "uses MASSIVE/external dataset knowledge that is not visible here.",
@@ -2077,7 +2268,7 @@ def _selection_gate_diagnosis(rounds: list[dict[str, Any]]) -> str:
         if bool(round_result.get("inner_validation", {}).get("passes_gate"))
     ]
     if not inner_passing_rounds:
-        return "visible_inner_gate_failed"
+        return "visible_validation_gate_failed"
     if all(
         int(round_result.get("selection_holdout", {}).get("accepted") or 0) == 0
         for round_result in inner_passing_rounds
@@ -2114,8 +2305,8 @@ def _private_holdout_recommendation(rounds: list[dict[str, Any]]) -> str:
         )
     if diagnosis == "selection_wrong_accepts_for_inner_passing_rounds":
         return "fix wrong accepts before staging; do not trade frame exactness for coverage"
-    if diagnosis == "visible_inner_gate_failed":
-        return "continue visible inner-loop improvement before using private holdout evidence"
+    if diagnosis == "visible_validation_gate_failed":
+        return "continue visible validation improvement before using private holdout evidence"
     return "use adoption_decision and outer replay before promoting target artifacts"
 
 
@@ -2126,13 +2317,13 @@ def _selection_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
             "selected": False,
             "round": None,
             "reason": (
-                "no target round passed both visible inner and private selection gates"
+                "no target round passed both visible validation and private selection gates"
             ),
         }
     return {
         "selected": True,
         "round": best_selection["round"],
-        "reason": "target round passed both visible inner and private selection gates",
+        "reason": "target round passed both visible validation and private selection gates",
     }
 
 
@@ -2143,7 +2334,7 @@ def _adoption_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
             "adopted": False,
             "round": None,
             "reason": (
-                "no target round passed both visible inner and private selection gates"
+                "no target round passed both visible validation and private selection gates"
             ),
         }
     best_adoptable = _best_adoptable_round(rounds)

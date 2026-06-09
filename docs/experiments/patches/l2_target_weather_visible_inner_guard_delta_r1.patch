@@ -1,0 +1,84 @@
+--- a/target/target_l2.py
++++ b/target/target_l2.py
+@@ -68,5 +68,32 @@ _WEATHER_DESCRIPTOR_TERMS = {
+     "windy",
+ }
++_WEATHER_DESCRIPTOR_TERMS.update(
++    {
++        "boots",
++        "hot",
++        "sandals",
++        "sleeve",
++        "umbrella",
++        "warm",
++    },
++)
++_WEATHER_QUERY_CUE_TERMS = _WEATHER_DESCRIPTOR_TERMS | {
++    "forecast",
++    "outside",
++    "temperature",
++    "weather",
++}
++_WEATHER_SLOT_NOISE_PHRASES = {
++    "how is the",
++    "tell me the",
++    "what's the",
++    "with me",
++}
++_WEATHER_DESCRIPTOR_SUFFIX_TERMS = {
++    "boots",
++    "sleeve",
++    "umbrella",
++}
+ _WEATHER_DATE_VALUE_TERMS = {
+     "currently",
+     "friday",
+@@ -142,6 +167,17 @@ def _looks_like_weather_date(value: Any) -> bool:
+     )
+ 
+ 
++def _has_weather_query_cue(utterance: str) -> bool:
++    return bool(set(_tokens(utterance)) & _WEATHER_QUERY_CUE_TERMS)
++
++
++def _has_weather_slot_noise(value: Any) -> bool:
++    normalized = f" {str(value).strip().lower()} "
++    return any(
++        f" {phrase} " in normalized for phrase in _WEATHER_SLOT_NOISE_PHRASES
++    )
++
++
+ def _has_any(utterance: str, terms: set[str]) -> bool:
+     return bool(set(_tokens(utterance)) & terms)
+ 
+@@ -280,6 +316,8 @@ def _accept_weather_query(utterance: str, slots: dict[str, Any]) -> bool:
+         str(value).strip().lower() in _WEATHER_SLOT_NOISE_VALUES
+         for value in slots.values()
+     ):
++        return False
++    if any(_has_weather_slot_noise(value) for value in slots.values()):
+         return False
+     date_value = slots.get("date")
+     if date_value is not None and not _looks_like_weather_date(date_value):
+@@ -288,6 +326,21 @@ def _accept_weather_query(utterance: str, slots: dict[str, Any]) -> bool:
+     if place_value is not None and _looks_like_weather_date(place_value):
+         return False
+     if "." in utterance and "place_name" in slot_names:
++        return False
++    tokens = set(_tokens(utterance))
++    if not _has_weather_query_cue(utterance):
++        return False
++    if (
++        tokens & _WEATHER_DESCRIPTOR_TERMS
++        and "weather_descriptor" not in slot_names
++        and "weather" not in tokens
++    ):
++        return False
++    descriptor_value = str(slots.get("weather_descriptor", "")).lower()
++    if (
++        tokens & _WEATHER_DESCRIPTOR_SUFFIX_TERMS
++        and not (tokens & set(_tokens(descriptor_value)))
++    ):
+         return False
+     if " in " in normalized and "place_name" not in slot_names:
+         return False

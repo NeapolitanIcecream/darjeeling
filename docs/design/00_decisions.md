@@ -166,12 +166,13 @@ L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution loop。Darj
 - Inner L2 target loop 在固定 workspace 内运行，不等待新的 stream prefix，也不受 `compile_every` 限制。
 - `target/` 是唯一可写 target-dependent code 区域；`system/darjeeling/` 是只读 core/evaluator copy。
 - 每轮 mutating command 后、candidate evaluation 前必须做 workspace scope check：候选代码只能改 `target/`；`runs/` 只允许作为 scratch output；`data/`、`tools/`、`system/darjeeling/` 和 `program.md` 是 protected surface。越界写入直接停止该 target-evolve job，不能参与 selection 或 promotion。
-- `data/train.jsonl` 和 `data/inner_validation.jsonl` 可以给 agent 读；selection holdout 和 promotion holdout 存在 outer job 的私有目录，不进入 agent workspace。
-- Target split 默认保持 chronological；小样本或窄 target patch 诊断可以显式使用 `intent-stratified`，让 inner/selection/promotion 都覆盖更多 intent family。该策略只改变 fixed target split 的采样方式，不放宽 visible inner、private selection、private promotion 或 outer replay gates。
+- `data/train.jsonl`、`data/inner_validation.jsonl` 和可选的 `data/inner_validation_shadow_*.jsonl` 可以给 agent 读；selection holdout 和 promotion holdout 存在 outer job 的私有目录，不进入 agent workspace。
+- Target split 默认保持 chronological；小样本或窄 target patch 诊断可以显式使用 `intent-stratified`，让 visible validation、selection 和 promotion 都覆盖更多 intent family。该策略只改变 fixed target split 的采样方式，不放宽 visible validation、private selection、private promotion 或 outer replay gates。
+- `--visible-validation-folds N` 是 agent-visible validation pressure 开关。`N>1` 会创建额外可见 `inner_validation_shadow_*` folds 并用 aggregate visible validation gate 做 candidate selection；它不把 private holdout rows 或 aggregates 暴露给 L4 agent。
 - 调参不应占用 L4 coding-agent round。Inner loop 先在固定 target data 上通过 `local-search`/Optuna 做大量 cheap trials，搜索结果只写 `target/config.json`；L4 coding agent 主要负责修改 `target/` 中真正需要设计判断的代码、特征、后处理和 search space。
-- Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 visible inner、target holdout/promotion 指标和 outer replay 决定是否采用；不能仅因为它是 target-dependent 就拒绝。Darjeeling core 仍必须保持 dataset-independent。
-- Inner loop 必须先评估 baseline，再评估 target rounds；可见 round history 只包含 inner validation 聚合，不包含 selection/promotion holdout 聚合。
+- Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 visible validation、target holdout/promotion 指标和 outer replay 决定是否采用；不能仅因为它是 target-dependent 就拒绝。Darjeeling core 仍必须保持 dataset-independent。
+- Inner loop 必须先评估 baseline，再评估 target rounds；可见 round history 只包含 visible validation 聚合，不包含 selection/promotion holdout 聚合。
 - L4 agent budget 由 outer harness 控制：`rounds` 是最大 target round 数，不是数据收集次数；默认不会因为 private selection gate 通过而中止 inner loop，selection/promotion 只参与最终 candidate selection/adoption。真实固定 snapshot 探索使用 `fixed-inner` budget profile，其默认 live `codex-cli` cap 高于 smoke/standard；若做 smoke 或节省 live LLM cost，可使用 `smoke` profile、`--max-agent-rounds 0` 或显式打开 selection-gate early stop。
-- Candidate selection gate 要求 visible inner validation gate 和 private selection holdout gate 同时通过；private selection 不能掩盖 visible inner regression。
-- Inner validation improvement 不能直接触发采用；通过 candidate selection gate 的 target round 只表示可被选中，只有同时通过 private promotion holdout gate 才能进入 `adoption_decision.adopted=true`。
+- Candidate selection gate 要求 visible validation gate 和 private selection holdout gate 同时通过；private selection 不能掩盖 visible validation regression。
+- Visible validation improvement 不能直接触发采用；通过 candidate selection gate 的 target round 只表示可被选中，只有同时通过 private promotion holdout gate 才能进入 `adoption_decision.adopted=true`。
 - 旧的 `L2_AGENT_MODE=codex-cli` patch harness 只能作为 legacy core-patch artifact 生成路径，不是 L2 evolve 主线。
