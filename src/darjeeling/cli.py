@@ -1289,6 +1289,7 @@ def _replay_l2_target_manifest(
             if max_wrong_accept_rate is not None
             else settings.l2_max_wrong_accept_rate
         ),
+        block_layer_regressions=settings.promotion_block_layer_regressions,
     )
     return {
         "schema_version": "l2-target-outer-replay-v1",
@@ -1311,6 +1312,7 @@ def _replay_l2_target_manifest(
                 else settings.l2_max_wrong_accept_rate
             ),
             "include_default_l1": include_default_l1,
+            "block_layer_regressions": settings.promotion_block_layer_regressions,
         },
         "baseline": _offline_replay_payload(baseline_result),
         "candidate": _offline_replay_payload(candidate_result),

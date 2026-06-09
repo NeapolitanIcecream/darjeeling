@@ -188,6 +188,10 @@ class Settings(BaseSettings):
     l2_max_wrong_accept_rate: float = 0.05
     l2_min_runtime_examples: int = Field(default=30, validation_alias="L2_MIN_RUNTIME_EXAMPLES")
     promotion_accuracy_epsilon: float = 0.02
+    promotion_block_layer_regressions: bool = Field(
+        default=True,
+        validation_alias="PROMOTION_BLOCK_LAYER_REGRESSIONS",
+    )
     force_promote_artifacts: bool = Field(
         default=False,
         validation_alias="FORCE_PROMOTE_ARTIFACTS",

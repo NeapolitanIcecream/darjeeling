@@ -60,6 +60,8 @@ runs/<id>/artifacts/
 }
 ```
 
+`candidate_metrics["promotion_block_layer_regressions"]` 记录该 generation 是否启用默认 per-layer regression gate。启用时，显著单层 regression 会拒绝整组 promotion，`promotion_reason` 写 `per-layer regression gate failed: ...`，`regressed_layers` 仍保留被阻塞的层用于诊断。
+
 ## Atomic promotion
 
 1. 写入 generation 目录。

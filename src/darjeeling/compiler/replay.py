@@ -316,6 +316,7 @@ def decide_artifact_set_promotion(
     per_layer_deltas: dict[str, LayerDelta],
     accuracy_epsilon: float = 0.02,
     max_wrong_accept_rate: float = 0.05,
+    block_layer_regressions: bool = True,
 ) -> PromotionDecision:
     decision = decide_promotion(
         current,
@@ -324,13 +325,18 @@ def decide_artifact_set_promotion(
         max_wrong_accept_rate=max_wrong_accept_rate,
     )
     regressed_layers = detect_layer_regressions(per_layer_deltas)
+    promoted = decision.promoted
+    reason = decision.reason
+    if decision.promoted and block_layer_regressions and regressed_layers:
+        promoted = False
+        reason = f"per-layer regression gate failed: {', '.join(sorted(regressed_layers))}"
     return PromotionDecision(
-        promoted=decision.promoted,
-        reason=decision.reason,
+        promoted=promoted,
+        reason=reason,
         current_score=decision.current_score,
         candidate_score=decision.candidate_score,
         per_layer_deltas=per_layer_deltas,
-        promoted_with_layer_regression=decision.promoted and bool(regressed_layers),
+        promoted_with_layer_regression=promoted and bool(regressed_layers),
         regressed_layers=regressed_layers,
     )
 

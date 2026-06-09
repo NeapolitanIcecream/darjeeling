@@ -55,6 +55,7 @@ def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Pa
     }
     assert manifest.candidate_metrics["hard_buffer_agent_context_size"] == 1
     assert manifest.candidate_metrics["promotion_eval_hard_buffer_size"] == 2
+    assert manifest.candidate_metrics["promotion_block_layer_regressions"] is True
     promotion_payload = json.loads(promotion_path.read_text(encoding="utf-8"))
     assert promotion_payload["promoted"] is True
     assert promotion_payload["promotion_reason"] == "objective improved within gates"

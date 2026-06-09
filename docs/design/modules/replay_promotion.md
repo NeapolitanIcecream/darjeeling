@@ -64,7 +64,7 @@ candidate replay covers teacher_promotion_holdout + hard_buffer + teacher_regres
 - L1 coding-agent 只可见 `train_visible` hard cases；promotion replay 在存在独立 replay coverage 时会把 `train_visible + replay_only` hard buffer 并入 evaluation traces。
 - evaluator 对 current artifact set 与 candidate artifact set 运行 `L0 -> L1 -> L2 -> teacher fallback`。
 - correctness 以 `teacher_frame` 为准，不读取 MASSIVE gold。
-- objective、wrong accept gate、accuracy epsilon 和 per-layer delta 都会进入 promotion decision。
+- objective、wrong accept gate、accuracy epsilon 和 per-layer regression gate 都会进入 promotion decision。
 - rejected candidate 写 generation manifest，但不更新 `manifest.current.json`。
 - L3 prompt candidate 已有显式 regenerated replay/promotion 路径：`edge-mvp l3 replay-prompt` 生成 `l3-prompt-replay-v1`，`edge-mvp l3 promote-prompt` 校验 prompt hash、accepted accuracy、wrong accept rate 和非空 coverage gate 后创建新的 promoted generation。
 
@@ -87,7 +87,7 @@ candidate replay covers teacher_promotion_holdout + hard_buffer + teacher_regres
 
 ## 单层 regression 记录
 
-整组 promotion 的已知问题是可能掩盖单层 regression。MVP 不在 promotion 逻辑中彻底解决这个问题，但必须观测它。
+整组 promotion 的已知问题是可能掩盖单层 regression。当前主线先采用最小 per-layer hard gate：仍以 artifact set 为 promotion 单位，但如果某个弱层出现显著 accepted accuracy 下降、wrong accept 上升或 p95 latency 上升，默认拒绝整组 promotion。`PROMOTION_BLOCK_LAYER_REGRESSIONS=false` 只用于诊断或 ablation。
 
 每次 promotion decision 必须输出 per-layer delta：
 
@@ -98,7 +98,14 @@ candidate replay covers teacher_promotion_holdout + hard_buffer + teacher_regres
 - cost delta
 - layer share delta
 
-若某层显著 regression 但整组被提升，report 标记：
+若某层显著 regression 且 gate 开启，promotion reason 必须标记：
+
+```text
+promotion_reason = "per-layer regression gate failed: L1, L2"
+regressed_layers = [...]
+```
+
+若某层显著 regression 但整组仍被提升，说明这是显式诊断路径，report 标记：
 
 ```text
 promoted_with_layer_regression = true
@@ -107,9 +114,8 @@ regressed_layers = [...]
 
 ## 遗留问题
 
-后续可能引入：
+后续仍可能引入：
 
-- per-layer hard gates
 - shadow promotion
 - layer quarantine
 - per-layer rollback

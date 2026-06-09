@@ -675,6 +675,7 @@ def run_compiler_generation(
             per_layer_deltas=per_layer_deltas,
             accuracy_epsilon=settings.promotion_accuracy_epsilon,
             max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
+            block_layer_regressions=settings.promotion_block_layer_regressions,
         )
         decision_reason = decision.reason
         promoted = decision.promoted
@@ -704,6 +705,7 @@ def run_compiler_generation(
             "candidate_layer_counts": candidate_replay.layer_counts
             if candidate_replay is not None
             else None,
+            "promotion_block_layer_regressions": settings.promotion_block_layer_regressions,
         }
     )
 
