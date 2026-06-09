@@ -1733,3 +1733,57 @@ Interpretation:
 - Next direction should be structural: a target-local slot-risk policy or
   postprocess/veto mechanism driven by slot support and intent-specific slot
   schemas, rather than another list of literal phrases.
+
+## Slot-support policy veto
+
+The next patch moved from literal phrases toward a target-local slot-support
+policy:
+
+```text
+docs/experiments/patches/l2_target_slot_support_policy_v3.patch
+```
+
+It adds two structural checks:
+
+- for selected slot-bearing intents, veto when predicted slot values are not
+  supported by tokens in the utterance, with light canonicalization such as
+  `tweets/twitter -> tweet`;
+- for selected slotless intents, veto when visible train-audit slot cue tokens
+  are present but the prediction has no slots.
+
+Validation command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-slot-support-policy-3k-r1 \
+  --budget-profile fixed-inner \
+  --rounds 3 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --dry-run-patch docs/experiments/patches/l2_target_visible_safety_backlog_veto_r1.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_train_audit_slot_risk_veto_r2.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_slot_support_policy_v3.patch
+```
+
+Result:
+
+- Round 3 kept visible validation passing: 18 / 18 / 0.
+- Train audit improved from round 2's 153 / 142 / 11 to 136 / 133 / 3.
+- Promotion improved from 10 / 7 / 3 to 9 / 7 / 2.
+- Private selection did not improve: 10 / 6 / 4, still failed.
+- The run remained non-adopted; `best_round` stayed round 2 because round 3
+  reduced private selection correct accepts without reducing selection wrong
+  accepts.
+
+Interpretation:
+
+- Slot-support veto is directionally better than phrase-only veto for visible
+  train audit, but it still does not generalize enough to private selection.
+- The main design gap is now validation coverage, not just target-code
+  expressiveness: visible validation can be cleared while private selection
+  still finds wrong accepts.
+- The next design step should add a stronger visible-only evaluation protocol,
+  such as cross-audit folds over train+visible data, before asking L4 to design
+  more target rules. This keeps private holdout private while exposing more
+  selection-like safety pressure to the agent.
