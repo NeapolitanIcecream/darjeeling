@@ -74,7 +74,7 @@ mod tests {
     fn accepts_alarm_program() {
         let result = try_answer(&Request {
             request_id: "r1".to_string(),
-            utterance: "Set an alarm for seven tomorrow morning".to_string(),
+            utterance: "Set an alarm for seven".to_string(),
         });
 
         assert!(result.accepted);

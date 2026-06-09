@@ -27,6 +27,27 @@ def test_rust_l1_worker_answers_alarm_request(l1_binary: Path) -> None:
     assert response.program_path
 
 
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "weather in leisure city",
+        "what will the weather be on friday",
+        "show me what alarm times i've set for the week",
+        "please set an alarm at seven am tomorrow morning",
+        "please set a reminder alarm for three p. m. on saturday",
+    ],
+)
+def test_rust_l1_worker_abstains_when_rule_would_need_unsupported_slots(
+    l1_binary: Path,
+    utterance: str,
+) -> None:
+    with RustL1Worker(l1_binary) as worker:
+        response = worker.answer(utterance, request_id="r-risk")
+
+    assert not response.accepted
+    assert response.frame is None
+
+
 def test_rust_l1_layer_abstains_on_unknown_request(l1_binary: Path) -> None:
     with RustL1Worker(l1_binary) as worker:
         layer = RustProgramBankLayer(worker)
