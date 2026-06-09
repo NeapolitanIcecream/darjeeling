@@ -1220,3 +1220,50 @@ Interpretation:
   This remains a design issue for inner-loop model selection. A future version
   should consider larger or stratified target selection holdouts, while keeping
   promotion authority with outer e2e replay.
+
+## L4 agent budget no-launch smoke
+
+The next implementation issue was L4 agent cost control. `fixed-inner` makes
+many target rounds useful for local-search, but the same `rounds` value should
+not accidentally become dozens of GPT-5.5 `codex-cli` jobs. The loop now has an
+independent `max_agent_rounds` budget for live `codex-cli` rounds.
+
+Default live agent caps:
+
+- `standard`: 3 `codex-cli` rounds.
+- `fixed-inner`: 6 `codex-cli` rounds.
+- `smoke`: 1 `codex-cli` round.
+- `local-search`: does not consume LLM budget and is not capped by this field.
+
+No-launch smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-agent-budget-smoke-r1 \
+  --mode codex-cli \
+  --rounds 2 \
+  --max-agent-rounds 0 \
+  --max-traces 100
+```
+
+Result:
+
+- Mode: `codex-cli`.
+- Requested rounds: 2.
+- Completed target rounds: 0.
+- Stop reason: `agent_round_budget_exhausted`.
+- `commands.jsonl` size: 0 bytes, confirming no Codex command was launched.
+- `summary.json` and `data/round_state.json` both record
+  `agent_budget.schema_version=l2-target-agent-budget-v1`,
+  `codex_model=gpt-5.5`, `timeout_s=7200.0`,
+  `max_agent_rounds=0`, and `local_search_consumes_llm=false`.
+
+Interpretation:
+
+- The inner target loop can still run many cheap Optuna/local-search rounds on a
+  fixed trace snapshot.
+- Live L4 agent calls now require an explicit budget surface and are auditable
+  in both target-evolve summaries and promoted manifests.
+- This does not solve how many GPT rounds are optimal; it prevents accidental
+  spend and gives future experiments a stable stop policy to compare.

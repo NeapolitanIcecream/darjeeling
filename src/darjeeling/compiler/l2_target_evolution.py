@@ -45,6 +45,7 @@ class L2TargetEvolutionConfig:
     local_search_timeout_s: float | None = None
     local_search_space: L2TargetSearchSpace = "compact"
     budget_profile: L2TargetBudgetProfile = "standard"
+    max_agent_rounds: int | None = None
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
     ignore_user_config: bool = True
@@ -67,6 +68,9 @@ def run_l2_target_evolution(
         raise ValueError("inner_patience_rounds must be non-negative")
     if config.local_search_trials < 1:
         raise ValueError("local_search_trials must be at least 1")
+    if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
+        raise ValueError("max_agent_rounds must be non-negative")
+    max_agent_rounds = _effective_max_agent_rounds(config)
     job_dir = config.job_dir
     workspace_root = job_dir / "workspace" / "l2_target"
     rounds_dir = job_dir / "rounds"
@@ -111,6 +115,8 @@ def run_l2_target_evolution(
     best_inner = baseline["inner_validation"]
     no_inner_improvement_rounds = 0
     stop_reason = "round_budget_exhausted"
+    agent_rounds_started = 0
+    agent_rounds_succeeded = 0
     if (
         config.stop_on_selection_gate
         and baseline["inner_validation"]["passes_gate"]
@@ -129,6 +135,8 @@ def run_l2_target_evolution(
             baseline=baseline,
             round_results=round_results,
             no_inner_improvement_rounds=no_inner_improvement_rounds,
+            agent_rounds_started=agent_rounds_started,
+            agent_rounds_succeeded=agent_rounds_succeeded,
         )
         if config.mode == "dry-run":
             local_search_report: dict[str, Any] | None = None
@@ -178,8 +186,15 @@ def run_l2_target_evolution(
                 stop_reason = "local_search_failed"
                 break
         else:
+            if (
+                max_agent_rounds is not None
+                and agent_rounds_started >= max_agent_rounds
+            ):
+                stop_reason = "agent_round_budget_exhausted"
+                break
             transcript_path = transcript_dir / f"round_{round_index:03d}.jsonl"
             report_path = rounds_dir / f"round_{round_index:03d}_agent_report.md"
+            agent_rounds_started += 1
             command_results.append(
                 _run_codex_round(
                     config=config,
@@ -192,6 +207,7 @@ def run_l2_target_evolution(
             if command_results[-1]["return_code"] != 0:
                 stop_reason = "agent_command_failed"
                 break
+            agent_rounds_succeeded += 1
             local_search_report = None
 
         candidate = _evaluate_target_candidate(
@@ -272,6 +288,8 @@ def run_l2_target_evolution(
         baseline=baseline,
         round_results=round_results,
         no_inner_improvement_rounds=no_inner_improvement_rounds,
+        agent_rounds_started=agent_rounds_started,
+        agent_rounds_succeeded=agent_rounds_succeeded,
     )
 
     summary = {
@@ -287,8 +305,14 @@ def run_l2_target_evolution(
             "local_search_trials": config.local_search_trials,
             "local_search_timeout_s": config.local_search_timeout_s,
             "local_search_space": config.local_search_space,
+            "max_agent_rounds": max_agent_rounds,
             "profile": config.budget_profile,
         },
+        "agent_budget": _agent_budget_payload(
+            config=config,
+            agent_rounds_started=agent_rounds_started,
+            agent_rounds_succeeded=agent_rounds_succeeded,
+        ),
         "loop_cadence": {
             "kind": "fixed_trace_snapshot_inner_loop",
             "outer_replay_cadence_bound": False,
@@ -781,6 +805,8 @@ def _write_target_state_files(
     baseline: dict[str, Any],
     round_results: list[dict[str, Any]],
     no_inner_improvement_rounds: int,
+    agent_rounds_started: int,
+    agent_rounds_succeeded: int,
 ) -> None:
     data_dir = workspace_root / "data"
     objective = _target_objective_payload(config)
@@ -796,7 +822,13 @@ def _write_target_state_files(
             "local_search_trials": config.local_search_trials,
             "local_search_timeout_s": config.local_search_timeout_s,
             "local_search_space": config.local_search_space,
+            "max_agent_rounds": _effective_max_agent_rounds(config),
         },
+        "agent_budget": _agent_budget_payload(
+            config=config,
+            agent_rounds_started=agent_rounds_started,
+            agent_rounds_succeeded=agent_rounds_succeeded,
+        ),
         "candidate_selection_gate": (
             "visible inner validation gate and private selection holdout gate must both pass"
         ),
@@ -835,10 +867,57 @@ def _write_target_state_files(
     (data_dir / "commands.md").write_text(_target_commands_text(), encoding="utf-8")
 
 
+def _agent_budget_payload(
+    *,
+    config: L2TargetEvolutionConfig,
+    agent_rounds_started: int,
+    agent_rounds_succeeded: int,
+) -> dict[str, Any]:
+    max_rounds = _effective_max_agent_rounds(config)
+    remaining = None if max_rounds is None else max(0, max_rounds - agent_rounds_started)
+    return {
+        "schema_version": "l2-target-agent-budget-v1",
+        "applies_to_mode": config.mode == "codex-cli",
+        "mode": config.mode,
+        "codex_command": config.codex_command if config.mode == "codex-cli" else None,
+        "codex_model": config.codex_model if config.mode == "codex-cli" else None,
+        "timeout_s": config.timeout_s if config.mode == "codex-cli" else None,
+        "max_agent_rounds": max_rounds,
+        "agent_rounds_started": agent_rounds_started,
+        "agent_rounds_succeeded": agent_rounds_succeeded,
+        "agent_rounds_remaining": remaining,
+        "local_search_consumes_llm": False,
+        "prompt_strategy": (
+            "stable short stdin prompt; dynamic target context stays in workspace files"
+        ),
+        "cost_policy": (
+            "codex-cli rounds consume live GPT budget; local-search rounds are cheap "
+            "deterministic/Optuna work and do not count against this budget"
+        ),
+    }
+
+
+def _effective_max_agent_rounds(config: L2TargetEvolutionConfig) -> int | None:
+    if config.mode != "codex-cli":
+        return config.max_agent_rounds
+    if config.max_agent_rounds is not None:
+        return config.max_agent_rounds
+    if config.budget_profile == "standard":
+        return 3
+    if config.budget_profile == "fixed-inner":
+        return 6
+    return 1
+
+
 def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]:
     return {
         "schema_version": "l2-target-objective-v1",
         "primary_objective": "increase safe L2 accepts on unseen target traffic",
+        "agent_budget": _agent_budget_payload(
+            config=config,
+            agent_rounds_started=0,
+            agent_rounds_succeeded=0,
+        ),
         "gates": {
             "min_accepted_accuracy": config.min_accepted_accuracy,
             "max_wrong_accept_rate": config.max_wrong_accept_rate,

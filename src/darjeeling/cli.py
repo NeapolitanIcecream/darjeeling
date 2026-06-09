@@ -722,6 +722,16 @@ def l2_target_evolve(
         float | None,
         typer.Option(min=0.1, help="Optional Optuna timeout per local-search target round."),
     ] = None,
+    max_agent_rounds: Annotated[
+        int | None,
+        typer.Option(
+            min=0,
+            help=(
+                "Maximum live codex-cli agent rounds. Defaults are profile-specific; "
+                "0 prepares/evaluates the workspace without launching Codex."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run an inner target-dependent L2 evolution loop over fixed trace splits."""
 
@@ -741,6 +751,11 @@ def l2_target_evolve(
             local_search_trials=local_search_trials,
         )
     )
+    resolved_max_agent_rounds = _resolve_l2_target_agent_rounds(
+        mode=evolution_mode,
+        budget_profile=resolved_budget_profile,
+        max_agent_rounds=max_agent_rounds,
+    )
     settings = _load_cli_settings()
     trace_records = read_traces(traces)
     if max_traces is not None:
@@ -759,6 +774,7 @@ def l2_target_evolve(
             local_search_space=local_search_space,  # type: ignore[arg-type]
             local_search_timeout_s=local_search_timeout_s,
             budget_profile=resolved_budget_profile,
+            max_agent_rounds=resolved_max_agent_rounds,
             sandbox=settings.l2_agent_sandbox,
             approval_policy=settings.l2_agent_approval_policy,
             ignore_user_config=settings.l2_agent_ignore_user_config,
@@ -806,6 +822,23 @@ def _resolve_l2_target_budget(
             else default_local_search_trials
         ),
     )
+
+
+def _resolve_l2_target_agent_rounds(
+    *,
+    mode: L2TargetEvolutionMode,
+    budget_profile: L2TargetBudgetProfile,
+    max_agent_rounds: int | None,
+) -> int | None:
+    if mode != "codex-cli":
+        return max_agent_rounds
+    if max_agent_rounds is not None:
+        return max_agent_rounds
+    if budget_profile == "standard":
+        return 3
+    if budget_profile == "fixed-inner":
+        return 6
+    return 1
 
 
 @l2_app.command("promote-target")
@@ -946,6 +979,7 @@ def _promote_l2_target_run(
             "l2_target_mode": summary.get("mode"),
             "l2_target_data_split": summary.get("data_split"),
             "l2_target_loop_cadence": summary.get("loop_cadence"),
+            "l2_target_agent_budget": summary.get("agent_budget"),
             "l2_target_code_policy": summary.get("target_code_policy"),
             "l2_target_selection_decision": summary.get("selection_decision"),
             "l2_target_adoption_decision": adoption_decision,

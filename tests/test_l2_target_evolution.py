@@ -5,7 +5,11 @@ from typer.testing import CliRunner
 
 import darjeeling.compiler.l2_target_evolution as l2_target_evolution
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.cli import _resolve_l2_target_budget, app
+from darjeeling.cli import (
+    _resolve_l2_target_agent_rounds,
+    _resolve_l2_target_budget,
+    app,
+)
 from darjeeling.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
     _adoption_decision,
@@ -171,7 +175,11 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         summary["baseline"]["inner_validation"]["family_diagnostics"]["schema_version"]
         == "l2-target-family-diagnostics-v1"
     )
+    assert summary["agent_budget"]["mode"] == "dry-run"
+    assert summary["agent_budget"]["applies_to_mode"] is False
+    assert summary["agent_budget"]["local_search_consumes_llm"] is False
     assert "family_diagnostics" in round_state["baseline_inner_validation"]
+    assert round_state["agent_budget"]["mode"] == "dry-run"
     assert "not a" in program_text
     assert "Darjeeling-core dataset-independence violation" in program_text
 
@@ -317,6 +325,10 @@ def test_l2_target_evolution_local_search_uses_visible_workspace_only(
     report = json.loads(report_path.read_text(encoding="utf-8"))
 
     assert summary["mode"] == "local-search"
+    assert summary["agent_budget"]["mode"] == "local-search"
+    assert summary["agent_budget"]["applies_to_mode"] is False
+    assert summary["agent_budget"]["local_search_consumes_llm"] is False
+    assert summary["agent_budget"]["agent_rounds_started"] == 0
     assert summary["rounds_completed"] == 1
     assert summary["rounds"][0]["local_search"]["schema_version"] == (
         "l2-target-local-search-v1"
@@ -330,6 +342,41 @@ def test_l2_target_evolution_local_search_uses_visible_workspace_only(
     assert (workspace / "tools" / "search_config.py").exists()
     assert not (workspace / "data" / "selection_holdout.jsonl").exists()
     assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
+
+
+def test_l2_target_evolution_respects_zero_agent_round_budget(tmp_path: Path) -> None:
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=3,
+            mode="codex-cli",
+            max_agent_rounds=0,
+            inner_patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    commands_path = tmp_path / "job" / "commands.jsonl"
+    round_state = json.loads(
+        (
+            tmp_path / "job" / "workspace" / "l2_target" / "data" / "round_state.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert summary["mode"] == "codex-cli"
+    assert summary["rounds_requested"] == 3
+    assert summary["rounds_completed"] == 0
+    assert summary["stop_reason"] == "agent_round_budget_exhausted"
+    assert summary["budget_policy"]["max_agent_rounds"] == 0
+    assert summary["agent_budget"]["applies_to_mode"] is True
+    assert summary["agent_budget"]["max_agent_rounds"] == 0
+    assert summary["agent_budget"]["agent_rounds_started"] == 0
+    assert summary["agent_budget"]["agent_rounds_remaining"] == 0
+    assert commands_path.read_text(encoding="utf-8") == ""
+    assert round_state["state_kind"] == "final"
+    assert round_state["agent_budget"]["max_agent_rounds"] == 0
+    assert round_state["agent_budget"]["agent_rounds_remaining"] == 0
 
 
 def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> None:
@@ -351,6 +398,39 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
         inner_patience_rounds=2,
         local_search_trials=5,
     ) == (3, 2, 5)
+    assert _resolve_l2_target_agent_rounds(
+        mode="codex-cli",
+        budget_profile="standard",
+        max_agent_rounds=None,
+    ) == 3
+    assert _resolve_l2_target_agent_rounds(
+        mode="codex-cli",
+        budget_profile="fixed-inner",
+        max_agent_rounds=None,
+    ) == 6
+    assert _resolve_l2_target_agent_rounds(
+        mode="codex-cli",
+        budget_profile="smoke",
+        max_agent_rounds=None,
+    ) == 1
+    assert _resolve_l2_target_agent_rounds(
+        mode="codex-cli",
+        budget_profile="fixed-inner",
+        max_agent_rounds=0,
+    ) == 0
+    assert _resolve_l2_target_agent_rounds(
+        mode="local-search",
+        budget_profile="fixed-inner",
+        max_agent_rounds=None,
+    ) is None
+    assert l2_target_evolution._effective_max_agent_rounds(  # noqa: SLF001
+        L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=Path("unused"),
+            mode="codex-cli",
+            budget_profile="fixed-inner",
+        )
+    ) == 6
 
 
 def test_l2_target_accept_hook_can_veto_guard_accepts(tmp_path: Path) -> None:
@@ -532,7 +612,41 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert summary["budget_policy"]["inner_patience_rounds"] == 0
     assert summary["budget_policy"]["local_search_trials"] == 256
     assert summary["budget_policy"]["stop_on_selection_gate"] is False
+    assert summary["budget_policy"]["max_agent_rounds"] is None
     assert summary["data_split"]["train"] > 0
+
+
+def test_l2_target_evolve_cli_allows_zero_agent_round_budget(tmp_path: Path) -> None:
+    traces_path = tmp_path / "traces.jsonl"
+    traces_path.write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in _traces()),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "target-evolve",
+            "--traces",
+            str(traces_path),
+            "--out-dir",
+            str(tmp_path / "target-run"),
+            "--mode",
+            "codex-cli",
+            "--rounds",
+            "2",
+            "--max-agent-rounds",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
+    assert summary["stop_reason"] == "agent_round_budget_exhausted"
+    assert summary["rounds_completed"] == 0
+    assert summary["agent_budget"]["max_agent_rounds"] == 0
+    assert summary["agent_budget"]["agent_rounds_started"] == 0
 
 
 def test_l2_target_evolve_cli_accepts_local_search_mode(tmp_path: Path) -> None:
