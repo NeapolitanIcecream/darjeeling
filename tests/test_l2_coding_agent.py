@@ -82,10 +82,19 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     assert result.report_path.exists()
     assert result.provenance_path.exists()
     assert "test_l2_agent_marker.py" in result.diff_path.read_text(encoding="utf-8")
+    prompt_text = result.prompt_path.read_text(encoding="utf-8")
+    workspace_context_dir = result.workspace_repo_dir / "agent_contexts"
+    assert "Workspace context directory" in prompt_text
+    assert str(workspace_context_dir.resolve()) in prompt_text
+    assert (workspace_context_dir / "l2_context_families.json").exists()
     context_families = json.loads(
         (result.context_dir / "l2_context_families.json").read_text(encoding="utf-8")
     )
+    workspace_context_families = json.loads(
+        (workspace_context_dir / "l2_context_families.json").read_text(encoding="utf-8")
+    )
     assert context_families["schema_version"] == "l2-context-families-v1"
+    assert workspace_context_families == context_families
     assert context_families["families"][0]["family_id"] == "alarm_set|time"
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l2-agent-provenance-v1"

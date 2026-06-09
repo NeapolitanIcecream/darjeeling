@@ -123,8 +123,14 @@ def run_l2_coding_agent_job(
         current_metrics=current_metrics,
         objective=objective,
     )
+    workspace_context_dir = workspace_repo_dir / "agent_contexts"
+    _copy_context_files(context_dir, workspace_context_dir)
     prompt_path.write_text(
-        _build_l2_agent_prompt(context_dir=context_dir, workspace_repo_dir=workspace_repo_dir),
+        _build_l2_agent_prompt(
+            context_dir=context_dir,
+            workspace_context_dir=workspace_context_dir,
+            workspace_repo_dir=workspace_repo_dir,
+        ),
         encoding="utf-8",
     )
 
@@ -245,7 +251,12 @@ def _write_context_files(
             path.write_text(str(payload), encoding="utf-8")
 
 
-def _build_l2_agent_prompt(*, context_dir: Path, workspace_repo_dir: Path) -> str:
+def _build_l2_agent_prompt(
+    *,
+    context_dir: Path,
+    workspace_context_dir: Path,
+    workspace_repo_dir: Path,
+) -> str:
     return "\n".join(
         [
             "# Darjeeling L2 Python student evolution job",
@@ -263,8 +274,9 @@ def _build_l2_agent_prompt(*, context_dir: Path, workspace_repo_dir: Path) -> st
             "This job produces an auditable patch. The compiler records it but does not",
             "hot-load Python code into the current process.",
             "",
-            f"Workspace repo: `{workspace_repo_dir}`",
-            f"Context directory: `{context_dir}`",
+            f"Workspace repo: `{workspace_repo_dir.resolve()}`",
+            f"Workspace context directory: `{workspace_context_dir.resolve()}`",
+            f"Artifact context directory: `{context_dir.resolve()}`",
             "",
             "Required final response:",
             "- Summarize files changed.",
@@ -695,6 +707,12 @@ def _copy_l2_workspace(source_repo_dir: Path, workspace_repo_dir: Path) -> None:
         else:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, target_path)
+
+
+def _copy_context_files(context_dir: Path, workspace_context_dir: Path) -> None:
+    if workspace_context_dir.exists():
+        shutil.rmtree(workspace_context_dir)
+    shutil.copytree(context_dir, workspace_context_dir)
 
 
 def _l2_workspace_diff(source_repo_dir: Path, workspace_repo_dir: Path) -> str:
