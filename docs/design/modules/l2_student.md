@@ -72,6 +72,7 @@ guard 并写入 trace metadata：
 - predicted `(intent, slot-name signature)` 的 frame exact accuracy。
 - predicted `(intent, slot-name signature)` 的 support。
 - retrieval nearest similarity、similarity margin、retrieval intent 是否匹配 student intent、frame source flag。
+- utterance length bucket。
 
 这不是直接 hardcode 某个 intent 可以接收，而是让 learned guard 能把 L2 收缩到历史上可靠的子域。最终是否接收仍由 deterministic threshold search 和外层 promotion replay 决定。
 
@@ -128,7 +129,7 @@ Guard features：
 - retrieval intent matches student intent（已实现）
 - retrieval frame-source flag（已实现）
 - slot alignment failure signals
-- utterance length bucket
+- utterance length bucket（已实现）
 
 Runtime accept：
 
