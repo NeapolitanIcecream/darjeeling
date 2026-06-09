@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     )
     proposal_max_tokens: int = Field(default=1024, validation_alias="PROPOSAL_MAX_TOKENS")
     prompt_cache_retention: str = Field(
-        default="in_memory",
+        default="24h",
         validation_alias="PROMPT_CACHE_RETENTION",
     )
     local_slm_model: str = Field(

@@ -94,6 +94,8 @@ Context/prompt cache：
 - prompt cache key policy
 - context retention/logging policy
 
+当前 GPT 5.5 provider 要求 `PROMPT_CACHE_RETENTION=24h`；`in_memory` 会导致 live teacher/proposal API 返回 invalid parameter。Cached-only replay 不受该设置影响。
+
 ## 设计约束
 
 `settings.py` 不创建 OpenAI client，不加载 local SLM，不启动 Codex CLI，不访问 dataset。它只负责 config normalization 和 validation。

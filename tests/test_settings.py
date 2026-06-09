@@ -50,6 +50,12 @@ def test_load_settings_uses_default_settings_yaml_from_cwd(
     assert settings.l2_guard_mode == "always_accept"
 
 
+def test_default_prompt_cache_retention_matches_live_provider_requirement() -> None:
+    settings = load_settings()
+
+    assert settings.prompt_cache_retention == "24h"
+
+
 def test_load_settings_fails_for_explicit_missing_file(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="settings file not found"):
         load_settings(tmp_path / "missing.yaml")
