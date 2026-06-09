@@ -13,6 +13,7 @@ from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import normalize
 
@@ -35,10 +36,14 @@ class L2StudentConfig(BaseModel):
     runtime_enabled: bool = True
     random_state: int = 17
     min_examples: int = 4
+    intent_model_family: str = "sgd_logreg"
     word_ngram_range: tuple[int, int] = (1, 2)
     char_ngram_range: tuple[int, int] = (3, 5)
     max_features: int = 50_000
     max_iter: int = 1000
+    mlp_hidden_layer_sizes: tuple[int, ...] = (64,)
+    mlp_alpha: float = 0.0001
+    mlp_early_stopping: bool = False
     slot_model_family: str = "token_sgd"
 
 
@@ -288,6 +293,7 @@ class L2StudentLayer:
                     "intent_support_margin": prediction.intent_support_margin,
                     "accept_threshold": self.bundle.config.accept_threshold,
                     "runtime_enabled": runtime_enabled,
+                    "intent_model": self.bundle.config.intent_model_family,
                     "slot_model": "token_sgd" if self.bundle.slot_tagger else "none",
                 },
             )
@@ -389,12 +395,7 @@ def train_intent_pipeline(
             ),
             (
                 "intent",
-                SGDClassifier(
-                    loss="log_loss",
-                    random_state=config.random_state,
-                    max_iter=config.max_iter,
-                    tol=1e-3,
-                ),
+                _intent_classifier(config),
             ),
         ]
     )
@@ -403,6 +404,35 @@ def train_intent_pipeline(
         [example.teacher_frame.intent for example in examples],
     )
     return intent_pipeline
+
+
+def _intent_classifier(config: L2StudentConfig) -> SGDClassifier | MLPClassifier:
+    if config.intent_model_family == "sgd_logreg":
+        return SGDClassifier(
+            loss="log_loss",
+            random_state=config.random_state,
+            max_iter=config.max_iter,
+            tol=1e-3,
+        )
+    if config.intent_model_family == "mlp":
+        hidden_layer_sizes = _mlp_hidden_layer_sizes(config.mlp_hidden_layer_sizes)
+        return MLPClassifier(
+            hidden_layer_sizes=hidden_layer_sizes,
+            alpha=config.mlp_alpha,
+            early_stopping=config.mlp_early_stopping,
+            random_state=config.random_state,
+            max_iter=config.max_iter,
+            tol=1e-3,
+        )
+    raise ValueError(f"unsupported L2 intent_model_family: {config.intent_model_family}")
+
+
+def _mlp_hidden_layer_sizes(value: tuple[int, ...]) -> tuple[int, ...]:
+    if not value:
+        raise ValueError("mlp_hidden_layer_sizes must not be empty")
+    if any(layer_size <= 0 for layer_size in value):
+        raise ValueError("mlp_hidden_layer_sizes must contain positive integers")
+    return tuple(value)
 
 
 def train_guard(

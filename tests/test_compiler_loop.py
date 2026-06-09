@@ -269,6 +269,25 @@ def test_compiler_generation_respects_no_guard_ablation(tmp_path: Path) -> None:
     assert metrics["l2_guard_search"]["mode"] == "always_accept"
 
 
+def test_compiler_generation_uses_l2_mlp_settings(tmp_path: Path) -> None:
+    settings = load_settings()
+    settings.l2_intent_model_family = "mlp"
+    settings.l2_mlp_hidden_layer_sizes = (8,)
+    settings.l2_max_iter = 300
+
+    result = run_compiler_generation(
+        run_dir=tmp_path,
+        traces=_two_intent_traces(),
+        settings=settings,
+    )
+
+    assert result.manifest is not None
+    config_payload = result.manifest.candidate_metrics["l2_config"]
+    assert config_payload["intent_model_family"] == "mlp"
+    assert config_payload["mlp_hidden_layer_sizes"] == [8]
+    assert config_payload["max_iter"] == 300
+
+
 def test_compiler_generation_force_promote_records_original_reason(tmp_path: Path) -> None:
     settings = load_settings()
     settings.force_promote_artifacts = True

@@ -64,3 +64,40 @@ def test_experiment_suite_builds_parallel_subprocess_plan(
     assert first_command[:3] == [first_command[0], "-m", "darjeeling.cli"]
     assert "main-evolution" in first_command
     assert str(tmp_path / "main-evolution") in first_command
+
+
+def test_l2_mlp_experiment_command_dispatches_spec(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_run_single_experiment(experiment_name, **kwargs):
+        captured["experiment_name"] = experiment_name
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(cli, "_run_single_experiment", fake_run_single_experiment)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "experiment",
+            "l2-mlp",
+            "--run-dir",
+            str(tmp_path),
+            "--max-requests",
+            "12",
+            "--compile-every",
+            "6",
+            "--teacher",
+            "cache",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["experiment_name"] == "l2-mlp"
+    assert captured["kwargs"]["run_dir"] == tmp_path
+    assert captured["kwargs"]["max_requests"] == 12
+    assert captured["kwargs"]["compile_every"] == 6
+    assert captured["kwargs"]["teacher"] == "cache"

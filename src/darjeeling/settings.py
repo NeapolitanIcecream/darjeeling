@@ -99,6 +99,25 @@ class Settings(BaseSettings):
         default="learned",
         validation_alias="L2_GUARD_MODE",
     )
+    l2_intent_model_family: Literal["sgd_logreg", "mlp"] = Field(
+        default="sgd_logreg",
+        validation_alias="L2_INTENT_MODEL_FAMILY",
+    )
+    l2_slot_model_family: Literal["token_sgd", "none"] = Field(
+        default="token_sgd",
+        validation_alias="L2_SLOT_MODEL_FAMILY",
+    )
+    l2_max_features: int = Field(default=50_000, validation_alias="L2_MAX_FEATURES")
+    l2_max_iter: int = Field(default=1000, validation_alias="L2_MAX_ITER")
+    l2_mlp_hidden_layer_sizes: tuple[int, ...] = Field(
+        default=(64,),
+        validation_alias="L2_MLP_HIDDEN_LAYER_SIZES",
+    )
+    l2_mlp_alpha: float = Field(default=0.0001, validation_alias="L2_MLP_ALPHA")
+    l2_mlp_early_stopping: bool = Field(
+        default=False,
+        validation_alias="L2_MLP_EARLY_STOPPING",
+    )
     l2_min_guarded_accuracy: float = 0.93
     l2_max_wrong_accept_rate: float = 0.05
     l2_min_runtime_examples: int = Field(default=30, validation_alias="L2_MIN_RUNTIME_EXAMPLES")

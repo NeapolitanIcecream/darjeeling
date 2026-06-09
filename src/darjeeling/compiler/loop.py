@@ -16,7 +16,11 @@ from darjeeling.compiler.guard_optimizer import (
 )
 from darjeeling.compiler.l0_compile import exact_cache_from_teacher_traces
 from darjeeling.compiler.l1_program_compiler import L1CodingAgentError, L4CodingAgentAdapter
-from darjeeling.compiler.l2_distiller import L2_CONFIG_PROPOSAL_SCHEMA, l2_config_from_proposal
+from darjeeling.compiler.l2_distiller import (
+    L2_CONFIG_PROPOSAL_SCHEMA,
+    l2_config_from_proposal,
+    l2_config_from_settings,
+)
 from darjeeling.compiler.l3_prompt_optimizer import (
     L3_PROMPT_PROPOSAL_SCHEMA,
     l3_prompt_artifact_from_proposal,
@@ -46,7 +50,6 @@ from darjeeling.layers.l1_rust_programbank import (
     build_l1_binary,
 )
 from darjeeling.layers.l2_student import (
-    L2StudentConfig,
     train_l2_student,
     training_examples_from_teacher_traces,
 )
@@ -178,7 +181,7 @@ def run_compiler_generation(
     candidate_metrics["l2_enabled"] = settings.l2_enabled
     candidate_metrics["l2_guard_mode"] = settings.l2_guard_mode
     candidate_metrics["l4_proposal_mode"] = settings.l4_proposal_mode
-    l2_config = L2StudentConfig()
+    l2_config = l2_config_from_settings(settings)
     guard_search_spec = GuardSearchSpec(
         max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
     )
@@ -249,6 +252,7 @@ def run_compiler_generation(
             candidate_metrics["guard_search_spec"] = asdict(guard_search_spec)
             generated_artifacts = True
     if settings.l2_enabled:
+        candidate_metrics["l2_config"] = l2_config.model_dump(mode="json")
         try:
             l2_bundle = train_l2_student(l2_examples, l2_config)
         except ValueError as exc:

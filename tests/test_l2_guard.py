@@ -183,6 +183,10 @@ def test_l2_config_from_proposal_accepts_only_bounded_fields() -> None:
     config = l2_config_from_proposal(
         {
             "slot_model_family": "none",
+            "intent_model_family": "mlp",
+            "mlp_hidden_layer_sizes": [32, 16],
+            "mlp_alpha": 0.001,
+            "mlp_early_stopping": True,
             "word_ngram_range": [1, 3],
             "char_ngram_range": [2, 4],
             "max_features": 1000,
@@ -191,12 +195,20 @@ def test_l2_config_from_proposal_accepts_only_bounded_fields() -> None:
     )
 
     assert config.slot_model_family == "none"
+    assert config.intent_model_family == "mlp"
+    assert config.mlp_hidden_layer_sizes == (32, 16)
+    assert config.mlp_alpha == 0.001
+    assert config.mlp_early_stopping is True
     assert config.word_ngram_range == (1, 3)
     assert config.char_ngram_range == (2, 4)
     assert config.max_features == 1000
 
     with pytest.raises(ValueError):
         l2_config_from_proposal({"slot_model_family": "unsupported"})
+    with pytest.raises(ValueError):
+        l2_config_from_proposal(
+            {"slot_model_family": "token_sgd", "mlp_hidden_layer_sizes": [0]}
+        )
 
 
 def test_guard_search_spec_from_proposal_bounds_grid_and_wrong_accept_rate() -> None:

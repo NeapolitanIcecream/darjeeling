@@ -22,13 +22,18 @@ def test_experiment_settings_apply_l2_ablations() -> None:
 
     no_guard = apply_experiment_settings(settings, experiment_spec("no-guard"))
     no_l2 = apply_experiment_settings(settings, experiment_spec("no-l2"))
+    l2_mlp = apply_experiment_settings(settings, experiment_spec("l2-mlp"))
 
     assert no_guard.l2_guard_mode == "always_accept"
     assert no_guard.l2_max_wrong_accept_rate == 1.0
     assert no_guard.promotion_accuracy_epsilon == 1.0
     assert no_guard.force_promote_artifacts is True
     assert no_l2.l2_enabled is False
+    assert l2_mlp.l2_intent_model_family == "mlp"
+    assert l2_mlp.l2_mlp_hidden_layer_sizes == (64,)
+    assert l2_mlp.l2_max_iter == 300
     assert settings.l2_guard_mode == "learned"
+    assert settings.l2_intent_model_family == "sgd_logreg"
     assert settings.l2_max_wrong_accept_rate < 1.0
     assert settings.force_promote_artifacts is False
     assert settings.l2_enabled is True

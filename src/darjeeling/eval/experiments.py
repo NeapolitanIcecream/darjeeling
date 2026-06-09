@@ -32,6 +32,15 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         settings_overrides={"l4_proposal_mode": "live"},
         description="Run L2 candidate config proposal path and replay-selected guard.",
     ),
+    "l2-mlp": ExperimentSpec(
+        name="l2-mlp",
+        settings_overrides={
+            "l2_intent_model_family": "mlp",
+            "l2_mlp_hidden_layer_sizes": (64,),
+            "l2_max_iter": 300,
+        },
+        description="Run the deterministic MLP intent-family L2 candidate.",
+    ),
     "no-guard": ExperimentSpec(
         name="no-guard",
         settings_overrides={

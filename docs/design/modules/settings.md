@@ -74,6 +74,13 @@ Replay/promotion：
 - `HARD_BUFFER_MAX_CASES`
 - `L2_ENABLED`
 - `L2_GUARD_MODE`: `learned | always_accept`
+- `L2_INTENT_MODEL_FAMILY`: `sgd_logreg | mlp`
+- `L2_SLOT_MODEL_FAMILY`: `token_sgd | none`
+- `L2_MAX_FEATURES`
+- `L2_MAX_ITER`
+- `L2_MLP_HIDDEN_LAYER_SIZES`
+- `L2_MLP_ALPHA`
+- `L2_MLP_EARLY_STOPPING`
 - `L2_MIN_RUNTIME_EXAMPLES`
 - objective weights
 - wrong accept limits

@@ -65,6 +65,26 @@ def test_l2_student_trains_from_teacher_frames_and_predicts_intent() -> None:
     assert [name for name, _transformer in feature_union.transformer_list] == ["word", "char"]
 
 
+def test_l2_student_trains_mlp_intent_family_and_reports_it() -> None:
+    bundle = train_l2_student(
+        _examples(),
+        L2StudentConfig(
+            accept_threshold=0.0,
+            min_examples=4,
+            intent_model_family="mlp",
+            max_iter=300,
+            mlp_hidden_layer_sizes=(8,),
+        ),
+    )
+    layer = L2StudentLayer(bundle)
+
+    result = layer.try_answer("play music")
+
+    assert result.accepted
+    assert result.metadata["intent_model"] == "mlp"
+    assert result.metadata["predicted_frame"]["intent"] == "music_play"
+
+
 def test_token_slot_tagger_learns_teacher_slot_spans() -> None:
     tagger = train_slot_tagger(
         _examples(),

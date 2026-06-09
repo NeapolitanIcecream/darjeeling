@@ -39,7 +39,7 @@ Decision tree 只允许在 L2，不允许在 L1。
 
 第一版 `token_sgd` 的设计目标是让 L2 的吸收评估从 intent-only 推进到 frame-level：slot 训练标签来自 teacher frame 中 slot string 在 utterance token 序列里的精确连续对齐，预测时用 BIO tag 重构 slot span，并把 slot 平均概率与 invalid BIO flag 输入 guard。
 
-当前 runtime intent classifier 使用 word + char n-gram TF-IDF 特征；`word_ngram_range` 与 `char_ngram_range` 都是实际训练参数。Guard 校准仍使用 train/guard split，但最终 runtime intent classifier 与 slot tagger 会在全部 teacher-visible examples 上重训，以减少小窗口下的数据浪费。
+当前 runtime intent classifier 使用 word + char n-gram TF-IDF 特征；`word_ngram_range` 与 `char_ngram_range` 都是实际训练参数。Intent family 当前已实现 `sgd_logreg` 和 `mlp` 两种：`sgd_logreg` 使用 `SGDClassifier(loss="log_loss")`，`mlp` 使用 sklearn `MLPClassifier`，隐藏层、alpha、early stopping 和 max iter 由 bounded config 控制。Guard 校准仍使用 train/guard split，但最终 runtime intent classifier 与 slot tagger 会在全部 teacher-visible examples 上重训，以减少小窗口下的数据浪费。
 
 L2 artifact 同时保存 intent prototype index：用同一套 TF-IDF feature space 存储 teacher-visible utterance prototype 及其 teacher intent。Runtime 预测时计算：
 
@@ -119,5 +119,14 @@ L4 对 L2 使用 direct model API，输出 bounded config JSON。L4 不生成训
 
 - `L4_PROPOSAL_MODE=disabled` 为默认值，不调用 L4 proposal。
 - `L4_PROPOSAL_MODE=live` 时，compiler 请求 L2 config proposal。
-- Proposal 只允许影响白名单字段：`slot_model_family`、`min_examples`、`max_features`、`max_iter`、`word_ngram_range`、`char_ngram_range`。
+- Proposal 只允许影响白名单字段：`intent_model_family`、`slot_model_family`、`min_examples`、`max_features`、`max_iter`、`mlp_hidden_layer_sizes`、`mlp_alpha`、`mlp_early_stopping`、`word_ngram_range`、`char_ngram_range`。
 - Proposal 不直接决定 accept threshold；threshold 仍由 deterministic grid search 选择。
+
+## MLP evolve path
+
+MLP 不是替换默认 L2 的硬编码选择，而是一个可复现实验 family：
+
+- `L2_INTENT_MODEL_FAMILY=mlp` 可以直接启用 deterministic MLP candidate。
+- `edge-mvp experiment l2-mlp` 固定开启 MLP intent family，用于与 baseline 同场 replay。
+- `L4_PROPOSAL_MODE=live` 时，L4 可以在 bounded config 中提议 `intent_model_family=mlp` 及相关参数，但 compiler 仍只用 deterministic trainer 和 replay gate 决定是否 promotion。
+- `candidate_metrics["l2_config"]` 记录最终训练配置，避免实验结果只留下自然语言描述。
