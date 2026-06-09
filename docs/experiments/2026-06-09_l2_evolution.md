@@ -253,6 +253,63 @@ Conclusion:
   experiment should run a real `codex-cli` target evolution job or apply a
   target-only patch that can beat the baseline under the same gates.
 
+## Target-evolution profile intent correction
+
+A later design review clarified that the earlier "three L2 evolve rounds"
+observation was a budget-profile artifact, not an architectural limit:
+
+- `target-evolve` already creates one fixed target split at job start and reuses
+  it across rounds; it is not waiting for another outer replay prefix.
+- `standard` `codex-cli` runs default to three live agent launches as a cost
+  cap. That cap is not evidence that L2 training/evaluation is slow or that the
+  target loop should stop after three attempts.
+- Formal L2 quality experiments should use `--budget-profile fixed-inner` or
+  explicitly override `--max-agent-rounds`, while keeping private selection and
+  promotion holdouts outside the agent workspace.
+- Target-dependent lexical, postprocess, state-machine, or feature code is
+  allowed inside `workspace/l2_target/target/` when derived from visible target
+  data. Dataset-independence is a Darjeeling-core invariant, not a reason to
+  reject target workspace code by itself.
+
+The implementation now writes this distinction into `budget_policy.profile_intent`
+in `summary.json`, `data/round_state.json`, and `data/objective.json`. Future
+reports should treat `profile_role=cost_capped_default` or
+`profile_role=connectivity_smoke` as wiring/cost-control evidence only; L2
+evolve quality claims require `profile_role=fixed_snapshot_research` or an
+explicitly documented override.
+
+Validation smoke:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-profile-intent-smoke-r2 \
+  --mode local-search \
+  --budget-profile fixed-inner \
+  --rounds 2 \
+  --local-search-trials 2 \
+  --max-traces 120 \
+  --split-policy intent-stratified \
+  --visible-validation-folds 3 \
+  --visible-cross-audit-folds 2 \
+  --local-search-cross-audit-top-k 1
+```
+
+Result:
+
+- Completed 2 fixed-snapshot local-search rounds in about 8 seconds.
+- Split: train 95, visible validation 15 across 3 folds, private selection 5,
+  private promotion 5.
+- `summary.json`, `data/round_state.json`, and `data/objective.json` all record
+  `profile_role=fixed_snapshot_research`, `outer_replay_cadence_bound=false`,
+  and `local_search_consumes_llm=false`.
+- The tiny 2-trial local search did not apply a candidate and did not pass
+  selection/adoption. This is expected for the bounded schema smoke and is not a
+  L2 quality claim.
+- `python3 tools/inspect_context.py` ran inside the target workspace without
+  project dependencies and listed only visible data files plus `target_l2.py`;
+  private holdout files stayed outside `workspace/l2_target/data/`.
+
 ## Target-evolution Codex smoke
 
 A one-round live Codex target-evolution job was run with GPT-5.5:

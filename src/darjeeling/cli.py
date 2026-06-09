@@ -679,9 +679,9 @@ def l2_target_evolve(
         str,
         typer.Option(
             help=(
-                "Budget profile: standard, fixed-inner, or smoke. fixed-inner "
-                "uses a fixed trace snapshot for a longer inner loop unless "
-                "overridden by explicit budget flags."
+                "Budget profile: standard, fixed-inner, or smoke. standard is "
+                "cost-capped; fixed-inner is the formal fixed-snapshot research "
+                "loop unless overridden by explicit budget flags."
             ),
         ),
     ] = "standard",

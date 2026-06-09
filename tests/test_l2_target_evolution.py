@@ -70,6 +70,24 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert summary["rounds_completed"] == 3
     assert summary["stop_reason"] == "round_budget_exhausted"
     assert summary["budget_policy"]["profile"] == "standard"
+    assert summary["budget_policy"]["profile_intent"] == {
+        "schema_version": "l2-target-budget-profile-intent-v1",
+        "profile": "standard",
+        "profile_role": "cost_capped_default",
+        "recommended_quality_profile": "fixed-inner",
+        "guidance": (
+            "The standard profile is cost-capped. For codex-cli it may launch "
+            "only a few live agent rounds, so failure here is not evidence that "
+            "L2 target evolution has been exhausted."
+        ),
+        "fixed_trace_snapshot_inner_loop": True,
+        "outer_replay_cadence_bound": False,
+        "rounds_are_l2_train_eval_iterations": True,
+        "local_search_consumes_llm": False,
+        "codex_cli_rounds_consume_llm": False,
+        "effective_max_agent_rounds": None,
+        "agent_round_cap_is_cost_control": False,
+    }
     assert summary["data_split_policy"] == {
         "schema_version": "l2-target-split-policy-v1",
         "policy": "chronological",
@@ -244,6 +262,13 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "diagnostic_only_not_selection_or_adoption_gate"
     )
     assert round_state["agent_budget"]["mode"] == "dry-run"
+    assert round_state["budget_policy"]["profile_intent"]["profile_role"] == (
+        "cost_capped_default"
+    )
+    assert objective["budget_policy"]["profile_intent"]["profile_role"] == (
+        "cost_capped_default"
+    )
+    assert objective["agent_budget"]["local_search_consumes_llm"] is False
     assert "private_holdout_evidence" not in round_state
     assert "not a" in program_text
     assert "Darjeeling-core dataset-independence violation" in program_text
@@ -843,6 +868,28 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
             budget_profile="fixed-inner",
         )
     ) == 16
+    standard_codex_intent = l2_target_evolution._target_budget_policy_payload(  # noqa: SLF001
+        L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=Path("unused"),
+            mode="codex-cli",
+            budget_profile="standard",
+        )
+    )["profile_intent"]
+    fixed_inner_intent = l2_target_evolution._target_budget_policy_payload(  # noqa: SLF001
+        L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=Path("unused"),
+            mode="codex-cli",
+            budget_profile="fixed-inner",
+        )
+    )["profile_intent"]
+    assert standard_codex_intent["profile_role"] == "cost_capped_default"
+    assert standard_codex_intent["effective_max_agent_rounds"] == 3
+    assert standard_codex_intent["agent_round_cap_is_cost_control"] is True
+    assert fixed_inner_intent["profile_role"] == "fixed_snapshot_research"
+    assert fixed_inner_intent["effective_max_agent_rounds"] == 16
+    assert fixed_inner_intent["outer_replay_cadence_bound"] is False
 
 
 def test_l2_target_accept_hook_can_veto_guard_accepts(tmp_path: Path) -> None:

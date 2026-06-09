@@ -364,18 +364,10 @@ def run_l2_target_evolution(
         "rounds_requested": config.rounds,
         "rounds_completed": len(round_results),
         "stop_reason": stop_reason,
-        "budget_policy": {
-            "inner_patience_rounds": config.inner_patience_rounds,
-            "stop_on_selection_gate": config.stop_on_selection_gate,
-            "local_search_trials": config.local_search_trials,
-            "local_search_timeout_s": config.local_search_timeout_s,
-            "local_search_space": config.local_search_space,
-            "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
-            "max_agent_rounds": max_agent_rounds,
-            "profile": config.budget_profile,
-            "visible_validation_folds": config.visible_validation_folds,
-            "visible_cross_audit_folds": config.visible_cross_audit_folds,
-        },
+        "budget_policy": _target_budget_policy_payload(
+            config,
+            max_agent_rounds=max_agent_rounds,
+        ),
         "agent_budget": _agent_budget_payload(
             config=config,
             agent_rounds_started=agent_rounds_started,
@@ -1563,17 +1555,7 @@ def _write_target_state_files(
         "next_round": round_index,
         "rounds_requested": config.rounds,
         "no_inner_improvement_rounds": no_inner_improvement_rounds,
-        "budget_policy": {
-            "inner_patience_rounds": config.inner_patience_rounds,
-            "stop_on_selection_gate": config.stop_on_selection_gate,
-            "local_search_trials": config.local_search_trials,
-            "local_search_timeout_s": config.local_search_timeout_s,
-            "local_search_space": config.local_search_space,
-            "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
-            "max_agent_rounds": _effective_max_agent_rounds(config),
-            "visible_validation_folds": config.visible_validation_folds,
-            "visible_cross_audit_folds": config.visible_cross_audit_folds,
-        },
+        "budget_policy": _target_budget_policy_payload(config),
         "agent_budget": _agent_budget_payload(
             config=config,
             agent_rounds_started=agent_rounds_started,
@@ -1659,6 +1641,76 @@ def _agent_budget_payload(
     }
 
 
+def _target_budget_policy_payload(
+    config: L2TargetEvolutionConfig,
+    *,
+    max_agent_rounds: int | None = None,
+) -> dict[str, Any]:
+    resolved_max_agent_rounds = (
+        _effective_max_agent_rounds(config)
+        if max_agent_rounds is None
+        else max_agent_rounds
+    )
+    return {
+        "inner_patience_rounds": config.inner_patience_rounds,
+        "stop_on_selection_gate": config.stop_on_selection_gate,
+        "local_search_trials": config.local_search_trials,
+        "local_search_timeout_s": config.local_search_timeout_s,
+        "local_search_space": config.local_search_space,
+        "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
+        "max_agent_rounds": resolved_max_agent_rounds,
+        "profile": config.budget_profile,
+        "profile_intent": _target_budget_profile_intent_payload(
+            config,
+            max_agent_rounds=resolved_max_agent_rounds,
+        ),
+        "visible_validation_folds": config.visible_validation_folds,
+        "visible_cross_audit_folds": config.visible_cross_audit_folds,
+    }
+
+
+def _target_budget_profile_intent_payload(
+    config: L2TargetEvolutionConfig,
+    *,
+    max_agent_rounds: int | None,
+) -> dict[str, Any]:
+    if config.budget_profile == "fixed-inner":
+        profile_role = "fixed_snapshot_research"
+        guidance = (
+            "Use this profile for the main L2 target-evolution research loop; "
+            "it is intentionally decoupled from outer replay cadence."
+        )
+    elif config.budget_profile == "smoke":
+        profile_role = "connectivity_smoke"
+        guidance = (
+            "Use this profile only to check wiring; do not treat its result as "
+            "evidence about L2 evolve quality."
+        )
+    else:
+        profile_role = "cost_capped_default"
+        guidance = (
+            "The standard profile is cost-capped. For codex-cli it may launch "
+            "only a few live agent rounds, so failure here is not evidence that "
+            "L2 target evolution has been exhausted."
+        )
+    return {
+        "schema_version": "l2-target-budget-profile-intent-v1",
+        "profile": config.budget_profile,
+        "profile_role": profile_role,
+        "recommended_quality_profile": "fixed-inner",
+        "guidance": guidance,
+        "fixed_trace_snapshot_inner_loop": True,
+        "outer_replay_cadence_bound": False,
+        "rounds_are_l2_train_eval_iterations": True,
+        "local_search_consumes_llm": False,
+        "codex_cli_rounds_consume_llm": config.mode == "codex-cli",
+        "effective_max_agent_rounds": max_agent_rounds,
+        "agent_round_cap_is_cost_control": (
+            config.mode == "codex-cli" and max_agent_rounds is not None
+        ),
+    }
+
+
 def _effective_max_agent_rounds(config: L2TargetEvolutionConfig) -> int | None:
     if config.mode != "codex-cli":
         return config.max_agent_rounds
@@ -1675,6 +1727,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
     return {
         "schema_version": "l2-target-objective-v1",
         "primary_objective": "increase safe L2 accepts on unseen target traffic",
+        "budget_policy": _target_budget_policy_payload(config),
         "agent_budget": _agent_budget_payload(
             config=config,
             agent_rounds_started=0,
