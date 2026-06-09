@@ -178,8 +178,15 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert summary["agent_budget"]["mode"] == "dry-run"
     assert summary["agent_budget"]["applies_to_mode"] is False
     assert summary["agent_budget"]["local_search_consumes_llm"] is False
+    assert summary["private_holdout_evidence"]["schema_version"] == (
+        "l2-target-private-holdout-evidence-v1"
+    )
+    assert summary["private_holdout_evidence"]["visibility"] == (
+        "outer_summary_only_not_agent_workspace"
+    )
     assert "family_diagnostics" in round_state["baseline_inner_validation"]
     assert round_state["agent_budget"]["mode"] == "dry-run"
+    assert "private_holdout_evidence" not in round_state
     assert "not a" in program_text
     assert "Darjeeling-core dataset-independence violation" in program_text
 
@@ -582,6 +589,42 @@ def test_l2_target_best_round_uses_inner_validation_as_tie_breaker() -> None:
     ) is later_inner_improved_round
 
 
+def test_l2_target_private_holdout_evidence_reports_sparse_selection() -> None:
+    def metric(*, accepted: int, correct: int, wrong: int, passes_gate: bool) -> dict:
+        return {
+            "passes_gate": passes_gate,
+            "accepted": accepted,
+            "correct_accepts": correct,
+            "wrong_accepts": wrong,
+            "coverage": accepted / 50,
+            "accepted_accuracy": correct / accepted if accepted else None,
+            "wrong_accept_rate": wrong / accepted if accepted else 0.0,
+        }
+
+    round_result = {
+        "round": 3,
+        "inner_validation": metric(accepted=4, correct=4, wrong=0, passes_gate=True),
+        "selection_holdout": metric(accepted=0, correct=0, wrong=0, passes_gate=False),
+        "promotion_holdout": metric(accepted=1, correct=1, wrong=0, passes_gate=True),
+    }
+
+    evidence = l2_target_evolution._private_holdout_evidence(  # noqa: SLF001
+        [round_result]
+    )
+
+    assert evidence["best_round"] == 3
+    assert evidence["best_round_selection"]["status"] == "zero_accepts"
+    assert evidence["best_round_promotion"]["status"] == "passes_gate"
+    assert evidence["inner_passing_rounds"] == 1
+    assert evidence["inner_passing_selection_zero_accept_rounds"] == 1
+    assert (
+        evidence["selection_gate_diagnosis"]
+        == "selection_zero_accepts_for_inner_passing_rounds"
+    )
+    assert evidence["adoption_gate_diagnosis"] == "selection_gate_not_passed"
+    assert "larger/stratified target split" in evidence["recommendation"]
+
+
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     traces_path = tmp_path / "traces.jsonl"
     traces_path.write_text(
@@ -865,6 +908,12 @@ SELECTED_SNAPSHOT_MARKER = True
                 },
                 "selection_decision": {"selected": False, "round": None},
                 "adoption_decision": {"adopted": False, "round": None},
+                "private_holdout_evidence": {
+                    "schema_version": "l2-target-private-holdout-evidence-v1",
+                    "selection_gate_diagnosis": (
+                        "selection_zero_accepts_for_inner_passing_rounds"
+                    ),
+                },
                 "best_round": {
                     "round": 1,
                     "target_snapshot": "rounds/round_001_target",
@@ -927,6 +976,10 @@ SELECTED_SNAPSHOT_MARKER = True
     assert manifest["candidate_metrics"]["l2_target_staged_for_outer_replay"] is True
     assert manifest["candidate_metrics"]["l2_target_adopted_round"] is None
     assert manifest["candidate_metrics"]["l2_target_staged_round"] == 1
+    assert manifest["candidate_metrics"]["l2_target_private_holdout_evidence"] == {
+        "schema_version": "l2-target-private-holdout-evidence-v1",
+        "selection_gate_diagnosis": "selection_zero_accepts_for_inner_passing_rounds",
+    }
     promoted_target = (
         run_dir / "artifacts" / manifest["artifact_paths"]["l2_target"]
     ).read_text(encoding="utf-8")

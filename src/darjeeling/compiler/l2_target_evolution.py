@@ -333,6 +333,7 @@ def run_l2_target_evolution(
         "best_adoptable_round": _best_adoptable_round(round_results),
         "selection_decision": _selection_decision(round_results),
         "adoption_decision": _adoption_decision(round_results),
+        "private_holdout_evidence": _private_holdout_evidence(round_results),
         "target_code_scope": "target/",
         "core_code_scope": "system/darjeeling/ is read-only evaluator/core",
         "target_code_policy": _target_code_policy_payload(),
@@ -1773,6 +1774,129 @@ def _best_adoptable_round(rounds: list[dict[str, Any]]) -> dict[str, Any] | None
     if not passing_rounds:
         return None
     return _best_round_for_split(passing_rounds, "promotion_holdout")
+
+
+def _private_holdout_evidence(rounds: list[dict[str, Any]]) -> dict[str, Any]:
+    best_round = _best_round(rounds)
+    inner_passing_rounds = [
+        round_result
+        for round_result in rounds
+        if bool(round_result.get("inner_validation", {}).get("passes_gate"))
+    ]
+    selected_round = _best_selection_round(rounds)
+    adoptable_round = _best_adoptable_round(rounds)
+    return {
+        "schema_version": "l2-target-private-holdout-evidence-v1",
+        "visibility": "outer_summary_only_not_agent_workspace",
+        "best_round": best_round.get("round") if best_round else None,
+        "best_round_selection": (
+            _holdout_split_evidence(best_round.get("selection_holdout", {}))
+            if best_round
+            else None
+        ),
+        "best_round_promotion": (
+            _holdout_split_evidence(best_round.get("promotion_holdout", {}))
+            if best_round
+            else None
+        ),
+        "inner_passing_rounds": len(inner_passing_rounds),
+        "inner_passing_selection_zero_accept_rounds": sum(
+            1
+            for round_result in inner_passing_rounds
+            if int(round_result.get("selection_holdout", {}).get("accepted") or 0) == 0
+        ),
+        "inner_passing_selection_wrong_accept_rounds": sum(
+            1
+            for round_result in inner_passing_rounds
+            if int(round_result.get("selection_holdout", {}).get("wrong_accepts") or 0) > 0
+        ),
+        "selection_gate_diagnosis": _selection_gate_diagnosis(rounds),
+        "adoption_gate_diagnosis": _adoption_gate_diagnosis(
+            selected_round=selected_round,
+            adoptable_round=adoptable_round,
+        ),
+        "recommendation": _private_holdout_recommendation(rounds),
+    }
+
+
+def _holdout_split_evidence(metric: dict[str, Any]) -> dict[str, Any]:
+    accepted = int(metric.get("accepted") or 0)
+    wrong_accepts = int(metric.get("wrong_accepts") or 0)
+    accepted_accuracy = metric.get("accepted_accuracy")
+    return {
+        "accepted": accepted,
+        "correct_accepts": int(metric.get("correct_accepts") or 0),
+        "wrong_accepts": wrong_accepts,
+        "coverage": float(metric.get("coverage") or 0.0),
+        "accepted_accuracy": accepted_accuracy,
+        "passes_gate": bool(metric.get("passes_gate")),
+        "status": _holdout_metric_status(metric),
+    }
+
+
+def _holdout_metric_status(metric: dict[str, Any]) -> str:
+    accepted = int(metric.get("accepted") or 0)
+    wrong_accepts = int(metric.get("wrong_accepts") or 0)
+    if bool(metric.get("passes_gate")):
+        return "passes_gate"
+    if accepted == 0:
+        return "zero_accepts"
+    if wrong_accepts > 0:
+        return "wrong_accepts"
+    return "failed_gate"
+
+
+def _selection_gate_diagnosis(rounds: list[dict[str, Any]]) -> str:
+    if not rounds:
+        return "no_rounds"
+    if _best_selection_round(rounds) is not None:
+        return "selection_gate_passed"
+    inner_passing_rounds = [
+        round_result
+        for round_result in rounds
+        if bool(round_result.get("inner_validation", {}).get("passes_gate"))
+    ]
+    if not inner_passing_rounds:
+        return "visible_inner_gate_failed"
+    if all(
+        int(round_result.get("selection_holdout", {}).get("accepted") or 0) == 0
+        for round_result in inner_passing_rounds
+    ):
+        return "selection_zero_accepts_for_inner_passing_rounds"
+    if any(
+        int(round_result.get("selection_holdout", {}).get("wrong_accepts") or 0) > 0
+        for round_result in inner_passing_rounds
+    ):
+        return "selection_wrong_accepts_for_inner_passing_rounds"
+    return "selection_gate_failed_for_inner_passing_rounds"
+
+
+def _adoption_gate_diagnosis(
+    *,
+    selected_round: dict[str, Any] | None,
+    adoptable_round: dict[str, Any] | None,
+) -> str:
+    if adoptable_round is not None:
+        return "adoption_gate_passed"
+    if selected_round is None:
+        return "selection_gate_not_passed"
+    promotion = selected_round.get("promotion_holdout", {})
+    return f"promotion_{_holdout_metric_status(promotion)}"
+
+
+def _private_holdout_recommendation(rounds: list[dict[str, Any]]) -> str:
+    diagnosis = _selection_gate_diagnosis(rounds)
+    if diagnosis == "selection_zero_accepts_for_inner_passing_rounds":
+        return (
+            "selection holdout did not observe candidate accepts; keep the target "
+            "non-adopted unless an explicit outer replay passes, or rerun with a "
+            "larger/stratified target split"
+        )
+    if diagnosis == "selection_wrong_accepts_for_inner_passing_rounds":
+        return "fix wrong accepts before staging; do not trade frame exactness for coverage"
+    if diagnosis == "visible_inner_gate_failed":
+        return "continue visible inner-loop improvement before using private holdout evidence"
+    return "use adoption_decision and outer replay before promoting target artifacts"
 
 
 def _selection_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:

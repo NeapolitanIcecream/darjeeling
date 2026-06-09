@@ -981,6 +981,9 @@ def _promote_l2_target_run(
             "l2_target_loop_cadence": summary.get("loop_cadence"),
             "l2_target_agent_budget": summary.get("agent_budget"),
             "l2_target_code_policy": summary.get("target_code_policy"),
+            "l2_target_private_holdout_evidence": summary.get(
+                "private_holdout_evidence"
+            ),
             "l2_target_selection_decision": summary.get("selection_decision"),
             "l2_target_adoption_decision": adoption_decision,
             "l2_target_training_traces": len(train_traces),

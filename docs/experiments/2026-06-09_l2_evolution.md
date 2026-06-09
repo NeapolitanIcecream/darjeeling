@@ -1267,3 +1267,49 @@ Interpretation:
   in both target-evolve summaries and promoted manifests.
 - This does not solve how many GPT rounds are optimal; it prevents accidental
   spend and gives future experiments a stable stop policy to compare.
+
+## Private holdout evidence diagnostic
+
+The weather target patch had a useful failure mode: the 500-row inner run was
+not adopted because private selection had 0 accepts, even though private
+promotion had 1 correct accept and the later 3k outer replay passed. This is a
+different situation from "selection observed wrong accepts", so the summary now
+records private holdout evidence for human/outer-harness diagnosis without
+writing it back into the agent workspace.
+
+Rerun command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-holdout-evidence-weather-r1 \
+  --budget-profile fixed-inner \
+  --rounds 3 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_email_audio_veto_r3.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_weather_threshold_delta_r1.patch \
+  --max-traces 500
+```
+
+Result:
+
+- Best round: 3.
+- Inner validation: 4 accepted / 4 correct / 0 wrong.
+- Private selection: 0 accepted / 0 wrong.
+- Private promotion: 1 accepted / 1 correct / 0 wrong.
+- `private_holdout_evidence.selection_gate_diagnosis`:
+  `selection_zero_accepts_for_inner_passing_rounds`.
+- `inner_passing_selection_zero_accept_rounds`: 3 / 3.
+- Recommendation: keep non-adopted unless explicit outer replay passes, or
+  rerun with a larger/stratified target split.
+- `data/round_state.json` and `data/target_diagnostics.json` do not contain
+  `private_holdout_evidence`; the field is outer-summary-only.
+
+Interpretation:
+
+- The adoption gate remains strict. We did not relax selection just because
+  promotion and 3k replay looked good.
+- The failure is now classifiable as holdout sparsity rather than target error.
+  This gives the next design step a concrete direction: larger or stratified
+  target selection splits, while still reserving final authority for outer e2e
+  replay.
