@@ -4,6 +4,7 @@ import numpy as np
 
 from darjeeling.layers.l2_student import (
     ConstantGuard,
+    FrameRetrievalResult,
     IntentCalibrationIndex,
     L2StudentBundle,
     L2StudentConfig,
@@ -86,6 +87,40 @@ def test_l2_retrieval_frame_source_returns_nearest_teacher_frame() -> None:
     assert prediction.frame_source == "retrieval"
     assert prediction.retrieval_frame == prediction.frame
     assert prediction.retrieval_similarity > 0.5
+
+
+def test_l2_retrieval_frame_source_requires_intent_agreement() -> None:
+    class FakeIntentPipeline:
+        classes_ = ["music_play", "alarm_set"]
+
+        def predict_proba(self, utterances):
+            return np.asarray([[0.95, 0.05] for _utterance in utterances])
+
+    class DisagreeingFramePrototypeIndex:
+        def nearest(self, intent_pipeline, utterance):
+            return FrameRetrievalResult(
+                frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+                nearest_similarity=0.91,
+                margin=0.32,
+            )
+
+    bundle = L2StudentBundle(
+        intent_pipeline=FakeIntentPipeline(),
+        slot_tagger=None,
+        guard_model=ConstantGuard(1.0),
+        config=L2StudentConfig(accept_threshold=0.0, frame_source="retrieval"),
+        frame_prototype_index=DisagreeingFramePrototypeIndex(),
+    )
+
+    prediction = bundle.predict("play something")
+
+    assert prediction.frame == Frame(intent="music_play", slots={})
+    assert prediction.frame_source == "student"
+    assert prediction.retrieval_frame == Frame(
+        intent="alarm_set",
+        slots={"time": "seven"},
+    )
+    assert prediction.retrieval_intent_matches_student == 0.0
 
 
 def test_l2_retrieval_does_not_return_exact_self_neighbor() -> None:

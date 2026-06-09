@@ -960,7 +960,7 @@ def _select_prediction_frame(
     if frame_source == "student":
         return student_frame, "student"
     if frame_source == "retrieval":
-        if retrieval.frame is not None:
+        if retrieval.frame is not None and retrieval.frame.intent == student_frame.intent:
             return retrieval.frame, "retrieval"
         return student_frame, "student"
     raise ValueError(f"unsupported L2 frame_source: {frame_source}")
