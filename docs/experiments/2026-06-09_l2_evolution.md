@@ -1680,3 +1680,56 @@ Next implication:
 - A useful next hypothesis is a more general slot-risk guard for missing or
   unsupported slot values, rather than adding one lexical veto per validation
   example.
+
+## Train-audit slot-risk veto
+
+The next incremental patch used `latest_train_audit_safety_backlog`, not private
+rows:
+
+```text
+docs/experiments/patches/l2_target_train_audit_slot_risk_veto_r2.patch
+```
+
+It adds target-only vetoes for visible train-audit patterns:
+
+- missing business/status slots in `takeaway_query`;
+- slotless `iot_cleaning` when visible device cues are present;
+- slotless `iot_wemo_off` for specific socket/plug phrases;
+- `social_query` with social-media + `today` cues but no date;
+- `social_post` with an unsupported extra `person` slot.
+
+Validation command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-train-audit-slot-risk-veto-3k-r1 \
+  --budget-profile fixed-inner \
+  --rounds 2 \
+  --mode dry-run \
+  --split-policy intent-stratified \
+  --dry-run-patch docs/experiments/patches/l2_target_visible_safety_backlog_veto_r1.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_train_audit_slot_risk_veto_r2.patch
+```
+
+Result:
+
+- Round 1 reproduced the visible-safety patch: visible 18 / 18 / 0, train
+  audit 160 / 142 / 18, selection 11 / 7 / 4, promotion 11 / 7 / 4.
+- Round 2 kept visible validation passing: 18 / 18 / 0.
+- Train audit improved to 153 / 142 / 11.
+- Promotion improved slightly to 10 / 7 / 3.
+- Private selection did not improve: 11 / 7 / 4.
+- The run remained non-adopted:
+  `selection_gate_diagnosis=selection_wrong_accepts_for_inner_passing_rounds`.
+
+Interpretation:
+
+- Train audit is useful as a visible-only signal: it found broader risks and the
+  r2 patch removed seven train-audit wrong accepts.
+- The current hand-written veto style is still too narrow. It can chip away at
+  visible train-audit errors, but it does not generalize enough to private
+  selection.
+- Next direction should be structural: a target-local slot-risk policy or
+  postprocess/veto mechanism driven by slot support and intent-specific slot
+  schemas, rather than another list of literal phrases.

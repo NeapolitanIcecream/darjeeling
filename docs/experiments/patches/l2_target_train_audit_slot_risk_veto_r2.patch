@@ -1,0 +1,102 @@
+--- a/target/target_l2.py
++++ b/target/target_l2.py
+@@ -60,7 +60,40 @@
+     " my day was hectic ",
+ )
+ 
++_CLEANING_DEVICE_CUES = {
++    "cleaner",
++    "robot",
++    "vacuum",
++}
+ 
++_WEMO_SPECIFIC_DEVICE_PHRASES = (
++    " rice cooker socket ",
++    " smart socket ",
++    " wemo plug ",
++)
++
++_SOCIAL_MEDIA_CUES = {
++    "facebook",
++    "instagram",
++    "media",
++    "social",
++    "tweet",
++    "tweets",
++    "twitter",
++}
++
++_TAKEAWAY_STATUS_PHRASES = (
++    " food be ready ",
++    " my food be ready ",
++)
++
++_TAKEAWAY_BUSINESS_MARKERS = (
++    " arby's ",
++    " olive garden ",
++    " pizza hut ",
++)
++
++
+ def config_overrides() -> dict[str, Any]:
+     """Return target-specific L2StudentConfig overrides."""
+     config_path = Path(__file__).with_name("config.json")
+@@ -134,6 +167,38 @@
+     return False
+ 
+ 
++def _slotless_cleaning_needs_device(utterance: str) -> bool:
++    return bool(_tokens(utterance) & _CLEANING_DEVICE_CUES)
++
++
++def _slotless_wemo_needs_device(utterance: str) -> bool:
++    return _has_phrase(_normalized(utterance), _WEMO_SPECIFIC_DEVICE_PHRASES)
++
++
++def _takeaway_mismatch_risky(utterance: str, slots: dict[str, Any]) -> bool:
++    text = _normalized(utterance)
++    if _has_phrase(text, _TAKEAWAY_STATUS_PHRASES) and slots:
++        return True
++    if _has_phrase(text, _TAKEAWAY_BUSINESS_MARKERS):
++        return "business_name" not in slots
++    return False
++
++
++def _social_query_mismatch_risky(utterance: str, slots: dict[str, Any]) -> bool:
++    tokens = _tokens(utterance)
++    if "today" in tokens and "date" not in slots:
++        return bool(tokens & _SOCIAL_MEDIA_CUES)
++    return False
++
++
++def _social_post_extra_person_risky(utterance: str, slots: dict[str, Any]) -> bool:
++    person = str(slots.get("person") or "").lower()
++    if not person:
++        return False
++    person_tokens = set(_WORD_RE.findall(person))
++    return bool(person_tokens and not person_tokens <= _tokens(utterance))
++
++
+ def postprocess_frame(
+     utterance: str,
+     frame: dict[str, Any],
+@@ -175,4 +240,19 @@
+     if intent == "calendar_set" and slots:
+         if _calendar_set_mismatch_risky(utterance, slots):
+             return False
++    if intent == "takeaway_query" and slots:
++        if _takeaway_mismatch_risky(utterance, slots):
++            return False
++    if intent == "iot_cleaning" and not slots:
++        if _slotless_cleaning_needs_device(utterance):
++            return False
++    if intent == "iot_wemo_off" and not slots:
++        if _slotless_wemo_needs_device(utterance):
++            return False
++    if intent == "social_query":
++        if _social_query_mismatch_risky(utterance, slots):
++            return False
++    if intent == "social_post" and slots:
++        if _social_post_extra_person_risky(utterance, slots):
++            return False
+     return default_accept
