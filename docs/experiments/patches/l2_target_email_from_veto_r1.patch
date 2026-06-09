@@ -1,0 +1,56 @@
+--- a/target/target_l2.py
++++ b/target/target_l2.py
+@@ -5,12 +5,35 @@
+ from typing import Any
+ 
+ 
++_EMAIL_SLOTLESS_FROM_ALLOWLIST = {"work"}
++
++
++def _email_from_term(utterance: str) -> str | None:
++    marker = " from "
++    normalized = f" {utterance.lower()} "
++    if marker not in normalized:
++        return None
++    suffix = normalized.split(marker, 1)[1].strip()
++    if not suffix:
++        return None
++    return suffix.split()[0]
++
++
+ def config_overrides() -> dict[str, Any]:
+     """Return target-specific L2StudentConfig overrides."""
+     config_path = Path(__file__).with_name("config.json")
+     if config_path.exists():
+         return json.loads(config_path.read_text(encoding="utf-8"))
+-    return {}
++    return {
++        "accept_threshold": 0.90,
++        "frame_source": "student",
++        "intent_model_family": "sgd_logreg",
++        "word_ngram_range": (1, 3),
++        "char_ngram_range": (3, 5),
++        "max_features": 1000,
++        "max_iter": 200,
++        "slot_model_family": "none",
++    }
+ 
+ 
+ def postprocess_frame(
+@@ -30,5 +53,14 @@
+     default_accept: bool,
+ ) -> bool | None:
+     """Return False to veto a guard accept; True/None keep the default decision."""
+-    del utterance, frame, metadata
+-    return default_accept
++    del metadata
++    if not default_accept:
++        return None
++    if frame.get("intent") != "email_query":
++        return None
++    if frame.get("slots"):
++        return None
++    from_term = _email_from_term(utterance)
++    if from_term and from_term not in _EMAIL_SLOTLESS_FROM_ALLOWLIST:
++        return False
++    return None

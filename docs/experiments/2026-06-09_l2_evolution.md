@@ -505,3 +505,52 @@ Interpretation:
 - `veto_examples` are necessary feedback for L4 target evolution. Without them,
   an agent can see that coverage dropped but cannot tell whether the veto was a
   desirable safety abstention or an overbroad rule.
+
+## Narrow email-from veto smoke
+
+After inspecting visible train/inner examples, the broad slot-risk veto was
+refined into a narrower target rule:
+
+- Only apply to slotless `email_query` predictions.
+- Parse `from X`.
+- Allow the visible slotless case `from work`.
+- Veto other slotless `from X` email accepts.
+
+The dry-run patch is committed at:
+
+```text
+docs/experiments/patches/l2_target_email_from_veto_r1.patch
+```
+
+Command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-email-from-veto-r1 \
+  --rounds 1 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_email_from_veto_r1.patch \
+  --max-traces 500 \
+  --inner-patience-rounds 0
+```
+
+Result:
+
+- Runtime: about 4 seconds.
+- Baseline inner validation: 1 accepted / 1 correct / 0 wrong.
+- Patched inner validation: 4 accepted / 4 correct / 0 wrong.
+- Private selection holdout: 0 accepted.
+- Private promotion holdout: 0 accepted, with 1 vetoed accept.
+- The vetoed private promotion example was again
+  `do i have any emails from robert`, where the predicted frame omitted
+  `person=robert`.
+
+Interpretation:
+
+- Compared with the broad veto, the narrow visible-data-derived veto preserved
+  the inner validation gain while avoiding the known private wrong accept.
+- It still did not create private selection coverage, so it is not adoptable.
+- The useful pattern is methodological: target-owned veto code can safely bound
+  risky higher-coverage configs, but L2 still needs a mechanism that improves
+  private coverage, not only one that suppresses regressions.
