@@ -211,6 +211,12 @@ def run_l2_target_evolution(
             no_inner_improvement_rounds += 1
         round_payload = {
             "round": round_index,
+            "target_snapshot": _snapshot_target_dir(
+                workspace_root=workspace_root,
+                rounds_dir=rounds_dir,
+                job_dir=job_dir,
+                round_index=round_index,
+            ),
             "inner_improved": inner_improved,
             "passes_candidate_selection_gate": bool(
                 inner_result["passes_gate"] and selection_result["passes_gate"]
@@ -555,6 +561,20 @@ def _evaluate_target_candidate(
         "inner_validation": inner_result,
         **private_results,
     }
+
+
+def _snapshot_target_dir(
+    *,
+    workspace_root: Path,
+    rounds_dir: Path,
+    job_dir: Path,
+    round_index: int,
+) -> str:
+    snapshot_dir = rounds_dir / f"round_{round_index:03d}_target"
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir)
+    shutil.copytree(workspace_root / "target", snapshot_dir)
+    return snapshot_dir.relative_to(job_dir).as_posix()
 
 
 def _record_family_diagnostic(
@@ -1621,11 +1641,29 @@ def _best_round_for_split(rounds: list[dict[str, Any]], split: str) -> dict[str,
     return max(
         rounds,
         key=lambda item: (
-            bool(item[split]["passes_gate"]),
-            item[split]["coverage"],
-            item[split]["accepted_accuracy"] or 0.0,
-            -item[split]["wrong_accept_rate"],
+            *_split_metric_score(item[split]),
+            *_inner_tie_breaker_score(item.get("inner_validation", {})),
+            int(item.get("round") or 0),
         ),
+    )
+
+
+def _split_metric_score(metric: dict[str, Any]) -> tuple[bool, float, float, float, int]:
+    return (
+        bool(metric["passes_gate"]),
+        float(metric["coverage"]),
+        float(metric["accepted_accuracy"] or 0.0),
+        -float(metric["wrong_accept_rate"]),
+        -int(metric.get("wrong_accepts") or 0),
+    )
+
+
+def _inner_tie_breaker_score(metric: dict[str, Any]) -> tuple[bool, int, float, float]:
+    return (
+        bool(metric.get("passes_gate")),
+        -int(metric.get("wrong_accepts") or 0),
+        float(metric.get("accepted_accuracy") or 0.0),
+        float(metric.get("coverage") or 0.0),
     )
 
 

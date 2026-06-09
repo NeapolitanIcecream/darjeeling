@@ -1,0 +1,152 @@
+--- a/target/target_l2.py
++++ b/target/target_l2.py
+@@ -21,2 +21,5 @@
+     "with",
++    "today",
++    "tomorrow",
++    "olly",
+ }
+@@ -68,4 +71,46 @@
+ }
++_WEATHER_DATE_PREFIXES = ("today", "tomorrow", "week", "weekend", "month")
++_WEATHER_DESCRIPTOR_TERMS = {
++    "coat",
++    "forecast",
++    "high",
++    "humidity",
++    "low",
++    "pants",
++    "rain",
++    "raining",
++    "rainy",
++    "snow",
++    "snowing",
++    "sunny",
++    "temperature",
++    "wind",
++    "windy",
++}
++_WEATHER_SLOT_NAMES = {"date", "place_name", "weather_descriptor"}
++_EMAIL_QUERY_TERMS = {"email", "emails", "mail", "mails", "message", "messages"}
++_EMAIL_RISK_TERMS = {"inbox", "last", "recently", "today", "unread", "yahoo"}
++_EMAIL_TEMPORAL_TERMS = {"last", "recently", "today", "tomorrow", "week", "yesterday"}
+-
+-
++
++
++def _tokens(utterance: str) -> list[str]:
++    return [
++        token.strip(".,!?;:").lower()
++        for token in utterance.split()
++        if token.strip(".,!?;:")
++    ]
++
++
++def _has_weather_date(utterance: str) -> bool:
++    return any(
++        token.startswith(prefix)
++        for token in _tokens(utterance)
++        for prefix in _WEATHER_DATE_PREFIXES
++    )
++
++
++def _has_any(utterance: str, terms: set[str]) -> bool:
++    return bool(set(_tokens(utterance)) & terms)
++
++
+ def _email_from_person(utterance: str) -> str | None:
+@@ -120,3 +165,3 @@
+     return {
+-        "accept_threshold": 0.84,
++        "accept_threshold": 0.10,
+         "frame_source": "student",
+@@ -155,2 +200,70 @@
+-
++
++def _accept_email_query(utterance: str, slots: dict[str, Any]) -> bool:
++    slot_names = set(slots)
++    if slot_names - {"person"}:
++        return False
++    tokens = set(_tokens(utterance))
++    if not (tokens & _EMAIL_QUERY_TERMS):
++        return False
++    if tokens & _EMAIL_TEMPORAL_TERMS:
++        return False
++    if not slot_names and tokens & _EMAIL_RISK_TERMS:
++        return False
++    person = str(slots.get("person", "")).lower()
++    if person and (set(person.split()) & (_EMAIL_RISK_TERMS | {"olly"})):
++        return False
++    return True
++
++
++def _accept_audio_volume(utterance: str, intent: str, slots: dict[str, Any]) -> bool:
++    slot_names = set(slots)
++    if slot_names - {"change_amount"}:
++        return False
++    tokens = set(_tokens(utterance))
++    if intent == "audio_volume_up":
++        return bool(tokens & {"increase", "louder", "raise", "raised", "up"}) and not bool(
++            tokens & {"decrease", "down", "lower", "mute", "quiet"}
++        )
++    if intent == "audio_volume_down":
++        return bool(tokens & {"decrease", "down", "lower", "quieter"}) and not bool(
++            tokens & {"increase", "louder", "mute", "raise", "up"}
++        )
++    if intent == "audio_volume_mute":
++        return bool(tokens & {"mute", "quiet", "silence", "silent"})
++    if intent == "audio_volume_other":
++        return "volume" in tokens and bool(tokens & {"adjust", "change"})
++    return False
++
++
++def _accept_weather_query(utterance: str, slots: dict[str, Any]) -> bool:
++    slot_names = set(slots)
++    normalized = f" {utterance.lower()} "
++    if slot_names - _WEATHER_SLOT_NAMES:
++        return False
++    if "." in utterance and "place_name" in slot_names:
++        return False
++    if " in " in normalized and "place_name" not in slot_names:
++        return False
++    if " for " in normalized and not ({"date", "place_name"} & slot_names):
++        return False
++    if _has_weather_date(utterance) and "date" not in slot_names:
++        return False
++    if (
++        _has_any(utterance, _WEATHER_DESCRIPTOR_TERMS)
++        and "weather_descriptor" not in slot_names
++        and "weather" not in set(_tokens(utterance))
++    ):
++        return False
++    if not slot_names and (
++        " in " in normalized
++        or " for " in normalized
++        or _has_weather_date(utterance)
++        or _has_any(utterance, _WEATHER_DESCRIPTOR_TERMS)
++    ):
++        tokens = set(_tokens(utterance))
++        if not (tokens <= {"news", "weather"} or "there" in tokens):
++            return False
++    return True
++
++
+ def accept_prediction(
+@@ -162,3 +275,3 @@
+     """Return False to veto a guard accept; True/None keep the default decision."""
+-    del utterance, metadata
++    del metadata
+     if not default_accept:
+@@ -166,7 +279,9 @@
+     intent = frame.get("intent")
+-    slot_names = set((frame.get("slots") or {}).keys())
++    slots = frame.get("slots") or {}
+     if intent == "email_query":
+-        return not (slot_names - {"person"})
++        return _accept_email_query(utterance, slots)
+     if intent in _AUDIO_VOLUME_INTENTS:
+-        return not (slot_names - {"change_amount"})
++        return _accept_audio_volume(utterance, intent, slots)
++    if intent == "weather_query":
++        return _accept_weather_query(utterance, slots)
+     return False

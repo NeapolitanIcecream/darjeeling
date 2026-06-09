@@ -98,6 +98,13 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert (tmp_path / "job" / "private" / "selection_holdout.jsonl").exists()
     assert (tmp_path / "job" / "private" / "promotion_holdout.jsonl").exists()
     assert (tmp_path / "job" / "rounds" / "round_003.json").exists()
+    assert summary["rounds"][0]["target_snapshot"] == "rounds/round_001_target"
+    assert (
+        tmp_path
+        / "job"
+        / summary["rounds"][0]["target_snapshot"]
+        / "target_l2.py"
+    ).exists()
 
     manifest = json.loads((workspace / "workspace_manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "l2-target-workspace-v1"
@@ -467,6 +474,34 @@ def test_l2_target_selection_requires_visible_inner_gate() -> None:
     assert _adoption_decision([round_result])["adopted"] is False
 
 
+def test_l2_target_best_round_uses_inner_validation_as_tie_breaker() -> None:
+    def metric(*, coverage: float, accepted_accuracy: float | None = None) -> dict:
+        return {
+            "passes_gate": False,
+            "coverage": coverage,
+            "accepted_accuracy": accepted_accuracy,
+            "wrong_accept_rate": 0.0,
+            "wrong_accepts": 0,
+        }
+
+    early_round = {
+        "round": 1,
+        "inner_validation": metric(coverage=0.05, accepted_accuracy=1.0),
+        "selection_holdout": metric(coverage=0.0),
+        "promotion_holdout": metric(coverage=0.0),
+    }
+    later_inner_improved_round = {
+        "round": 2,
+        "inner_validation": metric(coverage=0.30, accepted_accuracy=1.0),
+        "selection_holdout": metric(coverage=0.0),
+        "promotion_holdout": metric(coverage=0.0),
+    }
+
+    assert l2_target_evolution._best_round(  # noqa: SLF001
+        [early_round, later_inner_improved_round]
+    ) is later_inner_improved_round
+
+
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     traces_path = tmp_path / "traces.jsonl"
     traces_path.write_text(
@@ -535,8 +570,10 @@ def test_l2_promote_target_cli_writes_runtime_artifacts(tmp_path: Path) -> None:
     target_run = tmp_path / "target-run"
     workspace = target_run / "workspace" / "l2_target"
     target_dir = workspace / "target"
+    snapshot_dir = target_run / "rounds" / "round_001_target"
     data_dir = workspace / "data"
     target_dir.mkdir(parents=True)
+    snapshot_dir.mkdir(parents=True)
     data_dir.mkdir(parents=True)
     (data_dir / "train.jsonl").write_text(
         "".join(
@@ -548,11 +585,26 @@ def test_l2_promote_target_cli_writes_runtime_artifacts(tmp_path: Path) -> None:
     (target_dir / "target_l2.py").write_text(
         """
 def config_overrides():
+    return {"accept_threshold": 0.9, "min_examples": 4}
+
+def postprocess_frame(utterance, frame, metadata):
+    del utterance, metadata
+    return frame
+
+FINAL_WORKSPACE_MARKER = True
+""",
+        encoding="utf-8",
+    )
+    (snapshot_dir / "target_l2.py").write_text(
+        """
+def config_overrides():
     return {"accept_threshold": 0.0, "min_examples": 4}
 
 def postprocess_frame(utterance, frame, metadata):
     del utterance, metadata
     return frame
+
+SELECTED_SNAPSHOT_MARKER = True
 """,
         encoding="utf-8",
     )
@@ -581,6 +633,7 @@ def postprocess_frame(utterance, frame, metadata):
                 "rounds": [
                     {
                         "round": 1,
+                        "target_snapshot": "rounds/round_001_target",
                         "inner_validation": {"accepted": 1, "wrong_accepts": 0},
                         "selection_holdout": {"accepted": 1, "wrong_accepts": 0},
                         "promotion_holdout": {"accepted": 1, "wrong_accepts": 0},
@@ -633,6 +686,12 @@ def postprocess_frame(utterance, frame, metadata):
     assert manifest["candidate_metrics"]["l2_target_training_traces"] == 12
     assert manifest["candidate_metrics"]["l2_training_scope"] == "l2_target_workspace_train"
     assert manifest["candidate_metrics"]["l2_training_traces"] == 12
+    promoted_target = (
+        run_dir / "artifacts" / manifest["artifact_paths"]["l2_target"]
+    ).read_text(encoding="utf-8")
+    assert "SELECTED_SNAPSHOT_MARKER" in promoted_target
+    assert "FINAL_WORKSPACE_MARKER" not in promoted_target
+    assert manifest["candidate_metrics"]["l2_config"]["accept_threshold"] == 0.0
 
 
 def test_l2_promote_target_cli_can_stage_non_adopted_candidate_for_outer_replay(
@@ -641,8 +700,10 @@ def test_l2_promote_target_cli_can_stage_non_adopted_candidate_for_outer_replay(
     target_run = tmp_path / "target-run"
     workspace = target_run / "workspace" / "l2_target"
     target_dir = workspace / "target"
+    snapshot_dir = target_run / "rounds" / "round_001_target"
     data_dir = workspace / "data"
     target_dir.mkdir(parents=True)
+    snapshot_dir.mkdir(parents=True)
     data_dir.mkdir(parents=True)
     (data_dir / "train.jsonl").write_text(
         "".join(
@@ -654,11 +715,26 @@ def test_l2_promote_target_cli_can_stage_non_adopted_candidate_for_outer_replay(
     (target_dir / "target_l2.py").write_text(
         """
 def config_overrides():
+    return {"accept_threshold": 0.9, "min_examples": 4}
+
+def postprocess_frame(utterance, frame, metadata):
+    del utterance, metadata
+    return frame
+
+FINAL_WORKSPACE_MARKER = True
+""",
+        encoding="utf-8",
+    )
+    (snapshot_dir / "target_l2.py").write_text(
+        """
+def config_overrides():
     return {"accept_threshold": 0.0, "min_examples": 4}
 
 def postprocess_frame(utterance, frame, metadata):
     del utterance, metadata
     return frame
+
+SELECTED_SNAPSHOT_MARKER = True
 """,
         encoding="utf-8",
     )
@@ -677,6 +753,7 @@ def postprocess_frame(utterance, frame, metadata):
                 "adoption_decision": {"adopted": False, "round": None},
                 "best_round": {
                     "round": 1,
+                    "target_snapshot": "rounds/round_001_target",
                     "inner_validation": {"accepted": 1, "wrong_accepts": 0},
                     "selection_holdout": {"accepted": 0, "wrong_accepts": 0},
                     "promotion_holdout": {"accepted": 1, "wrong_accepts": 0},
@@ -684,6 +761,7 @@ def postprocess_frame(utterance, frame, metadata):
                 "rounds": [
                     {
                         "round": 1,
+                        "target_snapshot": "rounds/round_001_target",
                         "inner_validation": {"accepted": 1, "wrong_accepts": 0},
                         "selection_holdout": {"accepted": 0, "wrong_accepts": 0},
                         "promotion_holdout": {"accepted": 1, "wrong_accepts": 0},
@@ -735,6 +813,12 @@ def postprocess_frame(utterance, frame, metadata):
     assert manifest["candidate_metrics"]["l2_target_staged_for_outer_replay"] is True
     assert manifest["candidate_metrics"]["l2_target_adopted_round"] is None
     assert manifest["candidate_metrics"]["l2_target_staged_round"] == 1
+    promoted_target = (
+        run_dir / "artifacts" / manifest["artifact_paths"]["l2_target"]
+    ).read_text(encoding="utf-8")
+    assert "SELECTED_SNAPSHOT_MARKER" in promoted_target
+    assert "FINAL_WORKSPACE_MARKER" not in promoted_target
+    assert manifest["candidate_metrics"]["l2_config"]["accept_threshold"] == 0.0
 
 
 def test_l2_replay_target_cli_compares_current_target_against_parent(

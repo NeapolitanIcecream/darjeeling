@@ -1122,3 +1122,101 @@ Interpretation:
   before threshold changes, because slot exactness is the known L2 bottleneck.
 - This improves L4 agent context management: the prompt can stay short while
   the workspace exposes structured, bounded triage data for Codex to inspect.
+
+## Weather threshold target experiment
+
+Family diagnostics suggested `weather_query` had additional rejected-correct
+opportunities, but also many intent-correct-slot-wrong cases. The target patch
+therefore lowered the runtime threshold only behind stricter target-specific
+veto hooks for `email_query`, `audio_volume_*`, and `weather_query`.
+
+Patch stack:
+
+```bash
+docs/experiments/patches/l2_target_email_audio_veto_r3.patch
+docs/experiments/patches/l2_target_weather_threshold_delta_r1.patch
+```
+
+During the first run we found a harness bug before interpreting the model
+result: multi-round target-evolve selected a `best_round`, but
+`promote-target` copied the final workspace `target/`. The fix is:
+
+- every target round snapshots `target/` to `rounds/round_NNN_target/`;
+- each round payload records `target_snapshot`;
+- promotion copies the selected round snapshot;
+- when private selection metrics tie, `best_round` uses visible inner
+  validation as a tie-break and then prefers the later round.
+
+The fixed 500-row inner run:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-evolve-weather-veto-r2 \
+  --budget-profile fixed-inner \
+  --rounds 3 \
+  --mode dry-run \
+  --dry-run-patch docs/experiments/patches/l2_target_email_audio_veto_r3.patch \
+  --dry-run-patch docs/experiments/patches/l2_target_weather_threshold_delta_r1.patch \
+  --max-traces 500
+```
+
+Inner result:
+
+- Best round: 3, `target_snapshot=rounds/round_003_target`.
+- Inner validation: 4 accepted / 4 correct / 0 wrong.
+- Private selection: 0 accepted / 0 wrong, so `adoption_decision.adopted=false`.
+- Private promotion: 1 accepted / 1 correct / 0 wrong.
+
+The candidate was explicitly staged for outer replay, not inner-adopted:
+
+```bash
+uv run edge-mvp l2 promote-target \
+  --target-run runs/l2-target-evolve-weather-veto-r2 \
+  --run-dir runs/l2-target-weather-veto-3k-r2 \
+  --allow-non-adopted
+
+uv run edge-mvp run \
+  --run-dir runs/l2-target-weather-veto-3k-r2 \
+  --max-requests 3000 \
+  --compile-every 999999 \
+  --teacher cache \
+  --data-dir data/processed/massive_en_us
+
+uv run edge-mvp l2 replay-target \
+  --run-dir runs/l2-target-weather-veto-3k-r2 \
+  --traces runs/l2-target-weather-veto-3k-r2/traces.jsonl \
+  --out runs/l2-target-weather-veto-3k-r2/reports/l2_target_outer_replay.json
+```
+
+Outer replay result:
+
+- Baseline parent: `L0=577, L1=19, L2=0, L3=0, L4=2404`.
+- Candidate: `L0=577, L1=19, L2=37, L3=0, L4=2367`.
+- Candidate frame EM: `1.0`.
+- L2 accepted accuracy: `1.0`.
+- L2 wrong accept rate: `0.0`.
+- Cost estimate: `0.801333` to `0.789062` USD / 100 requests.
+- Decision: promoted, `objective improved within gates`.
+
+Failed r1 diagnostic:
+
+- Before adding email temporal veto, the same patch accepted 38 L2 requests but
+  had one wrong accept:
+  `find unread emails received from peter today olly` produced
+  `email_query(person=peter)` and missed `date=today`.
+- The fix is intentionally conservative: if an `email_query` utterance contains
+  visible temporal terms such as `today`, `tomorrow`, `yesterday`, `week`,
+  `last`, or `recently`, target code abstains instead of accepting a partial
+  person-only frame.
+
+Interpretation:
+
+- The method is now doing what the design intended: target-dependent code lives
+  in the isolated target artifact, Darjeeling core remains dataset-independent,
+  and final adoption is decided by e2e replay.
+- The selection holdout is still too sparse for narrow target patches: 0
+  selection accepts blocked inner adoption even though 3k replay succeeded.
+  This remains a design issue for inner-loop model selection. A future version
+  should consider larger or stratified target selection holdouts, while keeping
+  promotion authority with outer e2e replay.

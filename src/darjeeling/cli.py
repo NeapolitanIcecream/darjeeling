@@ -872,10 +872,23 @@ def _promote_l2_target_run(
     else:
         raise ValueError("L2 target run is not adopted; refusing to promote")
 
+    if selected_round_payload is None:
+        selected_round_payload = next(
+            (
+                round_payload
+                for round_payload in summary.get("rounds", [])
+                if round_payload.get("round") == selected_round
+            ),
+            None,
+        )
     workspace_root = target_run / "workspace" / "l2_target"
     if not workspace_root.exists() and summary.get("workspace"):
         workspace_root = Path(str(summary["workspace"]))
-    target_dir = workspace_root / "target"
+    target_dir = _l2_target_dir_for_selected_round(
+        target_run=target_run,
+        workspace_root=workspace_root,
+        selected_round_payload=selected_round_payload,
+    )
     target_module_path = target_dir / "target_l2.py"
     train_path = workspace_root / "data" / "train.jsonl"
     if not target_module_path.exists():
@@ -918,15 +931,6 @@ def _promote_l2_target_run(
         promoted_target_dir / "target_l2.py",
     )
 
-    if selected_round_payload is None:
-        selected_round_payload = next(
-            (
-                round_payload
-                for round_payload in summary.get("rounds", [])
-                if round_payload.get("round") == selected_round
-            ),
-            None,
-        )
     candidate_metrics = (
         dict(current_manifest.candidate_metrics) if current_manifest is not None else {}
     )
@@ -1005,6 +1009,27 @@ def _promote_l2_target_run(
     )
     store.promote(manifest)
     return ArtifactStore(run_dir / "artifacts").load_current_manifest() or manifest
+
+
+def _l2_target_dir_for_selected_round(
+    *,
+    target_run: Path,
+    workspace_root: Path,
+    selected_round_payload: dict[str, Any] | None,
+) -> Path:
+    snapshot = (
+        selected_round_payload.get("target_snapshot")
+        if isinstance(selected_round_payload, dict)
+        else None
+    )
+    if isinstance(snapshot, str) and snapshot:
+        snapshot_path = Path(snapshot)
+        if not snapshot_path.is_absolute():
+            snapshot_path = target_run / snapshot_path
+        if not snapshot_path.exists():
+            raise FileNotFoundError(f"L2 target round snapshot is missing: {snapshot_path}")
+        return snapshot_path
+    return workspace_root / "target"
 
 
 @l2_app.command("replay-target")
