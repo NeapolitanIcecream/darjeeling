@@ -154,6 +154,41 @@ def test_l2_guard_optimizer_prefers_zero_observed_wrong_accepts() -> None:
     assert selection.evaluation.wrong_accepts == 0
 
 
+def test_l2_guard_optimizer_predicts_once_per_labeled_trace() -> None:
+    predictions = {
+        f"utt-{index}": SimpleNamespace(
+            frame=Frame(intent="music_play" if index % 2 == 0 else "alarm_set"),
+            guard_probability=0.50 + index / 100,
+        )
+        for index in range(10)
+    }
+    calls = []
+
+    def predict(utterance):
+        calls.append(utterance)
+        return predictions[utterance]
+
+    bundle = SimpleNamespace(predict=predict)
+    traces = [
+        _teacher_trace(
+            f"r{index}",
+            f"utt-{index}",
+            "music_play" if index % 2 == 0 else "alarm_set",
+        )
+        for index in range(10)
+    ]
+
+    selection = select_l2_accept_threshold(
+        bundle,
+        traces,
+        grid=[0.5, 0.6, 0.7],
+        max_wrong_accept_rate=0.0,
+    )
+
+    assert selection is not None
+    assert calls == [trace.utterance for trace in traces]
+
+
 def test_l2_unguarded_evaluation_reports_threshold_zero_accuracy() -> None:
     predictions = {
         "correct": SimpleNamespace(

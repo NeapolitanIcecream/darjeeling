@@ -60,6 +60,12 @@ class L2ThresholdSelection:
     candidates: list[L2ThresholdEvaluation]
 
 
+@dataclass(frozen=True)
+class L2PredictionRecord:
+    guard_probability: float
+    correct: bool
+
+
 def threshold_grid(start: float = 0.7, stop: float = 0.98, steps: int = 8) -> list[float]:
     if steps <= 1:
         return [stop]
@@ -119,10 +125,11 @@ def select_l2_accept_threshold(
     if not labeled:
         return None
 
+    prediction_records = _l2_prediction_records(bundle, labeled)
     thresholds = grid or threshold_grid()
-    thresholds = _augment_thresholds_from_predictions(bundle, labeled, thresholds)
+    thresholds = _augment_thresholds_from_records(prediction_records, thresholds)
     candidates = [
-        evaluate_l2_threshold(bundle, labeled, threshold=threshold)
+        evaluate_l2_threshold_records(prediction_records, threshold=threshold)
         for threshold in thresholds
     ]
     eligible = [
@@ -172,15 +179,13 @@ def select_l2_accept_threshold(
     )
 
 
-def _augment_thresholds_from_predictions(
-    bundle: Any,
-    traces: list[TeacherTrace],
+def _augment_thresholds_from_records(
+    records: list[L2PredictionRecord],
     thresholds: list[float],
 ) -> list[float]:
     augmented = {round(_clamp_threshold(threshold), 6) for threshold in thresholds}
-    for trace in traces:
-        prediction = bundle.predict(trace.utterance)
-        probability = _clamp_threshold(float(prediction.guard_probability))
+    for record in records:
+        probability = _clamp_threshold(record.guard_probability)
         augmented.add(round(probability, 6))
         augmented.add(round(_clamp_threshold(probability + 1e-6), 6))
     return sorted(augmented)
@@ -198,19 +203,45 @@ def evaluate_l2_threshold(
     *,
     threshold: float,
 ) -> L2ThresholdEvaluation:
+    return evaluate_l2_threshold_records(
+        _l2_prediction_records(bundle, traces),
+        threshold=threshold,
+    )
+
+
+def _l2_prediction_records(
+    bundle: Any,
+    traces: list[TeacherTrace],
+) -> list[L2PredictionRecord]:
+    records: list[L2PredictionRecord] = []
+    for trace in traces:
+        if trace.teacher_frame is None:
+            continue
+        prediction = bundle.predict(trace.utterance)
+        records.append(
+            L2PredictionRecord(
+                guard_probability=_clamp_threshold(float(prediction.guard_probability)),
+                correct=prediction.frame == trace.teacher_frame,
+            )
+        )
+    return records
+
+
+def evaluate_l2_threshold_records(
+    records: list[L2PredictionRecord],
+    *,
+    threshold: float,
+) -> L2ThresholdEvaluation:
     total = 0
     accepted = 0
     correct_accepts = 0
     wrong_accepts = 0
-    for trace in traces:
-        if trace.teacher_frame is None:
-            continue
+    for record in records:
         total += 1
-        prediction = bundle.predict(trace.utterance)
-        if prediction.guard_probability < threshold:
+        if record.guard_probability < threshold:
             continue
         accepted += 1
-        if prediction.frame == trace.teacher_frame:
+        if record.correct:
             correct_accepts += 1
         else:
             wrong_accepts += 1

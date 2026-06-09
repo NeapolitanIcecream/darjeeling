@@ -103,6 +103,7 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 
 - grid 默认覆盖 `0.70..0.98`。
 - 搜索会额外加入 teacher_train 上观测到的 guard probability 及其相邻阈值，避免安全阈值落在粗 grid 间隙时被跳过。
+- 搜索必须先缓存每条 trace 的 L2 prediction，再在缓存上评估所有 threshold；不能为每个 threshold 重新调用 `bundle.predict()`，否则样本扩大后会退化为 O(N²)。
 - 搜索输入只来自 `teacher_train`，不读取 promotion holdout 或 MASSIVE gold。
 - 先过滤 `wrong_accept_rate <= l2_max_wrong_accept_rate` 且 `accepted_accuracy >= l2_min_guarded_accuracy` 的候选。
 - 若存在非零覆盖且 train-window zero-observed-wrong 的候选，优先在这组里选 coverage 最高的阈值；否则再在 eligible 候选里按 coverage、accepted accuracy、wrong accept、threshold 排序。
