@@ -96,6 +96,10 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert summary["evidence_policy"]["quality_claim"] == "not_supported_by_this_run"
     assert summary["evidence_policy"]["fixed_trace_snapshot_inner_loop"] is True
     assert summary["evidence_policy"]["outer_replay_cadence_bound"] is False
+    assert summary["evidence_policy"]["teacher_labeled_traces"] == 12
+    assert summary["evidence_policy"]["required_for_quality_claim"][
+        "min_teacher_labeled_traces"
+    ] == 500
     assert "standard profile is cost-capped" in summary["evidence_policy"][
         "blocking_reasons"
     ][0]
@@ -917,6 +921,17 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
             )
         )
     )
+    fixed_inner_small_snapshot_evidence = (  # noqa: SLF001
+        l2_target_evolution._target_evidence_policy_payload(
+            L2TargetEvolutionConfig(
+                source_repo_dir=Path.cwd(),
+                job_dir=Path("unused"),
+                budget_profile="fixed-inner",
+                rounds=48,
+            ),
+            teacher_labeled_traces=120,
+        )
+    )
     fixed_inner_quality_evidence = (  # noqa: SLF001
         l2_target_evolution._target_evidence_policy_payload(
             L2TargetEvolutionConfig(
@@ -925,7 +940,8 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
                 mode="codex-cli",
                 budget_profile="fixed-inner",
                 rounds=48,
-            )
+            ),
+            teacher_labeled_traces=500,
         )
     )
     assert standard_codex_intent["profile_role"] == "cost_capped_default"
@@ -936,6 +952,8 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
     assert standard_evidence["quality_claim_supported"] is False
     assert fixed_inner_short_evidence["evidence_class"] == "short_fixed_snapshot_probe"
     assert fixed_inner_short_evidence["quality_claim_supported"] is False
+    assert fixed_inner_small_snapshot_evidence["evidence_class"] == "small_snapshot_probe"
+    assert fixed_inner_small_snapshot_evidence["quality_claim_supported"] is False
     assert fixed_inner_quality_evidence["evidence_class"] == "fixed_snapshot_research"
     assert fixed_inner_quality_evidence["quality_claim_supported"] is True
     assert fixed_inner_intent["effective_max_agent_rounds"] == 16

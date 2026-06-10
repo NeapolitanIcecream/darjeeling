@@ -20,6 +20,8 @@ The policy separates profile intent from evidence strength:
 - `standard` is a `cost_capped_probe`.
 - `smoke` is a `connectivity_smoke`.
 - Short explicit `fixed-inner` budgets are `short_fixed_snapshot_probe`.
+- Fixed-inner runs with fewer than 500 teacher-labeled traces are
+  `small_snapshot_probe`.
 - Only sufficiently budgeted `fixed-inner` runs are `fixed_snapshot_research`.
 
 Even `fixed_snapshot_research` is not adoption; it only becomes quality evidence
@@ -50,6 +52,7 @@ Result:
 - `evidence_policy.evidence_class=short_fixed_snapshot_probe`
 - `evidence_policy.quality_claim_supported=false`
 - `evidence_policy.blocking_reasons=["round budget 2 is below quality minimum 16"]`
+- `evidence_policy.teacher_labeled_traces=80`
 - `round_state.json` and `objective.json` carry the same evidence class.
 - Agent-visible workspace data contains train and visible validation folds only;
   `selection_holdout` and `promotion_holdout` are not present in workspace state

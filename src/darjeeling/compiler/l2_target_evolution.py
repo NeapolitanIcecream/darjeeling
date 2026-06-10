@@ -102,6 +102,9 @@ def run_l2_target_evolution(
         policy=config.split_policy,
         visible_validation_folds=config.visible_validation_folds,
     )
+    teacher_labeled_trace_count = sum(
+        1 for trace in traces if trace.teacher_frame is not None
+    )
     private_paths = {
         "selection_holdout": private_dir / "selection_holdout.jsonl",
         "promotion_holdout": private_dir / "promotion_holdout.jsonl",
@@ -150,6 +153,7 @@ def run_l2_target_evolution(
             config=config,
             round_index=round_index,
             state_kind="before_round",
+            teacher_labeled_traces=teacher_labeled_trace_count,
             baseline=baseline,
             round_results=round_results,
             no_inner_improvement_rounds=no_inner_improvement_rounds,
@@ -350,6 +354,7 @@ def run_l2_target_evolution(
         config=config,
         round_index=len(round_results) + 1,
         state_kind="final",
+        teacher_labeled_traces=teacher_labeled_trace_count,
         baseline=baseline,
         round_results=round_results,
         no_inner_improvement_rounds=no_inner_improvement_rounds,
@@ -373,6 +378,7 @@ def run_l2_target_evolution(
             max_agent_rounds=max_agent_rounds,
             rounds_completed=len(round_results),
             stop_reason=stop_reason,
+            teacher_labeled_traces=teacher_labeled_trace_count,
         ),
         "agent_budget": _agent_budget_payload(
             config=config,
@@ -382,9 +388,7 @@ def run_l2_target_evolution(
         "loop_cadence": {
             "kind": "fixed_trace_snapshot_inner_loop",
             "outer_replay_cadence_bound": False,
-            "teacher_labeled_traces": sum(
-                1 for trace in traces if trace.teacher_frame is not None
-            ),
+            "teacher_labeled_traces": teacher_labeled_trace_count,
             "note": (
                 "target rounds reuse this fixed split; collecting another stream prefix "
                 "is not part of the inner loop"
@@ -1547,6 +1551,7 @@ def _write_target_state_files(
     config: L2TargetEvolutionConfig,
     round_index: int,
     state_kind: Literal["before_round", "final"],
+    teacher_labeled_traces: int,
     baseline: dict[str, Any],
     round_results: list[dict[str, Any]],
     no_inner_improvement_rounds: int,
@@ -1554,7 +1559,10 @@ def _write_target_state_files(
     agent_rounds_succeeded: int,
 ) -> None:
     data_dir = workspace_root / "data"
-    objective = _target_objective_payload(config)
+    objective = _target_objective_payload(
+        config,
+        teacher_labeled_traces=teacher_labeled_traces,
+    )
     state = {
         "schema_version": "l2-target-round-state-v1",
         "state_kind": state_kind,
@@ -1565,6 +1573,7 @@ def _write_target_state_files(
         "evidence_policy": _target_evidence_policy_payload(
             config,
             rounds_completed=len(round_results),
+            teacher_labeled_traces=teacher_labeled_traces,
         ),
         "agent_budget": _agent_budget_payload(
             config=config,
@@ -1727,6 +1736,7 @@ def _target_evidence_policy_payload(
     max_agent_rounds: int | None = None,
     rounds_completed: int | None = None,
     stop_reason: str | None = None,
+    teacher_labeled_traces: int | None = None,
 ) -> dict[str, Any]:
     resolved_max_agent_rounds = (
         _effective_max_agent_rounds(config)
@@ -1735,6 +1745,7 @@ def _target_evidence_policy_payload(
     )
     min_quality_rounds = 16
     min_quality_codex_agent_rounds = 8
+    min_quality_teacher_labeled_traces = 500
     blocking_reasons: list[str] = []
 
     if config.budget_profile == "smoke":
@@ -1749,6 +1760,16 @@ def _target_evidence_policy_payload(
         evidence_class = "short_fixed_snapshot_probe"
         blocking_reasons.append(
             f"round budget {config.rounds} is below quality minimum {min_quality_rounds}"
+        )
+    elif (
+        teacher_labeled_traces is not None
+        and teacher_labeled_traces < min_quality_teacher_labeled_traces
+    ):
+        evidence_class = "small_snapshot_probe"
+        blocking_reasons.append(
+            "teacher-labeled snapshot size "
+            f"{teacher_labeled_traces} is below quality minimum "
+            f"{min_quality_teacher_labeled_traces}"
         )
     elif (
         config.mode == "codex-cli"
@@ -1797,6 +1818,7 @@ def _target_evidence_policy_payload(
             "budget_profile": "fixed-inner",
             "min_rounds_requested": min_quality_rounds,
             "min_codex_cli_agent_rounds": min_quality_codex_agent_rounds,
+            "min_teacher_labeled_traces": min_quality_teacher_labeled_traces,
             "requires_private_selection_gate": True,
             "requires_private_promotion_gate": True,
             "requires_outer_replay": True,
@@ -1807,6 +1829,7 @@ def _target_evidence_policy_payload(
         "rounds_requested": config.rounds,
         "rounds_completed": rounds_completed,
         "stop_reason": stop_reason,
+        "teacher_labeled_traces": teacher_labeled_traces,
         "fixed_trace_snapshot_inner_loop": True,
         "outer_replay_cadence_bound": False,
         "effective_max_agent_rounds": resolved_max_agent_rounds,
@@ -1828,12 +1851,19 @@ def _effective_max_agent_rounds(config: L2TargetEvolutionConfig) -> int | None:
     return 1
 
 
-def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]:
+def _target_objective_payload(
+    config: L2TargetEvolutionConfig,
+    *,
+    teacher_labeled_traces: int | None = None,
+) -> dict[str, Any]:
     return {
         "schema_version": "l2-target-objective-v1",
         "primary_objective": "increase safe L2 accepts on unseen target traffic",
         "budget_policy": _target_budget_policy_payload(config),
-        "evidence_policy": _target_evidence_policy_payload(config),
+        "evidence_policy": _target_evidence_policy_payload(
+            config,
+            teacher_labeled_traces=teacher_labeled_traces,
+        ),
         "agent_budget": _agent_budget_payload(
             config=config,
             agent_rounds_started=0,
