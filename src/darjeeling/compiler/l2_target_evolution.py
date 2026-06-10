@@ -1064,6 +1064,19 @@ def _aggregate_visible_cross_audit_metrics(
             if isinstance(metric.get("safety_backlog"), dict)
         ],
     )
+    slot_risk_backlog = _aggregate_slot_risk_backlogs(
+        split="visible_cross_audit",
+        validation_size=validation_size,
+        backlogs=[
+            metric["family_diagnostics"]["slot_risk_backlog"]
+            for metric in fold_metrics
+            if isinstance(metric.get("family_diagnostics"), dict)
+            and isinstance(
+                metric["family_diagnostics"].get("slot_risk_backlog"),
+                dict,
+            )
+        ],
+    )
     return {
         "split": "visible_cross_audit",
         "train_size": visible_size,
@@ -1084,6 +1097,7 @@ def _aggregate_visible_cross_audit_metrics(
         "near_miss_examples": near_miss_examples,
         "family_diagnostics": None,
         "safety_backlog": safety_backlog,
+        "slot_risk_backlog": slot_risk_backlog,
         "folds": [_visible_metric_summary(metric) for metric in fold_metrics],
     }
 
@@ -1164,6 +1178,84 @@ def _aggregate_safety_backlogs(
         "empty_reason": None
         if items
         else _safety_backlog_empty_reason(split),
+    }
+
+
+def _aggregate_slot_risk_backlogs(
+    *,
+    split: str,
+    validation_size: int,
+    backlogs: list[dict[str, Any]],
+    limit: int = 8,
+) -> dict[str, Any]:
+    by_intent: dict[str, dict[str, Any]] = {}
+    for backlog in backlogs:
+        for item in backlog.get("items", []):
+            intent = str(item["teacher_intent"])
+            aggregate = by_intent.setdefault(
+                intent,
+                {
+                    "teacher_intent": intent,
+                    "total": 0,
+                    "accepted_correct": 0,
+                    "accepted_wrong": 0,
+                    "intent_correct_slot_wrong": 0,
+                    "max_slot_mismatch_guard_probability": 0.0,
+                    "top_predicted_intents": item.get("top_predicted_intents", []),
+                    "slot_mismatch_examples": [],
+                    "recommended_action": item.get(
+                        "recommended_action",
+                        (
+                            "add precise postprocess or abstain rules for visible "
+                            "slot-risk patterns before broad coverage expansion"
+                        ),
+                    ),
+                },
+            )
+            aggregate["total"] += int(item.get("total") or 0)
+            aggregate["accepted_correct"] += int(item.get("accepted_correct") or 0)
+            aggregate["accepted_wrong"] += int(item.get("accepted_wrong") or 0)
+            aggregate["intent_correct_slot_wrong"] += int(
+                item.get("intent_correct_slot_wrong") or 0,
+            )
+            aggregate["max_slot_mismatch_guard_probability"] = max(
+                float(aggregate["max_slot_mismatch_guard_probability"]),
+                float(item.get("max_slot_mismatch_guard_probability") or 0.0),
+            )
+            aggregate["slot_mismatch_examples"].extend(
+                item.get("slot_mismatch_examples", []),
+            )
+    items = []
+    for aggregate in by_intent.values():
+        items.append(
+            {
+                **aggregate,
+                "slot_mismatch_examples": _top_guard_examples(
+                    aggregate["slot_mismatch_examples"],
+                    limit=3,
+                ),
+            },
+        )
+    items.sort(
+        key=lambda item: (
+            int(item["intent_correct_slot_wrong"]),
+            float(item["max_slot_mismatch_guard_probability"]),
+            int(item["accepted_wrong"]),
+            item["teacher_intent"],
+        ),
+        reverse=True,
+    )
+    return {
+        "schema_version": "l2-target-slot-risk-backlog-v1",
+        "split": split,
+        "validation_size": validation_size,
+        "visibility": _safety_backlog_visibility(split),
+        "priority": "review_visible_slot_mismatches_after_accepted_wrong_backlog",
+        "item_limit": limit,
+        "items": items[:limit],
+        "empty_reason": None
+        if items
+        else _slot_risk_backlog_empty_reason(split),
     }
 
 
@@ -1499,6 +1591,11 @@ def _family_diagnostics_payload(
         validation_size=validation_size,
         families=families,
     )
+    slot_risk_backlog = _slot_risk_backlog_payload(
+        split=split,
+        validation_size=validation_size,
+        families=families,
+    )
     families.sort(
         key=lambda item: (
             item["opportunity_score"],
@@ -1516,6 +1613,7 @@ def _family_diagnostics_payload(
         "family_limit": limit,
         "families": families[:limit],
         "safety_backlog": safety_backlog,
+        "slot_risk_backlog": slot_risk_backlog,
     }
 
 
@@ -1620,6 +1718,69 @@ def _safety_backlog_item(family: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _slot_risk_backlog_payload(
+    *,
+    split: str,
+    validation_size: int,
+    families: list[dict[str, Any]],
+    limit: int = 8,
+) -> dict[str, Any]:
+    items = [
+        _slot_risk_backlog_item(family)
+        for family in families
+        if int(family["intent_correct_slot_wrong"]) > 0
+    ]
+    items.sort(
+        key=lambda item: (
+            int(item["intent_correct_slot_wrong"]),
+            float(item["max_slot_mismatch_guard_probability"]),
+            int(item["accepted_wrong"]),
+            item["teacher_intent"],
+        ),
+        reverse=True,
+    )
+    return {
+        "schema_version": "l2-target-slot-risk-backlog-v1",
+        "split": split,
+        "validation_size": validation_size,
+        "visibility": _safety_backlog_visibility(split),
+        "priority": "review_visible_slot_mismatches_after_accepted_wrong_backlog",
+        "item_limit": limit,
+        "items": items[:limit],
+        "empty_reason": None
+        if items
+        else _slot_risk_backlog_empty_reason(split),
+    }
+
+
+def _slot_risk_backlog_empty_reason(split: str) -> str:
+    if split in {"selection_holdout", "promotion_holdout"}:
+        return "no_private_slot_risk_families"
+    return "no_visible_slot_risk_families"
+
+
+def _slot_risk_backlog_item(family: dict[str, Any]) -> dict[str, Any]:
+    slot_examples = family["examples"].get("intent_correct_slot_wrong", [])
+    max_slot_guard = max(
+        (float(example["guard_probability"]) for example in slot_examples),
+        default=0.0,
+    )
+    return {
+        "teacher_intent": family["teacher_intent"],
+        "total": int(family["total"]),
+        "accepted_correct": int(family["accepted_correct"]),
+        "accepted_wrong": int(family["accepted_wrong"]),
+        "intent_correct_slot_wrong": int(family["intent_correct_slot_wrong"]),
+        "max_slot_mismatch_guard_probability": max_slot_guard,
+        "top_predicted_intents": family["top_predicted_intents"],
+        "slot_mismatch_examples": slot_examples,
+        "recommended_action": (
+            "add precise postprocess or abstain rules for visible slot-risk patterns "
+            "before broad coverage expansion"
+        ),
+    }
+
+
 def _target_diagnostics_payload(
     *,
     state_kind: Literal["before_round", "final"],
@@ -1653,16 +1814,26 @@ def _target_diagnostics_payload(
             "family_diagnostics",
         ),
         "baseline_safety_backlog": _metric_safety_backlog(baseline["inner_validation"]),
+        "baseline_slot_risk_backlog": _metric_slot_risk_backlog(
+            baseline["inner_validation"],
+        ),
         "baseline_train_audit": _metric_family_diagnostics(
             _candidate_train_audit(baseline),
         ),
         "baseline_train_audit_safety_backlog": _metric_safety_backlog(
             _candidate_train_audit(baseline),
         ),
+        "baseline_train_audit_slot_risk_backlog": _metric_slot_risk_backlog(
+            _candidate_train_audit(baseline),
+        ),
         "latest_inner_validation": latest_metric.get("family_diagnostics"),
         "latest_safety_backlog": _metric_safety_backlog(latest_metric),
+        "latest_slot_risk_backlog": _metric_slot_risk_backlog(latest_metric),
         "latest_train_audit": _metric_family_diagnostics(latest_train_audit),
         "latest_train_audit_safety_backlog": _metric_safety_backlog(
+            latest_train_audit or {},
+        ),
+        "latest_train_audit_slot_risk_backlog": _metric_slot_risk_backlog(
             latest_train_audit or {},
         ),
         "baseline_visible_cross_audit": _metric_family_diagnostics(
@@ -1671,8 +1842,14 @@ def _target_diagnostics_payload(
         "baseline_visible_cross_audit_safety_backlog": _metric_safety_backlog(
             _candidate_visible_cross_audit(baseline) or {},
         ),
+        "baseline_visible_cross_audit_slot_risk_backlog": _metric_slot_risk_backlog(
+            _candidate_visible_cross_audit(baseline) or {},
+        ),
         "latest_visible_cross_audit": _metric_family_diagnostics(latest_cross_audit),
         "latest_visible_cross_audit_safety_backlog": _metric_safety_backlog(
+            latest_cross_audit or {},
+        ),
+        "latest_visible_cross_audit_slot_risk_backlog": _metric_slot_risk_backlog(
             latest_cross_audit or {},
         ),
         "round_history": [
@@ -1685,10 +1862,19 @@ def _target_diagnostics_payload(
                 "safety_backlog": _metric_safety_backlog(
                     round_result["inner_validation"],
                 ),
+                "slot_risk_backlog": _metric_slot_risk_backlog(
+                    round_result["inner_validation"],
+                ),
                 "train_audit_safety_backlog": _metric_safety_backlog(
                     _candidate_train_audit(round_result),
                 ),
+                "train_audit_slot_risk_backlog": _metric_slot_risk_backlog(
+                    _candidate_train_audit(round_result),
+                ),
                 "visible_cross_audit_safety_backlog": _metric_safety_backlog(
+                    _candidate_visible_cross_audit(round_result) or {},
+                ),
+                "visible_cross_audit_slot_risk_backlog": _metric_slot_risk_backlog(
                     _candidate_visible_cross_audit(round_result) or {},
                 ),
             }
@@ -1727,6 +1913,17 @@ def _metric_safety_backlog(metric: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(family_diagnostics, dict):
         return None
     nested_backlog = family_diagnostics.get("safety_backlog")
+    return nested_backlog if isinstance(nested_backlog, dict) else None
+
+
+def _metric_slot_risk_backlog(metric: dict[str, Any]) -> dict[str, Any] | None:
+    slot_risk_backlog = metric.get("slot_risk_backlog")
+    if isinstance(slot_risk_backlog, dict):
+        return slot_risk_backlog
+    family_diagnostics = metric.get("family_diagnostics")
+    if not isinstance(family_diagnostics, dict):
+        return None
+    nested_backlog = family_diagnostics.get("slot_risk_backlog")
     return nested_backlog if isinstance(nested_backlog, dict) else None
 
 
@@ -2429,6 +2626,7 @@ def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
         "near_miss_examples": metric.get("near_miss_examples", []),
         "family_diagnostics": metric.get("family_diagnostics"),
         "safety_backlog": _metric_safety_backlog(metric),
+        "slot_risk_backlog": _metric_slot_risk_backlog(metric),
         "visible_cross_audit_folds_completed": metric.get(
             "visible_cross_audit_folds_completed",
         ),
@@ -3053,6 +3251,10 @@ def _target_program_text() -> str:
             "  opportunities and risks by teacher intent family.",
             "  Read `latest_safety_backlog` first; if it has items, clear those",
             "  visible accepted-wrong families before working on near-miss coverage.",
+            "  If accepted-wrong backlogs are empty, read `latest_slot_risk_backlog`",
+            "  and related train/cross-audit slot-risk queues before stopping;",
+            "  they show visible intent-correct slot mismatches that may become",
+            "  accepted wrongs under broader coverage.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -3089,6 +3291,9 @@ def _target_program_text() -> str:
             "When `latest_safety_backlog.items` is non-empty, fix those visible",
             "accepted-wrong families before coverage expansion or broad threshold",
             "changes.",
+            "When accepted-wrong backlogs are empty, review the visible slot-risk",
+            "backlogs before stopping; prefer precise postprocess or abstention",
+            "rules for repeated slot mismatches over broad threshold changes.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
             "abstention or target-local vetoes over accepting predictions that",
             "contradict visible teacher labels.",

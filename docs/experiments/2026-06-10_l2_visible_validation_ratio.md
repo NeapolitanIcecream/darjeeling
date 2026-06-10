@@ -313,3 +313,114 @@ Conclusion:
   solving safety by simply raising the threshold until visible coverage is too
   thin. Structural target work should preserve at least the visible support
   floor while clearing visible validation and train-audit wrong accepts.
+
+## Visible support live rerun
+
+After committing the visible support gate, I reran the live agent-session on the
+same fixed snapshot:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-visible-support-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Agent session: completed, `1` started, `1` succeeded.
+- Split and effective visible ratio matched the previous live runs.
+- Baseline visible validation: `33` accepted, `25` correct, `8` wrong; gate
+  failed.
+- Final visible validation: `36` accepted, `36` correct, `0` wrong; gate passed.
+- Visible support passed: `36` correct accepts, required `10`.
+- Final train audit: `97` accepted, `97` correct, `0` wrong; train-audit safety
+  passed.
+- Final visible cross-audit: `36` accepted, `36` correct, `0` wrong; gate
+  passed.
+- Private selection: `8` accepted, `6` correct, `2` wrong; gate failed.
+- Private promotion: `11` accepted, `8` correct, `3` wrong; gate failed.
+- `selection_gate_diagnosis=selection_wrong_accepts_for_inner_passing_rounds`.
+- Adoption remained `adopted=false`.
+
+Interpretation:
+
+- The support gate worked: the agent no longer solved safety by collapsing
+  visible coverage. It retained more visible correct accepts than the baseline
+  while clearing visible validation, train audit, and cross-audit wrong accepts.
+- The remaining failure is private hidden wrong accepts, not sparse selection.
+  The private wrongs are slot/schema boundary errors, but all visible
+  accepted-wrong backlogs are empty.
+- This suggests the visible diagnostics need a clearer "slot risk" queue for
+  intent-correct slot mismatches after accepted-wrong backlog is empty. The
+  data already exists in `family_diagnostics`; the problem is presentation and
+  priority, not private leakage.
+
+## Slot-risk diagnostics
+
+The follow-up implementation adds `slot_risk_backlog` alongside the existing
+`safety_backlog` in family diagnostics. It is derived only from visible
+validation, visible train audit, and visible cross-audit metrics. It ranks
+families with `intent_correct_slot_wrong` examples so the agent has a visible
+queue to inspect before stopping or expanding coverage after accepted-wrong
+backlogs are empty.
+
+New agent-visible keys include:
+
+- `latest_slot_risk_backlog`,
+- `latest_train_audit_slot_risk_backlog`,
+- `latest_visible_cross_audit_slot_risk_backlog`.
+
+This does not change candidate selection/adoption gates and does not expose
+private rows or private aggregate feedback.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-slot-risk-diagnostics-smoke-r1/job \
+  --max-traces 1000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+```
+
+Result:
+
+- Evidence class: `short_fixed_snapshot_probe`.
+- `target_diagnostics.json` wrote all new slot-risk backlog keys.
+- `latest_slot_risk_backlog`, `latest_train_audit_slot_risk_backlog`, and
+  `latest_visible_cross_audit_slot_risk_backlog` all used
+  `visibility=visible_validation_only`.
+- The diagnostics file did not contain `selection_holdout` or
+  `promotion_holdout`.
+- The top visible slot-risk families were calendar-oriented in this short
+  smoke; this is expected for an unmodified baseline and only verifies that the
+  queue is populated and visible-only.
+
+Next live-agent work should use these slot-risk queues after clearing
+accepted-wrong backlogs. A target should not stop just because visible accepted
+wrongs are gone if high-priority visible slot-risk families remain unaddressed.

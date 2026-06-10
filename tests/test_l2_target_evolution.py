@@ -309,7 +309,16 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert target_diagnostics["baseline_train_audit_safety_backlog"]["schema_version"] == (
         "l2-target-safety-backlog-v1"
     )
+    assert target_diagnostics["baseline_slot_risk_backlog"]["schema_version"] == (
+        "l2-target-slot-risk-backlog-v1"
+    )
+    assert target_diagnostics["baseline_train_audit_slot_risk_backlog"][
+        "schema_version"
+    ] == "l2-target-slot-risk-backlog-v1"
     assert "latest_train_audit_safety_backlog" in target_diagnostics
+    assert "latest_slot_risk_backlog" in target_diagnostics
+    assert "latest_train_audit_slot_risk_backlog" in target_diagnostics
+    assert "latest_visible_cross_audit_slot_risk_backlog" in target_diagnostics
     assert "latest_safety_backlog" in target_diagnostics
     assert (
         summary["baseline"]["inner_validation"]["family_diagnostics"]["schema_version"]
@@ -437,6 +446,18 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
         item["teacher_intent"] != "calendar_query"
         for item in safety_backlog["items"]
     )
+    slot_risk_backlog = payload["slot_risk_backlog"]
+    assert slot_risk_backlog["schema_version"] == "l2-target-slot-risk-backlog-v1"
+    assert slot_risk_backlog["priority"] == (
+        "review_visible_slot_mismatches_after_accepted_wrong_backlog"
+    )
+    assert [item["teacher_intent"] for item in slot_risk_backlog["items"]] == [
+        "calendar_query",
+        "general_quirky",
+    ]
+    assert slot_risk_backlog["items"][0]["intent_correct_slot_wrong"] == 5
+    assert slot_risk_backlog["items"][1]["slot_mismatch_examples"] == [risky_example]
+    assert "postprocess" in slot_risk_backlog["items"][0]["recommended_action"]
 
 
 def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> None:
@@ -468,6 +489,9 @@ def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> No
     )
 
     assert payload["safety_backlog"]["visibility"] == (
+        "outer_summary_only_not_agent_workspace"
+    )
+    assert payload["slot_risk_backlog"]["visibility"] == (
         "outer_summary_only_not_agent_workspace"
     )
 
