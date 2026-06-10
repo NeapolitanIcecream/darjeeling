@@ -3112,6 +3112,7 @@ def _target_objective_payload(
         "invalid_strategies": [
             "raw coverage increase with lower frame exactness",
             "lowering threshold when visible validation gate fails",
+            "lowering accept_threshold only to raise raw accepts after visible support passes",
             "expanding near-miss coverage while safety_backlog has accepted-wrong items",
             "single-visible-row exact utterance exceptions or request-id memorization",
             "treating a fixed edit/evaluate/search script as the agent plan",
@@ -3123,7 +3124,10 @@ def _target_objective_payload(
         ],
         "allowed_strategies": [
             "target-dependent code derived from visible train and validation-fold files",
-            "config_overrides for bounded L2StudentConfig parameters",
+            (
+                "config_overrides for bounded L2StudentConfig parameters when they "
+                "are needed for support and remain safe under visible audits"
+            ),
             (
                 "agent-invoked Optuna/config search over visible train/validation "
                 "with optional visible cross-audit top-k rerank"
@@ -4138,6 +4142,10 @@ def _target_program_text() -> str:
             "Do not stop with a near-zero-coverage target that only passes by",
             "abstaining from almost everything; keep at least two correct accepts",
             "per visible validation fold before relying on private selection.",
+            "Once visible support passes, do not lower `accept_threshold` or add",
+            "`target/config.json` just to increase raw accepts. Prefer keeping",
+            "target-local veto/postprocess rules and remove threshold-lowering",
+            "config if it is only recovering coverage after safety vetoes.",
             "If visible validation backlog is empty but candidate selection still",
             "fails, use visible cross-audit and train-audit backlogs to design",
             "broader safety rules; do not inspect private holdout rows.",

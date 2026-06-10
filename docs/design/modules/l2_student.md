@@ -195,7 +195,7 @@ Inner L2 target-evolution path：
 - Inner target workspace 使用 `program.md + target/ + system/darjeeling/ + data/ + tools/`：
   - `target/` 是唯一可写 target-dependent L2 runtime code。
   - `runs/` 是 agent/local command scratch output，不会被 promotion。
-  - `target/config.json` 是 target-specific `L2StudentConfig` overrides；它可由 agent 手写，也可由 agent 调用 `tools/search_config.py`/Optuna 产生。`target_l2.py` 保留代码入口，避免 tuner 覆盖 agent 写出的 feature/postprocess 逻辑。
+  - `target/config.json` 是 target-specific `L2StudentConfig` overrides；它可由 agent 手写，也可由 agent 调用 `tools/search_config.py`/Optuna 产生。`target_l2.py` 保留代码入口，避免 tuner 覆盖 agent 写出的 feature/postprocess 逻辑。Config overrides 只能用于恢复必要 support 且必须通过 visible audits；visible support 已达标后，不能仅为了提高 raw accepts 降低 `accept_threshold`，应优先保留 target-local veto/postprocess。
   - `system/darjeeling/` 是只读 core/evaluator copy。
   - `data/train.jsonl` 可训练、可读。
   - `data/inner_validation.jsonl` 可读，用于秒级多轮反馈。

@@ -90,6 +90,8 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `slot_cue_probes` 当前覆盖 podcast/radio 边界、room slot、generic radio-name、radio media-type、calendar date、bare upcoming-events、joke-type 和 spoken volume amount 这些 visible-derived cue risks。它只用于让 agent 在本地看到具体失败，不改变 visible/private gate 定义。
 
+`target/config.json` 可用于 bounded config override，但不是覆盖率目标。Visible support 已达标后，agent 不应仅为提高 raw accepts 降低 `accept_threshold`；这类变更必须保留 visible train-audit、cross-audit 和 cue-probe 安全，否则应移除。
+
 `--target-scope teacher_train|lower_miss` 控制进入 target split 的 teacher-visible traces。默认 `teacher_train` 保持完整 teacher-labeled snapshot；`lower_miss` 只保留 L0/L1 没有接收的 traces，用于把 L2 target-evolution 对齐到真实会到达 L2 的残差分布。Summary、`data/round_state.json` 和 `data/objective.json` 会写 `target_scope`，包括 input count、scoped count 和被 lower layer 接收而排除的数量。该 scope 只改变 visible target data，不让 private selection/promotion holdout 进入 agent workspace。
 
 `target-evolve` 还会在 summary、`data/round_state.json` 和 `data/objective.json` 写入 `evidence_policy`。`standard` 结果标为 `cost_capped_probe`，`smoke` 标为 `connectivity_smoke`，即使失败也不能解释成 L2 evolve 已耗尽。只有足够预算、足够 teacher-labeled snapshot size 且至少完成一次 scoped candidate evaluation 的 `fixed-inner` run 才会标为 `fixed_snapshot_research`，且仍需通过 private selection/promotion gates 和 outer e2e replay 后，才可作为 L2 target-evolution 质量证据。显式把 `fixed-inner` 的 `--rounds` 或 `--max-agent-rounds` 压得过低时，evidence policy 会降级为 short/budget-capped probe；teacher-labeled traces 少于 500 时会降级为 small-snapshot probe；`agent-session` 未启动、命令失败或 workspace scope violation 会降级为 no-launch/incomplete probe。

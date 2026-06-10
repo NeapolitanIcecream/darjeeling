@@ -1285,3 +1285,63 @@ Interpretation:
   `general_joke_superlative_missing_joke_type`.
 - Re-evaluating the expanded target with those new probes produced `10`
   probes, `8` passes, and exactly those `2` failures.
+
+Expanded2-probes live command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-slot-cue-probes-expanded2-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Expanded2-probes live result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `29` accepted, `29` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `29` correct accepts, required `10`.
+- Final train audit: `82` accepted, `82` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `30` accepted, `30` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed: `10/10`.
+- Private selection: `6` accepted, `4` correct, `2` wrong; gate failed.
+- Private promotion: `7` accepted, `6` correct, `1` wrong; gate failed.
+- `selection_decision.selected=false`, `adoption_decision.adopted=false`.
+
+Private wrong accepts:
+
+- Selection: `show me events that are going on right now` was accepted as
+  `recommendation_events {}`, but teacher was `calendar_query {}`.
+- Selection: `start coffee machine` was accepted as `iot_coffee {}`, but
+  teacher required `device_type=coffee machine`.
+- Promotion: `what on my list to do today evening` was accepted as
+  `lists_query {date=today}`, but teacher also required
+  `timeofday=evening`.
+
+Interpretation:
+
+- The extra probes fixed the previously observed 3k replay misses, but the
+  agent added `target/config.json` with `accept_threshold=0.9` to restore more
+  visible coverage. That threshold-lowering changed the risk profile: visible
+  audits and probes passed, but private selection/promotion exposed new wrong
+  accepts.
+- The design response should not be another pile of one-off probes yet. The
+  lower-tax fix is to clarify the existing optimization policy: once visible
+  support passes, `target/config.json` must not lower `accept_threshold` merely
+  to raise raw accepts. The agent should prefer target-local veto/postprocess
+  rules and remove threshold-lowering config that only recovers coverage after
+  safety vetoes.

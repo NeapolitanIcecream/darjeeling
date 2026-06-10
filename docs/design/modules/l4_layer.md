@@ -240,7 +240,7 @@ Agent 权限：
 - 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。
 - 已新增 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve --mode agent-session`，用于新的 target-dependent single-session inner job。该路径当前支持 baseline-first evaluation、one-session Codex launch、fixed split evaluator、target workspace scope gate、private selection/promotion gates 和 target snapshot promotion。
 - `target-evolve` 仍保留 legacy `dry-run`、`local-search` 和 multi-launch `codex-cli` 模式用于 fixture、protocol probe 和兼容测试。下一步真实 L4 experiment 应优先使用 `agent-session`，而不是 legacy `l2_research/candidate` patch harness 或外层 `local-search` mode。
-- `tools/search_config.py` 不消耗 LLM tokens；它只优化可见 train/validation folds，并把 best visible config 写入 `target/config.json`。L4 coding agent 可在同一个 session 内调用它，但 search 结果不能自证 adoption。
+- `tools/search_config.py` 不消耗 LLM tokens；它只优化可见 train/validation folds，并把 best visible config 写入 `target/config.json`。L4 coding agent 可在同一个 session 内调用它，但 search 结果不能自证 adoption。若 visible support 已经达标，agent 不应仅为了提高 raw accepts 降低 `accept_threshold`；这种 config 覆盖扩张容易绕过 target-local veto 的安全意图，必须由 visible train-audit、cross-audit 和 cue probes 共同证明必要且安全。
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
 - Target workspace 也暴露 `postprocess_frame(...)`。当 visible target data 支持稳定解析时，L4 agent 应优先用 postprocess 补全 slot 或修正 frame；这类 target-specific code 只能留在 `target/`，不能进入 Darjeeling core。
 - Adopted target workspace 通过 `edge-mvp l2 promote-target` 进入 manifest，写入 `l2_student` 和 `l2_target` artifacts。Runtime replay 与 compiler offline replay 都加载 target wrapper，避免 target-loop evaluator 与系统 replay 语义分叉。

@@ -379,6 +379,10 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "single-visible-row exact utterance" in strategy
         for strategy in objective["invalid_strategies"]
     )
+    assert any(
+        "lowering accept_threshold only to raise raw accepts" in strategy
+        for strategy in objective["invalid_strategies"]
+    )
     assert "multiple visible supports" in json.dumps(objective["allowed_strategies"])
     assert "Private selection" in program_text
     assert "alone is not success" in program_text
@@ -393,6 +397,8 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "Mandatory cue checks" in program_text
     assert "non-podcast accepted intents containing a podcast cue" in program_text
     assert "slot_cue_probes" in program_text
+    assert "Once visible support passes" in program_text
+    assert "target/config.json" in program_text
     assert target_diagnostics["schema_version"] == "l2-target-diagnostics-v1"
     assert target_diagnostics["visibility"] == "visible_validation_only"
     assert target_diagnostics["visible_slot_cue_summary"]["schema_version"] == (
