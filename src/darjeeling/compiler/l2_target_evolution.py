@@ -1077,6 +1077,19 @@ def _aggregate_visible_cross_audit_metrics(
             )
         ],
     )
+    intent_confusion_backlog = _aggregate_intent_confusion_backlogs(
+        split="visible_cross_audit",
+        validation_size=validation_size,
+        backlogs=[
+            metric["family_diagnostics"]["intent_confusion_backlog"]
+            for metric in fold_metrics
+            if isinstance(metric.get("family_diagnostics"), dict)
+            and isinstance(
+                metric["family_diagnostics"].get("intent_confusion_backlog"),
+                dict,
+            )
+        ],
+    )
     return {
         "split": "visible_cross_audit",
         "train_size": visible_size,
@@ -1098,6 +1111,7 @@ def _aggregate_visible_cross_audit_metrics(
         "family_diagnostics": None,
         "safety_backlog": safety_backlog,
         "slot_risk_backlog": slot_risk_backlog,
+        "intent_confusion_backlog": intent_confusion_backlog,
         "folds": [_visible_metric_summary(metric) for metric in fold_metrics],
     }
 
@@ -1304,6 +1318,83 @@ def _merge_slot_key_counts(
         if not slot_key:
             continue
         counts[slot_key] = counts.get(slot_key, 0) + int(row.get("count") or 0)
+
+
+def _aggregate_intent_confusion_backlogs(
+    *,
+    split: str,
+    validation_size: int,
+    backlogs: list[dict[str, Any]],
+    limit: int = 8,
+) -> dict[str, Any]:
+    by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    for backlog in backlogs:
+        for item in backlog.get("items", []):
+            teacher_intent = str(item["teacher_intent"])
+            predicted_intent = str(item["predicted_intent"])
+            pair = (teacher_intent, predicted_intent)
+            aggregate = by_pair.setdefault(
+                pair,
+                {
+                    "teacher_intent": teacher_intent,
+                    "predicted_intent": predicted_intent,
+                    "total": 0,
+                    "default_accepts": 0,
+                    "accepted_wrong": 0,
+                    "max_guard_probability": 0.0,
+                    "examples": [],
+                    "recommended_action": item.get(
+                        "recommended_action",
+                        (
+                            "add intent-specific abstain rules for high-guard "
+                            "visible intent confusions before broad coverage expansion"
+                        ),
+                    ),
+                },
+            )
+            aggregate["total"] += int(item.get("total") or 0)
+            aggregate["default_accepts"] += int(item.get("default_accepts") or 0)
+            aggregate["accepted_wrong"] += int(item.get("accepted_wrong") or 0)
+            aggregate["max_guard_probability"] = max(
+                float(aggregate["max_guard_probability"]),
+                float(item.get("max_guard_probability") or 0.0),
+            )
+            aggregate["examples"].extend(item.get("examples", []))
+    items = []
+    for aggregate in by_pair.values():
+        items.append(
+            {
+                **aggregate,
+                "examples": _top_guard_examples(aggregate["examples"], limit=3),
+            },
+        )
+    items.sort(
+        key=lambda item: (
+            int(item["accepted_wrong"]),
+            int(item["default_accepts"]),
+            float(item["max_guard_probability"]),
+            int(item["total"]),
+            item["teacher_intent"],
+            item["predicted_intent"],
+        ),
+        reverse=True,
+    )
+    return {
+        "schema_version": "l2-target-intent-confusion-backlog-v1",
+        "split": split,
+        "validation_size": validation_size,
+        "visibility": _safety_backlog_visibility(split),
+        "priority": "review_visible_intent_confusions_after_slot_risk",
+        "item_limit": limit,
+        "items": items[:limit],
+        "empty_reason": None if items else _intent_confusion_empty_reason(split),
+    }
+
+
+def _intent_confusion_empty_reason(split: str) -> str:
+    if split in {"selection_holdout", "promotion_holdout"}:
+        return "no_private_intent_confusion_families"
+    return "no_visible_intent_confusion_families"
 
 
 def _visible_validation_paths(workspace_root: Path) -> list[Path]:
@@ -1548,6 +1639,7 @@ def _record_family_diagnostic(
             "missing_slot_keys": {},
             "extra_slot_keys": {},
             "changed_slot_keys": {},
+            "intent_confusions": {},
             "predicted_intents": {},
             "examples": {
                 "accepted_wrong": [],
@@ -1582,6 +1674,34 @@ def _record_family_diagnostic(
         )
         _append_diagnostic_example(
             stats["examples"]["intent_correct_slot_wrong"],
+            trace=trace,
+            frame=frame,
+            guard_probability=guard_probability,
+        )
+    if predicted_intent != teacher_intent:
+        confusion = stats["intent_confusions"].setdefault(
+            predicted_intent,
+            {
+                "teacher_intent": teacher_intent,
+                "predicted_intent": predicted_intent,
+                "total": 0,
+                "default_accepts": 0,
+                "accepted_wrong": 0,
+                "max_guard_probability": 0.0,
+                "examples": [],
+            },
+        )
+        confusion["total"] += 1
+        if default_accept:
+            confusion["default_accepts"] += 1
+        if should_accept:
+            confusion["accepted_wrong"] += 1
+        confusion["max_guard_probability"] = max(
+            float(confusion["max_guard_probability"]),
+            float(guard_probability),
+        )
+        _append_diagnostic_example(
+            confusion["examples"],
             trace=trace,
             frame=frame,
             guard_probability=guard_probability,
@@ -1686,6 +1806,11 @@ def _family_diagnostics_payload(
         validation_size=validation_size,
         families=families,
     )
+    intent_confusion_backlog = _intent_confusion_backlog_payload(
+        split=split,
+        validation_size=validation_size,
+        families=families,
+    )
     families.sort(
         key=lambda item: (
             item["opportunity_score"],
@@ -1704,6 +1829,7 @@ def _family_diagnostics_payload(
         "families": families[:limit],
         "safety_backlog": safety_backlog,
         "slot_risk_backlog": slot_risk_backlog,
+        "intent_confusion_backlog": intent_confusion_backlog,
     }
 
 
@@ -1728,6 +1854,9 @@ def _finalize_family_diagnostic(stats: dict[str, Any]) -> dict[str, Any]:
         "missing_slot_keys": _top_slot_key_counts(stats.get("missing_slot_keys", {})),
         "extra_slot_keys": _top_slot_key_counts(stats.get("extra_slot_keys", {})),
         "changed_slot_keys": _top_slot_key_counts(stats.get("changed_slot_keys", {})),
+        "intent_confusions": _intent_confusion_items_for_family(
+            stats.get("intent_confusions", {}),
+        ),
         "opportunity_score": rejected_correct + vetoed_correct - (10 * accepted_wrong),
         "top_predicted_intents": [
             {"intent": intent, "count": count} for intent, count in predicted_intents
@@ -1808,6 +1937,73 @@ def _safety_backlog_item(family: dict[str, Any]) -> dict[str, Any]:
         "recommended_action": (
             "tighten accept_prediction or add exact postprocess before any coverage expansion"
         ),
+    }
+
+
+def _intent_confusion_items_for_family(
+    confusions: dict[str, dict[str, Any]],
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    items = [
+        {
+            **confusion,
+            "examples": _top_guard_examples(confusion["examples"], limit=3),
+        }
+        for confusion in confusions.values()
+    ]
+    items.sort(
+        key=lambda item: (
+            int(item["accepted_wrong"]),
+            int(item["default_accepts"]),
+            float(item["max_guard_probability"]),
+            int(item["total"]),
+            item["teacher_intent"],
+            item["predicted_intent"],
+        ),
+        reverse=True,
+    )
+    return items[:limit]
+
+
+def _intent_confusion_backlog_payload(
+    *,
+    split: str,
+    validation_size: int,
+    families: list[dict[str, Any]],
+    limit: int = 8,
+) -> dict[str, Any]:
+    items = [
+        {
+            **confusion,
+            "recommended_action": (
+                "add intent-specific abstain rules for high-guard visible intent "
+                "confusions before broad coverage expansion"
+            ),
+        }
+        for family in families
+        for confusion in family.get("intent_confusions", [])
+    ]
+    items.sort(
+        key=lambda item: (
+            int(item["accepted_wrong"]),
+            int(item["default_accepts"]),
+            float(item["max_guard_probability"]),
+            int(item["total"]),
+            item["teacher_intent"],
+            item["predicted_intent"],
+        ),
+        reverse=True,
+    )
+    return {
+        "schema_version": "l2-target-intent-confusion-backlog-v1",
+        "split": split,
+        "validation_size": validation_size,
+        "visibility": _safety_backlog_visibility(split),
+        "priority": "review_visible_intent_confusions_after_slot_risk",
+        "item_limit": limit,
+        "items": items[:limit],
+        "empty_reason": None if items else _intent_confusion_empty_reason(split),
     }
 
 
@@ -1939,6 +2135,9 @@ def _target_diagnostics_payload(
         "baseline_slot_risk_backlog": _metric_slot_risk_backlog(
             baseline["inner_validation"],
         ),
+        "baseline_intent_confusion_backlog": _metric_intent_confusion_backlog(
+            baseline["inner_validation"],
+        ),
         "baseline_train_audit": _metric_family_diagnostics(
             _candidate_train_audit(baseline),
         ),
@@ -1948,15 +2147,24 @@ def _target_diagnostics_payload(
         "baseline_train_audit_slot_risk_backlog": _metric_slot_risk_backlog(
             _candidate_train_audit(baseline),
         ),
+        "baseline_train_audit_intent_confusion_backlog": (
+            _metric_intent_confusion_backlog(_candidate_train_audit(baseline))
+        ),
         "latest_inner_validation": latest_metric.get("family_diagnostics"),
         "latest_safety_backlog": _metric_safety_backlog(latest_metric),
         "latest_slot_risk_backlog": _metric_slot_risk_backlog(latest_metric),
+        "latest_intent_confusion_backlog": _metric_intent_confusion_backlog(
+            latest_metric,
+        ),
         "latest_train_audit": _metric_family_diagnostics(latest_train_audit),
         "latest_train_audit_safety_backlog": _metric_safety_backlog(
             latest_train_audit or {},
         ),
         "latest_train_audit_slot_risk_backlog": _metric_slot_risk_backlog(
             latest_train_audit or {},
+        ),
+        "latest_train_audit_intent_confusion_backlog": (
+            _metric_intent_confusion_backlog(latest_train_audit or {})
         ),
         "baseline_visible_cross_audit": _metric_family_diagnostics(
             _candidate_visible_cross_audit(baseline),
@@ -1967,12 +2175,20 @@ def _target_diagnostics_payload(
         "baseline_visible_cross_audit_slot_risk_backlog": _metric_slot_risk_backlog(
             _candidate_visible_cross_audit(baseline) or {},
         ),
+        "baseline_visible_cross_audit_intent_confusion_backlog": (
+            _metric_intent_confusion_backlog(
+                _candidate_visible_cross_audit(baseline) or {},
+            )
+        ),
         "latest_visible_cross_audit": _metric_family_diagnostics(latest_cross_audit),
         "latest_visible_cross_audit_safety_backlog": _metric_safety_backlog(
             latest_cross_audit or {},
         ),
         "latest_visible_cross_audit_slot_risk_backlog": _metric_slot_risk_backlog(
             latest_cross_audit or {},
+        ),
+        "latest_visible_cross_audit_intent_confusion_backlog": (
+            _metric_intent_confusion_backlog(latest_cross_audit or {})
         ),
         "round_history": [
             {
@@ -1987,17 +2203,30 @@ def _target_diagnostics_payload(
                 "slot_risk_backlog": _metric_slot_risk_backlog(
                     round_result["inner_validation"],
                 ),
+                "intent_confusion_backlog": _metric_intent_confusion_backlog(
+                    round_result["inner_validation"],
+                ),
                 "train_audit_safety_backlog": _metric_safety_backlog(
                     _candidate_train_audit(round_result),
                 ),
                 "train_audit_slot_risk_backlog": _metric_slot_risk_backlog(
                     _candidate_train_audit(round_result),
                 ),
+                "train_audit_intent_confusion_backlog": (
+                    _metric_intent_confusion_backlog(
+                        _candidate_train_audit(round_result),
+                    )
+                ),
                 "visible_cross_audit_safety_backlog": _metric_safety_backlog(
                     _candidate_visible_cross_audit(round_result) or {},
                 ),
                 "visible_cross_audit_slot_risk_backlog": _metric_slot_risk_backlog(
                     _candidate_visible_cross_audit(round_result) or {},
+                ),
+                "visible_cross_audit_intent_confusion_backlog": (
+                    _metric_intent_confusion_backlog(
+                        _candidate_visible_cross_audit(round_result) or {},
+                    )
                 ),
             }
             for round_result in recent_rounds
@@ -2046,6 +2275,19 @@ def _metric_slot_risk_backlog(metric: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(family_diagnostics, dict):
         return None
     nested_backlog = family_diagnostics.get("slot_risk_backlog")
+    return nested_backlog if isinstance(nested_backlog, dict) else None
+
+
+def _metric_intent_confusion_backlog(
+    metric: dict[str, Any],
+) -> dict[str, Any] | None:
+    intent_confusion_backlog = metric.get("intent_confusion_backlog")
+    if isinstance(intent_confusion_backlog, dict):
+        return intent_confusion_backlog
+    family_diagnostics = metric.get("family_diagnostics")
+    if not isinstance(family_diagnostics, dict):
+        return None
+    nested_backlog = family_diagnostics.get("intent_confusion_backlog")
     return nested_backlog if isinstance(nested_backlog, dict) else None
 
 
@@ -2749,6 +2991,7 @@ def _visible_metric_summary(metric: dict[str, Any]) -> dict[str, Any]:
         "family_diagnostics": metric.get("family_diagnostics"),
         "safety_backlog": _metric_safety_backlog(metric),
         "slot_risk_backlog": _metric_slot_risk_backlog(metric),
+        "intent_confusion_backlog": _metric_intent_confusion_backlog(metric),
         "visible_cross_audit_folds_completed": metric.get(
             "visible_cross_audit_folds_completed",
         ),
@@ -3380,6 +3623,9 @@ def _target_program_text() -> str:
             "  `high_guard_items`; the latter catches lower-frequency risks near",
             "  the accept threshold. Use `missing_slot_keys`, `extra_slot_keys`,",
             "  and `changed_slot_keys` to choose precise postprocess or veto rules.",
+            "  Then review `latest_intent_confusion_backlog` and related",
+            "  train/cross-audit intent-confusion queues for high-guard teacher",
+            "  intent / predicted intent mismatches.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -3420,6 +3666,8 @@ def _target_program_text() -> str:
             "backlogs before stopping; inspect `high_guard_items` as well as the",
             "count-ranked `items`, and prefer precise postprocess or abstention",
             "rules based on the listed slot-key deltas over broad threshold changes.",
+            "After slot-risk review, inspect intent-confusion backlogs for repeated",
+            "high-guard wrong-intent pairs such as media intent boundary errors.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
             "abstention or target-local vetoes over accepting predictions that",
             "contradict visible teacher labels.",

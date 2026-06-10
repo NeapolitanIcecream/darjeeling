@@ -612,3 +612,94 @@ Smoke result:
   `email_address` and `person`.
 - `target_diagnostics.json`, `round_state.json`, and `objective.json` did not
   contain `selection_holdout` or `promotion_holdout`.
+
+## Slot-key live result and intent-confusion backlog
+
+Run:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-slot-key-deltas-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `24` accepted, `24` correct, `0` wrong; gate passed.
+- Visible support passed: `24` correct accepts, required `10`.
+- Final train audit: `56` accepted, `56` correct, `0` wrong; train-audit safety
+  passed.
+- Final visible cross-audit: `22` accepted, `22` correct, `0` wrong; gate
+  passed.
+- Private selection: `7` accepted, `5` correct, `2` wrong; gate failed.
+- Private promotion: `5` accepted, `4` correct, `1` wrong; gate failed.
+- Adoption remained `adopted=false`.
+
+Interpretation:
+
+- Slot-key deltas helped the agent write narrower visible safety rules, but
+  private selection still failed on the same podcast/radio and radio room-place
+  boundary errors.
+- The visible raw workspace had examples for `general_joke.joke_type` and
+  `play_podcasts.podcast_name`, but no visible `play_radio.house_place`
+  example. That room-place error is therefore not directly recoverable from
+  visible slot deltas in this fixed snapshot.
+- The podcast/radio private failure is an intent-boundary error, not an
+  intent-correct slot mismatch. It is not well represented by `slot_risk_backlog`.
+
+Follow-up implementation:
+
+- Family diagnostics now include `intent_confusion_backlog`, derived only from
+  visible wrong-intent examples.
+- Items are keyed by `teacher_intent` and `predicted_intent` pair and include
+  `total`, `default_accepts`, `accepted_wrong`, `max_guard_probability`, and a
+  few high-guard examples.
+- `target_diagnostics.json` exposes latest/baseline train-audit and
+  visible-cross-audit variants. The queue is diagnostic-only and does not change
+  selection/adoption gates.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-intent-confusion-smoke-r1/job \
+  --max-traces 1000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+```
+
+Smoke result:
+
+- Evidence class: `short_fixed_snapshot_probe`.
+- `latest_intent_confusion_backlog` wrote a visible `audio_volume_up ->
+  audio_volume_mute` pair.
+- `latest_visible_cross_audit_intent_confusion_backlog` wrote a visible
+  `audio_volume_down -> audio_volume_up` pair.
+- Both used `visibility=visible_validation_only`.
+- `target_diagnostics.json`, `round_state.json`, and `objective.json` did not
+  contain `selection_holdout` or `promotion_holdout`.

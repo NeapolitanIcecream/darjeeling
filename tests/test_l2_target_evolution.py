@@ -319,6 +319,9 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "latest_slot_risk_backlog" in target_diagnostics
     assert "latest_train_audit_slot_risk_backlog" in target_diagnostics
     assert "latest_visible_cross_audit_slot_risk_backlog" in target_diagnostics
+    assert "latest_intent_confusion_backlog" in target_diagnostics
+    assert "latest_train_audit_intent_confusion_backlog" in target_diagnostics
+    assert "latest_visible_cross_audit_intent_confusion_backlog" in target_diagnostics
     assert "latest_safety_backlog" in target_diagnostics
     assert (
         summary["baseline"]["inner_validation"]["family_diagnostics"]["schema_version"]
@@ -398,6 +401,16 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
         "predicted_frame": {"intent": "play_radio", "slots": {}},
         "guard_probability": 0.995,
     }
+    intent_confusion_example = {
+        "request_id": "visible-risk-3",
+        "utterance": "play the newest science podcast",
+        "teacher_frame": {
+            "intent": "play_podcasts",
+            "slots": {"podcast_name": "science"},
+        },
+        "predicted_frame": {"intent": "play_radio", "slots": {}},
+        "guard_probability": 0.94,
+    }
     family_stats = {
         "coverage_opportunity": {
             "teacher_intent": "calendar_query",
@@ -459,6 +472,35 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
                 "intent_correct_slot_wrong": [high_guard_slot_example],
             },
         },
+        "intent_confusion_risk": {
+            "teacher_intent": "play_podcasts",
+            "total": 3,
+            "accepted_correct": 0,
+            "accepted_wrong": 0,
+            "rejected_correct": 0,
+            "rejected_wrong": 3,
+            "vetoed_correct": 0,
+            "vetoed_wrong": 0,
+            "intent_correct_slot_wrong": 0,
+            "predicted_intents": {"play_radio": 3},
+            "intent_confusions": {
+                "play_radio": {
+                    "teacher_intent": "play_podcasts",
+                    "predicted_intent": "play_radio",
+                    "total": 3,
+                    "default_accepts": 1,
+                    "accepted_wrong": 0,
+                    "max_guard_probability": 0.94,
+                    "examples": [intent_confusion_example],
+                },
+            },
+            "examples": {
+                "accepted_wrong": [],
+                "rejected_correct": [],
+                "vetoed_correct": [],
+                "intent_correct_slot_wrong": [],
+            },
+        },
     }
 
     payload = l2_target_evolution._family_diagnostics_payload(
@@ -504,6 +546,15 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
         {"slot_key": "date", "count": 1},
     ]
     assert "postprocess" in slot_risk_backlog["items"][0]["recommended_action"]
+    intent_confusion_backlog = payload["intent_confusion_backlog"]
+    assert intent_confusion_backlog["schema_version"] == (
+        "l2-target-intent-confusion-backlog-v1"
+    )
+    assert intent_confusion_backlog["items"][0]["teacher_intent"] == "play_podcasts"
+    assert intent_confusion_backlog["items"][0]["predicted_intent"] == "play_radio"
+    assert intent_confusion_backlog["items"][0]["examples"] == [
+        intent_confusion_example,
+    ]
 
 
 def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> None:
@@ -538,6 +589,9 @@ def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> No
         "outer_summary_only_not_agent_workspace"
     )
     assert payload["slot_risk_backlog"]["visibility"] == (
+        "outer_summary_only_not_agent_workspace"
+    )
+    assert payload["intent_confusion_backlog"]["visibility"] == (
         "outer_summary_only_not_agent_workspace"
     )
 
@@ -617,6 +671,46 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
     assert payload["high_guard_items"][0]["missing_slot_keys"] == [
         {"slot_key": "joke_type", "count": 1},
     ]
+
+
+def test_l2_target_aggregate_intent_confusion_backlog_merges_pairs() -> None:
+    confusion_example = {
+        "request_id": "visible-confusion-risk",
+        "utterance": "play the science podcast",
+        "teacher_frame": {
+            "intent": "play_podcasts",
+            "slots": {"podcast_name": "science"},
+        },
+        "predicted_frame": {"intent": "play_radio", "slots": {}},
+        "guard_probability": 0.96,
+    }
+
+    payload = l2_target_evolution._aggregate_intent_confusion_backlogs(
+        split="visible_cross_audit",
+        validation_size=100,
+        backlogs=[
+            {
+                "items": [
+                    {
+                        "teacher_intent": "play_podcasts",
+                        "predicted_intent": "play_radio",
+                        "total": 2,
+                        "default_accepts": 1,
+                        "accepted_wrong": 0,
+                        "max_guard_probability": 0.96,
+                        "examples": [confusion_example],
+                    },
+                ],
+            },
+        ],
+    )
+
+    assert payload["schema_version"] == "l2-target-intent-confusion-backlog-v1"
+    assert payload["visibility"] == "visible_validation_only"
+    assert payload["items"][0]["teacher_intent"] == "play_podcasts"
+    assert payload["items"][0]["predicted_intent"] == "play_radio"
+    assert payload["items"][0]["default_accepts"] == 1
+    assert payload["items"][0]["examples"] == [confusion_example]
 
 
 def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
