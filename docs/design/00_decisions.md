@@ -175,6 +175,6 @@ L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution job。Darje
 - Inner job 必须先评估 baseline，再启动 agent session；agent 只看到 visible validation/history/diagnostics，不包含 selection/promotion holdout rows 或 private aggregate feedback。
 - Agent-visible state 不能写入由 private selection/promotion gate 推导出的 pass/fail 字段；这些只属于 outer summary、promotion metadata 和最终人工/自动 adoption 判断。
 - L4 agent budget 由 outer harness 控制：限制 wall time、LLM token、工具调用、Optuna trials 和 evaluation cost，但不规定 agent 内部的 edit/evaluate/search 步骤。`rounds` 在 `agent-session` 主路径中是给 agent 的内部迭代预算提示，不代表外层多次 Codex launch；旧 `codex-cli` multi-launch round loop 只保留为兼容/诊断路径。
-- Candidate selection gate 要求 visible validation gate 和 private selection holdout gate 同时通过；private selection 不能掩盖 visible validation regression。
+- Candidate selection gate 要求 visible validation gate、visible train-audit accepted-wrong safety gate 和 private selection holdout gate 同时通过；private selection 不能掩盖 visible validation 或 visible train-audit safety regression。
 - Visible validation improvement 不能直接触发采用；通过 candidate selection gate 的 target round 只表示可被选中，只有同时通过 private promotion holdout gate 才能进入 `adoption_decision.adopted=true`。
 - 旧的 `L2_AGENT_MODE=codex-cli` patch harness 只能作为 legacy core-patch artifact 生成路径，不是 L2 evolve 主线。

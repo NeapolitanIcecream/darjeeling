@@ -263,7 +263,14 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "passes_visible_validation_gate" in entry
         for entry in round_state["round_history"]
     )
+    assert all(
+        "passes_train_audit_safety_gate" in entry
+        for entry in round_state["round_history"]
+    )
     assert "candidate_selection" in objective["gates"]
+    assert objective["gates"]["train_audit_safety"] == (
+        "zero accepted wrong on visible train audit"
+    )
     assert objective["target_scope"]["scope"] == "teacher_train"
     assert objective["workspace_scope"]["candidate_code_writable_roots"] == ["target/"]
     assert objective["workspace_scope"]["scratch_writable_roots"] == ["runs/"]
@@ -326,7 +333,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert round_state["baseline_train_audit"]["gate_role"] == (
         "diagnostic_only_not_selection_or_adoption_gate"
     )
-    assert "candidate selection or adoption gate" in round_state["train_audit_policy"]
+    assert "safety gate" in round_state["train_audit_policy"]
     assert summary["rounds"][0]["train_audit"]["gate_role"] == (
         "diagnostic_only_not_selection_or_adoption_gate"
     )
@@ -1535,6 +1542,34 @@ def test_l2_target_selection_requires_visible_validation_gate() -> None:
 
     assert _selection_decision([round_result])["selected"] is False
     assert _adoption_decision([round_result])["adopted"] is False
+
+
+def test_l2_target_selection_requires_train_audit_safety_gate() -> None:
+    round_result = {
+        "round": 1,
+        "inner_validation": {"passes_gate": True},
+        "train_audit": {"wrong_accepts": 1},
+        "selection_holdout": {
+            "passes_gate": True,
+            "coverage": 0.1,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+        },
+        "promotion_holdout": {
+            "passes_gate": True,
+            "coverage": 0.1,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+        },
+    }
+
+    assert _selection_decision([round_result])["selected"] is False
+    assert _adoption_decision([round_result])["adopted"] is False
+    evidence = l2_target_evolution._private_holdout_evidence(  # noqa: SLF001
+        [round_result],
+    )
+    assert evidence["selection_gate_diagnosis"] == "train_audit_safety_gate_failed"
+    assert evidence["inner_passing_train_audit_wrong_accept_rounds"] == 1
 
 
 def test_l2_target_best_round_uses_inner_validation_as_tie_breaker() -> None:

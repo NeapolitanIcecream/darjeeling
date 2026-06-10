@@ -83,3 +83,58 @@ config.
 
 Next live-agent quality work should use the new ratio on a larger fixed snapshot
 instead of iterating from private promotion failures.
+
+## Live agent-session follow-up
+
+Command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-stratified2000-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Agent session: completed, `1` started, `1` succeeded.
+- Split: train `787`, visible validation `774`, private selection `199`,
+  private promotion `190`.
+- Requested visible validation ratio: `0.4`.
+- Effective visible validation ratio: `0.39692307692307693`.
+- Baseline visible validation: `33` accepted, `25` correct, `8` wrong; gate
+  failed.
+- Final visible validation: `32` accepted, `32` correct, `0` wrong; gate passed.
+- Final visible cross-audit: `27` accepted, `27` correct, `0` wrong; gate
+  passed.
+- Final train audit: `105` accepted, `104` correct, `1` wrong.
+- Private selection: `8` accepted, `6` correct, `2` wrong; gate failed.
+- Private promotion: `7` accepted, `5` correct, `2` wrong; gate failed.
+- Adoption: `adopted=false`.
+
+Interpretation:
+
+- The larger visible pool helped the agent find a visibly safe target candidate,
+  but visible validation plus cross-audit was still insufficient.
+- The agent report explicitly noted the remaining train-audit wrong accept and
+  chose to leave it because it considered the visible label contradictory. Under
+  the project contract, visible teacher labels remain the local safety oracle;
+  if a target rule disagrees, it should abstain instead of accepting.
+- The follow-up implementation makes visible train-audit accepted-wrong count a
+  safety gate before private selection. This does not make train coverage an
+  optimization target; it only prevents a candidate with known visible
+  train-audit wrong accepts from being selected.
