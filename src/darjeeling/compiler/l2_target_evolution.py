@@ -2120,7 +2120,7 @@ def _visible_slot_cue_summary_payload(
     *,
     traces: list[TeacherTrace],
     source_splits: list[str],
-    item_limit: int = 16,
+    item_limit: int = 40,
 ) -> dict[str, Any]:
     by_slot: dict[str, dict[str, Any]] = {}
     for trace in traces:

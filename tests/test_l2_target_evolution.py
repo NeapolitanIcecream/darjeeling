@@ -665,6 +665,51 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
     }
 
 
+def test_l2_target_visible_slot_cue_summary_keeps_low_frequency_podcast_cues() -> None:
+    trace_records: list[TraceRecord] = []
+    for index in range(1, 18):
+        trace_records.extend(
+            [
+                _trace_with_utterance(
+                    index * 10,
+                    utterance=f"visible cue {index} alpha",
+                    intent=f"visible_intent_{index}",
+                    slots={f"frequent_slot_{index:02d}": "alpha"},
+                ),
+                _trace_with_utterance(
+                    index * 10 + 1,
+                    utterance=f"visible cue {index} beta",
+                    intent=f"visible_intent_{index}",
+                    slots={f"frequent_slot_{index:02d}": "beta"},
+                ),
+            ]
+        )
+    trace_records.append(
+        _trace_with_utterance(
+            999,
+            utterance="play the latest episode of the friends podcast",
+            intent="play_podcasts",
+            slots={"podcast_name": "friends"},
+        )
+    )
+    traces = traces_to_teacher_view(trace_records)
+
+    payload = l2_target_evolution._visible_slot_cue_summary_payload(
+        traces=traces,
+        source_splits=["train", "inner_validation"],
+    )
+
+    podcast_name = next(
+        item for item in payload["items"] if item["slot_key"] == "podcast_name"
+    )
+    assert podcast_name["top_teacher_intents"] == [
+        {"intent": "play_podcasts", "count": 1}
+    ]
+    assert podcast_name["examples"][0]["utterance"] == (
+        "play the latest episode of the friends podcast"
+    )
+
+
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
     volume_example = {
         "request_id": "visible-volume-risk",

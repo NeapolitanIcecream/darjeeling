@@ -783,7 +783,7 @@ Smoke command:
 ```bash
 uv run edge-mvp l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
-  --out-dir runs/l2-target-visible-slot-cue-smoke-r1/job \
+  --out-dir runs/l2-target-visible-slot-cue-budget40-smoke-r1/job \
   --max-traces 1000 \
   --mode dry-run \
   --budget-profile fixed-inner \
@@ -802,10 +802,62 @@ Smoke result:
 
 - Evidence class: `short_fixed_snapshot_probe`.
 - `visible_slot_cue_summary` used `visibility=visible_validation_only`.
+- `item_limit` was `40`, and all 40 visible slot-key budget slots were filled.
 - Source splits were visible `train` plus all five visible validation folds.
-- `house_place` appeared within the default 16 slot keys and listed room values
+- `house_place` appeared within the default 40 slot keys and listed room values
   such as `bedroom`, `house`, `kitchen`, `living room`, and `bathroom`.
+- `podcast_descriptor` and `podcast_name` also appeared. `podcast_name`
+  carried visible `play_podcasts` examples such as `go to the next episode of
+  the united states of anxiety podcast`.
 - Its examples came from visible rows such as `bedroom lights off now`, `turn
   off lights of kitchen`, and `can you turn my bathroom lights off`.
 - `target_diagnostics.json`, `round_state.json`, and `objective.json` did not
   contain `selection_holdout` or `promotion_holdout`.
+
+Live command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-visible-slot-cue-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Live result before widening the slot-cue budget:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `25` accepted, `25` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `25` correct accepts, required `10`.
+- Final train audit: `80` accepted, `80` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `23` accepted, `23` correct, `0` wrong; gate
+  passed.
+- Private selection: `6` accepted, `5` correct, `1` wrong; gate failed.
+- Private promotion: `4` accepted, `4` correct, `0` wrong; gate passed.
+- The private selection wrong accept was `play me a radio drama podcast`,
+  teacher `play_podcasts` with `podcast_name=radio drama`, predicted
+  `play_radio` with no slots.
+
+Interpretation:
+
+- The new visible slot-cue summary helped expose `house_place`, but the default
+  16-item budget still hid lower-frequency `podcast_name`.
+- Visible rows in the same split contain `podcast_name` examples such as
+  `get me the latest episode of the friends podcast` and `play my video game
+  news podcast starting where i left off`.
+- The next implementation keeps the same diagnostic concept and widens the
+  default item budget to 40 so low-frequency, high-signal schema cues are still
+  agent-visible without introducing another queue or gate.
