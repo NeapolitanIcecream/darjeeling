@@ -20,7 +20,7 @@
 7. 运行 L1 coding-agent compiler job，产生 Rust candidate artifact。
 8. 请求 L4 direct API 提议 L2 config candidates。
 9. 训练 L2 candidates。
-10. 请求 L4 direct API 提议 L3 prompt candidates。
+10. 可选请求 legacy L4 direct API 提议 L3 prompt candidates。
 11. 根据 L3 mode 决定 disabled/shadow/guarded 评估路径。
 12. 搜索 guard thresholds。
 13. 组合 candidate artifact sets。
@@ -47,7 +47,7 @@
 - L2 训练后执行 deterministic guard threshold grid search，选择满足 wrong-accept 上限且覆盖率最高的 threshold，并写入 L2 artifact 与 candidate metrics。若 residual calibration 不可用，compiler 回退到 training-scope search 并记录 `l2_guard_calibration.fallback_reason`。
 - `L2_AGENT_MODE` 非 disabled 时，compiler 会运行 legacy L2 coding-agent patch harness，写入 `l2_agent/` artifacts：`workspace/l2_research/`、context snapshot、稳定短 prompt、transcript、diff、commands、report 和 provenance。`workspace/l2_research/` 使用 `program.md + candidate/ + system/darjeeling/ + data/ + tools/`，动态 teacher-visible context 放在 `data/`，agent 只写 `candidate/`。该 patch 不会在当前 Python process 中热加载；`l2_agent_patch_runtime_applied=false` 是有意边界。Manifest metrics 必须写 `l2_agent_harness_role=legacy_patch_generation_not_target_evolve`，提示它不是当前 target-dependent L2 runtime 主路径。
 - `l2_target` 是 target-dependent runtime artifact，不属于 legacy `L2_AGENT_MODE` core-patch path。显式 `edge-mvp l2 promote-target` 会在 manifest 中写入 `artifact_paths["l2_target"]`；compiler offline replay 加载 current/candidate artifact set 时必须与 runtime replay 一样应用 target wrapper。若 compiler 在普通 generation 中重新训练 core L2 bundle，但没有做 target-aware adoption，则必须删除继承的 `l2_target` path，并在 candidate metrics 中记录 `l2_target_dropped_reason`，避免旧 target code 与新 bundle 混用。
-- `L4_PROPOSAL_MODE=live` 时，compiler 也会请求 bounded L3 prompt proposal，展开 teacher-visible few-shot trace IDs，并写入 `l3/l3_prompt.candidate.json`。该 candidate 记录为 `l3_prompt_candidate`，不会自动成为 runtime `l3_prompt`。
+- `L4_PROPOSAL_MODE=live` 时，compiler 也会请求 legacy bounded L3 prompt proposal，展开 teacher-visible few-shot trace IDs，并写入 `l3/l3_prompt.candidate.json`。该 candidate 记录为 `l3_prompt_candidate`，不会自动成为 runtime `l3_prompt`；当前真实 L3 prompt evolve 主路径是显式 `edge-mvp l3 prompt-evolve`。
 - 用 `teacher_promotion_holdout + teacher_regression_sample + hard_buffer` 对 current artifact set 与 candidate artifact set 做离线 replay；hard buffer 包含 `train_visible` 与 `replay_only` 两类 replay pressure，但不能替代独立 holdout，若没有 holdout/regression 覆盖则拒绝 promotion。
 - promotion 使用 `decide_artifact_set_promotion`，检查 objective、accuracy epsilon 和 wrong-accept 上限。
 - 若 `FORCE_PROMOTE_ARTIFACTS=true`，compiler 仍先计算正常 promotion decision，并在 candidate metrics 中记录 `force_promote_original_reason`，随后强制 promotion。该开关只用于诊断实验，不属于主线 evolution 策略。
@@ -66,7 +66,7 @@ L0 -> L1 -> L2 -> recorded L3 accept -> teacher fallback
 非阻塞后续项：
 
 - embedding clusters、更复杂的 guard feature/search family。
-- compiler 主循环内自动对 `l3_prompt_candidate` 做本地 SLM 重新生成式 replay 并参与 artifact-set promotion；当前显式 CLI 路径已经支持 L3 prompt replay/promotion，但 compile generation 不自动加载本地模型。
+- compiler 主循环内自动对 `l3_prompt_candidate` 做本地 SLM 重新生成式 replay 并参与 artifact-set promotion；当前显式 CLI 路径已经支持 `l3 prompt-evolve`、prompt replay 和 prompt promotion，但 compile generation 不自动加载本地模型。
 - 多实验对比已有表格、rank 和 bottleneck summary；趋势图、显著性区间和更完整的 plot/report 页面作为后续增强。
 - L1 worker benchmark 已有跨 generation 表格；Criterion/cargo bench microbenchmark 仍未接入。
 

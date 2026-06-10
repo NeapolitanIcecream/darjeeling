@@ -125,6 +125,8 @@ disabled | shadow | guarded
 
 若 manifest 包含 `artifact_paths["l3_prompt"]`，runtime 必须加载该 `L3PromptArtifact` 作为 L3 prompt；若缺失，则使用 settings/default prompt。
 
-`artifact_paths["l3_prompt_candidate"]` 只表示 L4 direct API 生成的候选 prompt artifact，不能被 runtime 自动加载。Compiler 只有在 L3 prompt candidate 能被 regenerated replay 或 shadow replay 评估后，才应把它提升为 runtime `l3_prompt`。
+`artifact_paths["l3_prompt_candidate"]` 只表示 legacy L4 direct API 生成的候选 prompt artifact，不能被 runtime 自动加载。Compiler 只有在 L3 prompt candidate 能被 regenerated replay 或 shadow replay 评估后，才应把它提升为 runtime `l3_prompt`。
+
+`edge-mvp l3 prompt-evolve` 生成的 prompt candidate snapshot 存在该 job 的 `candidates/candidate_l3_prompt.json` 中。它同样不能绕过 replay/promotion；只有 outer harness 的 visible validation、private selection、private promotion 和后续显式 promotion 通过后，runtime manifest 才能记录为 `artifact_paths["l3_prompt"]`。
 
 `artifact_paths["l3_prompt_replay"]` 保存 `l3-prompt-replay-v1` promotion 证据。该 artifact 由显式 `edge-mvp l3 replay-prompt` 生成，并由 `edge-mvp l3 promote-prompt` 校验后归档到 generation 目录。Replay artifact 必须包含 `prompt_version` 和 prompt canonical JSON 的 `prompt_sha256`，promotion 时必须与待提升的 `L3PromptArtifact` 匹配。Promotion manifest 必须把 replay 聚合指标写入 `candidate_metrics`，但不应把 replay request 明细塞进后续 L4 candidate-generation context。

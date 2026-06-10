@@ -30,8 +30,10 @@ from darjeeling.compiler.l2_target_evolution import (
 )
 from darjeeling.compiler.l2_tuner import L2TuneSpec, tune_l2_student
 from darjeeling.compiler.l3_prompt_optimizer import (
+    L3PromptEvolutionConfig,
     l3_prompt_artifact_hash,
     replay_l3_prompt_artifact,
+    run_l3_prompt_evolution,
 )
 from darjeeling.compiler.replay import (
     OfflineReplayResult,
@@ -421,6 +423,69 @@ def l3_replay_prompt(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     console.print_json(data=payload)
+
+
+@l3_app.command("prompt-evolve")
+def l3_prompt_evolve(
+    traces: Annotated[Path, typer.Option(help="Trace JSONL path with teacher_frame labels.")],
+    out_dir: Annotated[Path, typer.Option(help="Output directory for L3 prompt evolution.")],
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Optional processed MASSIVE data dir for task schema discovery."),
+    ] = Path("data/processed/massive_en_us"),
+    max_traces: Annotated[
+        int | None,
+        typer.Option(min=1, help="Optional prefix of traces to use for the prompt split."),
+    ] = None,
+    max_agent_sessions: Annotated[
+        int,
+        typer.Option(min=0, help="Maximum live agent sessions; 0 prepares workspace only."),
+    ] = 1,
+    skip_replay: Annotated[
+        bool,
+        typer.Option(help="Skip local SLM replay; use only for wiring smoke/no-model runs."),
+    ] = False,
+    min_accepted_accuracy: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="Minimum replay accepted accuracy gate."),
+    ] = 0.90,
+    max_wrong_accept_rate: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="Maximum replay wrong accept rate gate."),
+    ] = 0.05,
+) -> None:
+    """Run one L3 prompt-evolution agent session over an isolated workspace."""
+
+    settings = _load_cli_settings()
+    trace_records = read_traces(traces)
+    if max_traces is not None:
+        trace_records = trace_records[:max_traces]
+    summary = run_l3_prompt_evolution(
+        config=L3PromptEvolutionConfig(
+            job_dir=out_dir,
+            codex_command=settings.l3_agent_codex_command,
+            codex_model=settings.l3_agent_model,
+            timeout_s=settings.l3_agent_timeout_s,
+            sandbox=settings.l3_agent_sandbox,
+            approval_policy=settings.l3_agent_approval_policy,
+            max_agent_sessions=max_agent_sessions,
+            skip_replay=skip_replay,
+            min_accepted_accuracy=min_accepted_accuracy,
+            max_wrong_accept_rate=max_wrong_accept_rate,
+            prompt_version=settings.local_slm_prompt_version,
+        ),
+        traces=trace_records,
+        task_schema=_l3_benchmark_task_schema(data_dir),
+        local_slm_config=LocalSLMConfig(
+            model_name=settings.local_slm_model,
+            mode="shadow",
+            device_policy=settings.local_slm_device_policy,
+            max_new_tokens=settings.local_slm_max_new_tokens,
+            confidence_threshold=settings.local_slm_confidence_threshold,
+            prompt_version=settings.local_slm_prompt_version,
+        ),
+    )
+    console.print_json(data=summary)
 
 
 @l3_app.command("promote-prompt")
@@ -1965,7 +2030,9 @@ def _preflight_l1_agent_check(*, settings) -> dict:
         return {
             "name": "l1.agent",
             "status": "warn",
-            "message": "L1_AGENT_MODE=disabled; set codex-cli for real L1 evolution experiments",
+            "message": (
+                "L1_AGENT_MODE=disabled; set agent-session for real L1 evolution experiments"
+            ),
         }
     if settings.l1_agent_mode == "dry-run":
         if settings.l1_agent_dry_run_patch is None:
@@ -2003,7 +2070,11 @@ def _preflight_l2_agent_check(*, settings) -> dict:
         return {
             "name": "l2.agent",
             "status": "warn",
-            "message": "L2_AGENT_MODE=disabled; set codex-cli for L2 coding-agent experiments",
+            "message": (
+                "L2_AGENT_MODE=disabled; set codex-cli only for legacy L2 patch-generation "
+                "experiments, or use `edge-mvp l2 target-evolve --mode agent-session` for "
+                "the current target-evolution path"
+            ),
         }
     if settings.l2_agent_mode == "dry-run":
         if settings.l2_agent_dry_run_patch is None:

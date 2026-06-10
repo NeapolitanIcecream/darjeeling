@@ -67,6 +67,17 @@ class Settings(BaseSettings):
         default="l3-prompt-v1",
         validation_alias="LOCAL_SLM_PROMPT_VERSION",
     )
+    l3_agent_codex_command: str = Field(default="codex", validation_alias="L3_AGENT_CODEX_COMMAND")
+    l3_agent_model: str | None = Field(default="gpt-5.5", validation_alias="L3_AGENT_MODEL")
+    l3_agent_timeout_s: float = Field(default=7200.0, validation_alias="L3_AGENT_TIMEOUT_S")
+    l3_agent_sandbox: Literal["workspace-write", "danger-full-access"] = Field(
+        default="workspace-write",
+        validation_alias="L3_AGENT_SANDBOX",
+    )
+    l3_agent_approval_policy: Literal["never", "on-request", "untrusted"] = Field(
+        default="never",
+        validation_alias="L3_AGENT_APPROVAL_POLICY",
+    )
     l1_rust_crate_dir: Path = Field(
         default=Path("native/l1_programbank"),
         validation_alias="L1_RUST_CRATE_DIR",

@@ -19,7 +19,7 @@ CLI option > environment variable / .env > settings.yaml > code default
 
 - `load_settings()` 会在当前工作目录存在 `settings.yaml` 时自动读取它。
 - CLI 支持全局 `--settings <path>` 显式指定 YAML 配置文件；显式路径不存在时 fail fast。
-- YAML 文件使用 Python field name，例如 `l1_agent_mode: codex-cli`、`local_slm_mode: shadow`。
+- YAML 文件使用 Python field name，例如 `l1_agent_mode: agent-session`、`local_slm_mode: shadow`。
 - 环境变量和 `.env` 中的变量优先级高于 YAML，例如 `OPENAI_MODEL` 会覆盖 `openai_model`。
 - run 开始时写出的 `settings.json` 包含完整非 secret settings snapshot，并用 `openai_api_key_present` 记录 API key 是否存在；不写出 API key 明文。
 
@@ -32,6 +32,11 @@ OpenAI / L4：
 - `OPENAI_MODEL`
 - `L4_PROPOSAL_MODE`: `disabled | live`
 - `PROPOSAL_MAX_TOKENS`
+- `L3_AGENT_CODEX_COMMAND`
+- `L3_AGENT_MODEL`
+- `L3_AGENT_TIMEOUT_S`
+- `L3_AGENT_SANDBOX`
+- `L3_AGENT_APPROVAL_POLICY`
 - model pricing
 - layer cost estimates: `L0_COST_USD_PER_REQUEST`、`L1_COST_USD_PER_REQUEST`、`L2_COST_USD_PER_REQUEST`、`L3_COST_USD_PER_REQUEST`
 - L4 token pricing: `L4_INPUT_USD_PER_MILLION`、`L4_CACHED_INPUT_USD_PER_MILLION`、`L4_OUTPUT_USD_PER_MILLION`
@@ -48,7 +53,7 @@ L1 Rust：
 - build timeout
 - agent job timeout
 - Codex CLI command/model/effort
-- `L1_AGENT_MODE`: `disabled | dry-run | codex-cli`
+- `L1_AGENT_MODE`: `disabled | dry-run | codex-cli | agent-session`
 - `L1_AGENT_CODEX_COMMAND`
 - `L1_AGENT_MODEL`
 - `L1_AGENT_TIMEOUT_S`
@@ -91,7 +96,7 @@ Replay/promotion：
 - `L2_TUNING_LATENCY_WEIGHT`
 - `L2_TRAINING_SCOPE`: `teacher_train | lower_miss`
 - `L2_TUNING_MIN_EXAMPLES`
-- `L2_AGENT_MODE`: `disabled | dry-run | codex-cli`
+- `L2_AGENT_MODE`: `disabled | dry-run | codex-cli`。这是 legacy core-patch harness 的开关；当前 L2 target-evolution 主路径用 CLI `edge-mvp l2 target-evolve --mode agent-session`。
 - `L2_AGENT_CODEX_COMMAND`
 - `L2_AGENT_MODEL`: 默认 `gpt-5.5`，这是用户决策，优先级高于原 proposal。
 - `L2_AGENT_TIMEOUT_S`: 默认 `7200`，给 coding-agent research iteration 留出较长时间。

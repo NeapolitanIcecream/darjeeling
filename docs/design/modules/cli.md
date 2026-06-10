@@ -24,6 +24,7 @@ edge-mvp l1 bench --crate-dir native/l1_programbank
 edge-mvp l1 bench --crate-dir native/l1_programbank --out runs/main/reports/l1_benchmark.json
 edge-mvp l2 tune --traces runs/main/traces.jsonl --out runs/main/reports/l2_tuning.json
 edge-mvp l3 bench --out runs/main/reports/l3_benchmark.json
+edge-mvp l3 prompt-evolve --traces runs/main/traces.jsonl --out-dir runs/main/l3-prompt-evolve
 edge-mvp l3 replay-prompt --prompt runs/main/artifacts/generations/gen_001/l3/l3_prompt.candidate.json --traces runs/main/traces.jsonl --out runs/main/reports/l3_prompt_replay.json
 edge-mvp l3 promote-prompt --run-dir runs/main --prompt runs/main/artifacts/generations/gen_001/l3/l3_prompt.candidate.json --replay runs/main/reports/l3_prompt_replay.json
 ```
@@ -33,6 +34,8 @@ L1 子命令是 harness/debug 入口，不代表 L1 用 Python 实现。`l1 benc
 `--settings <path>` 是全局 option，位置在子命令之前。未显式传入时，CLI 会在当前工作目录存在 `settings.yaml` 的情况下读取它；环境变量和 `.env` 会覆盖 YAML 文件值。写入 run directory 的 `settings.json` 是非 secret 配置快照，不包含 API key 明文。
 
 L3 `bench` 是显式硬件/model preflight，默认用 `shadow` 模式和 settings 中的本地 SLM 配置，输出 `l3-benchmark-v1` JSON。失败时也可写出 error status；只有传 `--fail-on-error` 才把失败变成非零退出码。
+
+L3 `prompt-evolve` 是真实 L3 evolve 主入口。它创建隔离 `workspace/l3_prompt/`，只允许 agent 修改 `prompt/`，把 `contexts/`、`tools/`、`program.md` 和 `workspace_manifest.json` 作为 protected surface，启动一个 long-running L4 agent session，然后由 outer harness 做 scope check、candidate prompt snapshot、visible validation replay、private selection/promotion replay 和 summary。Agent 可见数据只包含 train、visible validation 和 task schema；private selection/promotion rows 留在 outer private 目录。`--skip-replay` 只用于 smoke/no-model wiring，不支持 L3 质量结论。
 
 L3 `replay-prompt` 是显式 regenerated replay 入口：它读取一个 `L3PromptArtifact` 和带 teacher labels 的 traces，强制以 shadow 语义调用本地 SLM，并写出 `l3-prompt-replay-v1`。该命令会加载本地模型，因此不属于默认 compiler 路径。
 
@@ -109,9 +112,12 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `experiment preflight` 是实验前只读检查入口，输出 `experiment-preflight-v1` JSON。它检查 processed train split、teacher cache/API key 可用性、L1 Rust crate、L1/L2 agent 配置和 L3 benchmark artifact。默认不下载数据、不调用 OpenAI、不加载本地 SLM；`--check-l1-build` 才会构建 L1。L3 check 会记录 `mode`、model、device policy、benchmark path、readiness、是否 runtime-blocking 和 benchmark latency/device 摘要。`disabled` 是 non-blocking pass；`shadow` 缺成功 benchmark 是 warn；`guarded` 缺成功 benchmark 是 fail。
 
-`L1_AGENT_MODE=disabled` 在 preflight 中是 warn，不是 fail。它允许用户跑 smoke/replay 实验，但明确说明这不是完整 L1 evolution；真实 L1 evolution 实验必须显式设置 `L1_AGENT_MODE=codex-cli` 并保证 `codex` 命令可用。
+`L1_AGENT_MODE=disabled` 在 preflight 中是 warn，不是 fail。它允许用户跑 smoke/replay 实验，但明确说明这不是完整 L1 evolution；真实 L1 evolution 实验必须显式设置 `L1_AGENT_MODE=agent-session` 并保证 `codex` 命令可用。
 
-`L2_AGENT_MODE=disabled` 在 preflight 中也是 warn。真实 L2 coding-agent patch generation 必须显式设置 `L2_AGENT_MODE=codex-cli`；`dry-run` 需要 `L2_AGENT_DRY_RUN_PATCH`。
+`L2_AGENT_MODE=disabled` 在 preflight 中也是 warn，但它只覆盖 legacy
+`l2-agent` patch-generation harness。当前 L2 主路径不靠这个环境变量；真实
+target evolution 应显式运行 `edge-mvp l2 target-evolve --mode agent-session`。
+Legacy `dry-run` 仍需要 `L2_AGENT_DRY_RUN_PATCH`。
 
 ## Fail-fast 行为
 

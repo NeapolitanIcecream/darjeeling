@@ -84,8 +84,8 @@ Context：
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded L2 config proposal；这是轻量 proposal path。
 - 用户决策后的 L2 主 evolve path 是 L4 coding agent 负责代码/特征/search-space 设计，Optuna 负责局部调参。当前已实现本地 Optuna tuner、`L2_TUNING_MODE=optuna` compiler 接入，以及 `L2_AGENT_MODE` coding-agent patch harness。
 - L2 proposal 或 Optuna tuning 都不能直接决定 runtime accept；accept threshold 仍由 deterministic grid search 选择，最终仍由 replay gate 决定。
-- 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded L3 prompt candidate proposal。
-- L3 prompt proposal 只能引用 teacher-visible trace IDs 作为 few-shot examples；compiler 会展开为 `L3PromptArtifact` 并写入 `l3_prompt_candidate`，但不会在缺少 regenerated/shadow replay 时提升为 runtime `l3_prompt`。
+- 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 legacy bounded L3 prompt candidate proposal。
+- L3 prompt proposal 只能引用 teacher-visible trace IDs 作为 few-shot examples；compiler 会展开为 `L3PromptArtifact` 并写入 `l3_prompt_candidate`，但不会在缺少 regenerated/shadow replay 时提升为 runtime `l3_prompt`。真实 L3 prompt evolve 主路径是 `edge-mvp l3 prompt-evolve` 的 agent-session job。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded guard search proposal。
 - Guard proposal 只能影响 threshold grid 与 wrong-accept 上限；最终 threshold 仍由 deterministic local search/replay 选择，L4 不能直接决定 runtime accept。
 - 更复杂的 guard family/feature-family proposal 仍是后续增强。
@@ -135,12 +135,13 @@ Agent 权限：
 - 已实现 `darjeeling.compiler.l1_program_compiler.L4CodingAgentAdapter`。
 - adapter 会创建隔离 candidate workspace，写入 teacher-visible context files、prompt、raw transcript、diff、commands、agent report 和 `provenance.json`。
 - `provenance.json` 汇总 Codex JSONL event types、外层命令摘要和 diff stats；raw transcript 仍单独保存，供后续更细解析。
+- `agent-session` 模式会在隔离 `l1_programbank/` workspace 中启动一个 long-running Codex session；agent 自己决定 edit/test/bench/replay 的顺序和次数。
 - `dry-run` 模式可应用 fixture patch，不调用真实 Codex CLI，用于测试。
-- `codex-cli` 模式会调用本机 `codex exec`，模型、sandbox、approval policy、timeout 和命令名由 settings 控制。
-- 真实 L1 evolution 实验必须使用 `codex-cli` 模式；`dry-run` 结果不能作为 demo 指标。
+- `codex-cli` 模式是 legacy one-shot path，模型、sandbox、approval policy、timeout 和命令名由 settings 控制。
+- 真实 L1 evolution 实验必须使用 `agent-session` 模式；`dry-run` 结果不能作为 demo 指标。
 - compiler generation 已在 `L1_AGENT_MODE` 非 disabled 时调用该 adapter。
 - L1 candidate 已纳入 `L0 -> L1 -> L2 -> teacher fallback` 离线 replay gate。
-- 当前默认配置仍是 disabled；主 demo 若要展示 L1 evolution，必须显式开启 `codex-cli`。
+- 当前默认配置仍是 disabled；主 demo 若要展示 L1 evolution，必须显式开启 `agent-session`。
 
 ## L2CodingAgentAdapter
 

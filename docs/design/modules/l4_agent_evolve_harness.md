@@ -71,5 +71,8 @@ The architecture is homologous; the artifact surfaces are not identical.
   The old `local-search` mode is retained for deterministic tests and protocol
   probes, not as the preferred L2 evolve methodology.
 - L2 `dry-run` remains a fixture path for tests and controlled patch replay.
-- L3 should be migrated onto the same session boundary before its next real
-  agent-evolve experiment; its current direct prompt proposal path is legacy.
+- L3 now has an explicit `prompt-evolve` agent-session path. It launches one
+  Codex session over `workspace/l3_prompt/`, exposes editable `prompt/`,
+  protects `contexts/` and tools, snapshots the candidate prompt, and can run
+  visible/private replay gates through the existing local SLM replay evaluator.
+  The direct L3 prompt proposal path remains legacy bounded proposal support.
