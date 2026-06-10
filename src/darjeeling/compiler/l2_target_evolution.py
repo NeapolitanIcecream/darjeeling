@@ -1023,6 +1023,46 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "visible_support_slot_keys": ["house_place"],
             }
         )
+    if "radio_name" in items:
+        probes.append(
+            {
+                "id": "play_radio_generic_station_name",
+                "utterance": "play random radio station",
+                "input_frame": {
+                    "intent": "play_radio",
+                    "slots": {"radio_name": "random radio station"},
+                },
+                "expectation": "veto_or_remove_radio_name",
+                "forbidden_slot_key": "radio_name",
+                "visible_support_slot_keys": ["radio_name"],
+            }
+        )
+    if "media_type" in items:
+        probes.append(
+            {
+                "id": "play_radio_music_media_type_cue",
+                "utterance": "on the radio it is time for good music",
+                "input_frame": {"intent": "play_radio", "slots": {}},
+                "expectation": "veto_or_add_media_type",
+                "expected_slot_key": "media_type",
+                "visible_support_slot_keys": ["media_type"],
+            }
+        )
+    event_name_intents = {
+        str(intent.get("intent"))
+        for intent in items.get("event_name", {}).get("top_teacher_intents", [])
+        if isinstance(intent, dict) and intent.get("intent")
+    }
+    if {"calendar_query", "recommendation_events"}.issubset(event_name_intents):
+        probes.append(
+            {
+                "id": "recommendation_events_bare_upcoming_events",
+                "utterance": "what are the upcoming events",
+                "input_frame": {"intent": "recommendation_events", "slots": {}},
+                "expectation": "veto_or_repair_away_from_recommendation_events",
+                "visible_support_slot_keys": ["event_name"],
+            }
+        )
     joke_utterance = _slot_cue_example_utterance(
         [items.get("joke_type")],
         required_text="joke about",
@@ -1042,6 +1082,33 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "visible_support_slot_keys": ["joke_type"],
             }
         )
+    adjective_joke_utterance = _slot_cue_example_utterance(
+        [items.get("joke_type")],
+        required_text="joke",
+        excluded_text=("joke about",),
+    )
+    if adjective_joke_utterance is not None:
+        probes.append(
+            {
+                "id": "general_joke_adjective_missing_joke_type",
+                "utterance": adjective_joke_utterance,
+                "input_frame": {"intent": "general_joke", "slots": {}},
+                "expectation": "veto_or_add_joke_type",
+                "expected_slot_key": "joke_type",
+                "visible_support_slot_keys": ["joke_type"],
+            }
+        )
+    if "change_amount" in items:
+        probes.append(
+            {
+                "id": "audio_volume_spoken_amount_cue",
+                "utterance": "change the volume level to nineteen please",
+                "input_frame": {"intent": "audio_volume_up", "slots": {}},
+                "expectation": "veto_or_add_change_amount",
+                "expected_slot_key": "change_amount",
+                "visible_support_slot_keys": ["change_amount"],
+            }
+        )
     return probes
 
 
@@ -1049,6 +1116,7 @@ def _slot_cue_example_utterance(
     items: list[dict[str, Any] | None],
     *,
     required_text: str,
+    excluded_text: tuple[str, ...] = (),
 ) -> str | None:
     for item in items:
         if not isinstance(item, dict):
@@ -1057,7 +1125,10 @@ def _slot_cue_example_utterance(
             if not isinstance(example, dict):
                 continue
             utterance = str(example.get("utterance") or "")
-            if required_text in utterance.lower():
+            normalized = utterance.lower()
+            if required_text in normalized and not any(
+                excluded in normalized for excluded in excluded_text
+            ):
                 return utterance
     return None
 
@@ -1129,8 +1200,16 @@ def _slot_cue_probe_passed(
         return frame.intent != "play_radio"
     if expectation == "veto_or_add_house_place":
         return frame.slots.get("house_place") == probe.get("expected_slot_value")
+    if expectation == "veto_or_remove_radio_name":
+        return "radio_name" not in frame.slots
+    if expectation == "veto_or_add_media_type":
+        return "media_type" in frame.slots
+    if expectation == "veto_or_repair_away_from_recommendation_events":
+        return frame.intent != "recommendation_events"
     if expectation == "veto_or_add_joke_type":
         return "joke_type" in frame.slots
+    if expectation == "veto_or_add_change_amount":
+        return "change_amount" in frame.slots
     return False
 
 
@@ -3960,8 +4039,12 @@ def _target_program_text() -> str:
             "  Mandatory cue checks when the corresponding visible slot keys are",
             "  present: non-podcast accepted intents containing a podcast cue;",
             "  slotless accepts containing visible room values such as kitchen,",
-            "  bedroom, living room, bathroom, room, or house; and `general_joke`",
-            "  accepts with `joke about ...` but no `joke_type` slot.",
+            "  bedroom, living room, bathroom, room, or house; generic radio",
+            "  station phrases accepted as concrete `radio_name`; radio/music",
+            "  utterances accepted without a visible media slot; bare upcoming",
+            "  events accepted as `recommendation_events`; `general_joke` accepts",
+            "  with joke adjectives or `joke about ...` but no `joke_type` slot;",
+            "  and volume changes with spoken amounts but no `change_amount` slot.",
             "  Run `tools/evaluate.py --split slot_cue_probes` after editing",
             "  target cue rules; this diagnostic is visible-only and not a private",
             "  selection/adoption gate.",
@@ -4015,8 +4098,10 @@ def _target_program_text() -> str:
             "missing visible slot cue.",
             "Concretely, add conservative checks for podcast cues accepted as a",
             "non-podcast intent, room values accepted without a location slot, and",
-            "`joke about` utterances accepted without `joke_type` when visible",
-            "data supports those slot keys.",
+            "joke cues accepted without `joke_type` when visible data supports",
+            "those slot keys. Also handle generic radio-station names, radio",
+            "music cues, bare upcoming-events intent boundaries, and spoken",
+            "volume amounts when the related visible slot keys are present.",
             "Use `uv run --project system/darjeeling python tools/evaluate.py",
             "--split slot_cue_probes --out runs/slot_cue_probes.json` or the",
             "documented fallback to verify those checks locally.",

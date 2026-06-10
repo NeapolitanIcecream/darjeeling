@@ -79,9 +79,45 @@ def _slot_cue_probe_workspace(tmp_path: Path, target_code: str) -> Path:
                 ),
                 _trace_with_utterance(
                     3,
+                    utterance="what's a silly joke you know",
+                    intent="general_joke",
+                    slots={"joke_type": "silly"},
+                ),
+                _trace_with_utterance(
+                    4,
                     utterance="what is a funny joke about car",
                     intent="general_joke",
                     slots={"joke_type": "funny ; car"},
+                ),
+                _trace_with_utterance(
+                    5,
+                    utterance="play the breakfast club",
+                    intent="play_radio",
+                    slots={"radio_name": "breakfast club"},
+                ),
+                _trace_with_utterance(
+                    6,
+                    utterance="on the radio it is time for good music",
+                    intent="play_radio",
+                    slots={"media_type": "music"},
+                ),
+                _trace_with_utterance(
+                    7,
+                    utterance="what are my upcoming meetings",
+                    intent="calendar_query",
+                    slots={"event_name": "meeting"},
+                ),
+                _trace_with_utterance(
+                    8,
+                    utterance="find wine tasting events nearby",
+                    intent="recommendation_events",
+                    slots={"event_name": "wine tasting"},
+                ),
+                _trace_with_utterance(
+                    9,
+                    utterance="change the speaker volume to sixty five percent",
+                    intent="audio_volume_up",
+                    slots={"change_amount": "to sixty five percent"},
                 ),
             ]
         ),
@@ -786,7 +822,12 @@ def accept_prediction(utterance, frame, metadata, default_accept):
     assert [item["id"] for item in payload["failed_checks"]] == [
         "non_podcast_podcast_cue",
         "slotless_radio_room_cue",
+        "play_radio_generic_station_name",
+        "play_radio_music_media_type_cue",
+        "recommendation_events_bare_upcoming_events",
         "general_joke_missing_joke_type",
+        "general_joke_adjective_missing_joke_type",
+        "audio_volume_spoken_amount_cue",
     ]
 
 
@@ -810,7 +851,15 @@ def accept_prediction(utterance, frame, metadata, default_accept):
         return False
     if intent == "play_radio" and not slots and "kitchen" in text:
         return False
-    if intent == "general_joke" and "joke_type" not in slots and "joke about" in text:
+    if intent == "play_radio" and "radio station" in text and "radio_name" in slots:
+        return False
+    if intent == "play_radio" and "good music" in text and "media_type" not in slots:
+        return False
+    if intent == "recommendation_events" and "upcoming events" in text:
+        return False
+    if intent == "general_joke" and "joke_type" not in slots and "joke" in text:
+        return False
+    if intent == "audio_volume_up" and "to nineteen" in text and "change_amount" not in slots:
         return False
     return default_accept
 """,
@@ -823,7 +872,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
 
     assert payload["passes_gate"] is True
     assert payload["failed_checks"] == []
-    assert payload["probe_count"] == 3
+    assert payload["probe_count"] == 8
 
 
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:

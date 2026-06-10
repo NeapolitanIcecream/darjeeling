@@ -1158,3 +1158,63 @@ Interpretation:
 - This is the first run in the ratio-0.4 visible-pressure series where the
   fixed-snapshot target passed visible validation, visible support, train audit,
   visible cross-audit, private selection, and private promotion together.
+
+Outer replay command:
+
+```bash
+cp -R runs/l2-list-fallback-tuned-3k-r1 \
+  runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1
+
+uv run edge-mvp l2 promote-target \
+  --target-run runs/l2-real-agent-ratio40-slot-cue-probes-live-r1/job \
+  --run-dir runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1
+
+uv run edge-mvp l2 replay-target \
+  --run-dir runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1 \
+  --traces runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1/traces.jsonl \
+  --out runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1/reports/l2_target_outer_replay.json
+```
+
+Outer replay result:
+
+- Candidate generation: `gen_003_l2_target`; parent baseline:
+  `gen_002_candidate`.
+- Candidate was inner-adopted: `true`; it was not a non-adopted diagnostic
+  stage.
+- Baseline: `L0=2344`, `L1=4`, `L2=0`, `L4=652`, frame EM `1.0`, cost
+  per 100 requests `0.217333`.
+- Candidate: `L0=2344`, `L1=4`, `L2=32`, `L4=620`, frame EM `0.997333`,
+  cost per 100 requests `0.206720`.
+- L2 accepted accuracy was `24/32 = 0.75`; wrong accept rate was
+  `0.002667`.
+- Decision: not promoted, `accuracy regression exceeds epsilon`; regressed
+  layer: `L2`.
+
+Outer replay wrong accepts:
+
+- Generic radio phrases were over-slotted as concrete `radio_name`: `play the
+  radio station`, `play random radio station`, and `press play on the radio`.
+- `on the radio it is time for good music` missed the teacher `media_type`
+  slot.
+- Bare upcoming-events queries were accepted as `recommendation_events` instead
+  of `calendar_query`.
+- `what's the funniest joke` missed `joke_type`.
+- `change the volume level to nineteen please` missed `change_amount`.
+
+Interpretation:
+
+- The first `slot_cue_probes` design was too narrow. It caught the private
+  selection/promotion failures that had appeared earlier, but it did not test
+  generic radio-name overfills, radio media-type cues, bare upcoming-events
+  intent boundaries, joke adjectives, or spoken teen-number volume amounts.
+- Re-evaluating the adopted target with the expanded probe code produced
+  `8` probes, `3` passes, and `5` failures:
+  `play_radio_generic_station_name`,
+  `play_radio_music_media_type_cue`,
+  `recommendation_events_bare_upcoming_events`,
+  `general_joke_adjective_missing_joke_type`, and
+  `audio_volume_spoken_amount_cue`.
+- The next implementation keeps the same diagnostic-only split and broadens
+  `slot_cue_probes` rather than introducing a new gate or more terminology.
+  The goal is to make these visible-derived cue risks executable for the next
+  agent run before private selection/promotion or outer replay are consulted.
