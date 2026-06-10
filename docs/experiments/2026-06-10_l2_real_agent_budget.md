@@ -150,3 +150,16 @@ improvements, but promotion still catches generalization failures. The next
 quality experiment should increase visible pressure without leaking private
 rows, for example by using a larger fixed snapshot or stronger visible
 cross-audit before considering any target promotion.
+
+## Metric Trace
+
+The agent-session internal eval trace is plotted in
+`2026-06-10_l2_real_agent_eval_metrics.png`; the extracted rows are in
+`2026-06-10_l2_real_agent_eval_metrics.csv`.
+
+Point labels in the plot use:
+
+- `VV`: visible validation
+- `CX`: visible cross-audit
+- `TR`: train audit
+- `IN`: inner validation
