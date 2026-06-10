@@ -24,6 +24,7 @@ from darjeeling.compiler.l2_target_evolution import (
     L2TargetBudgetProfile,
     L2TargetEvolutionConfig,
     L2TargetEvolutionMode,
+    L2TargetScope,
     L2TargetSplitPolicy,
     run_l2_target_evolution,
 )
@@ -697,6 +698,15 @@ def l2_target_evolve(
         str,
         typer.Option(help="Target split policy: chronological or intent-stratified."),
     ] = "chronological",
+    target_scope: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Target trace scope: teacher_train uses all teacher-labeled traces; "
+                "lower_miss keeps only traces where L0/L1 did not accept."
+            ),
+        ),
+    ] = "teacher_train",
     visible_validation_folds: Annotated[
         int | None,
         typer.Option(
@@ -780,11 +790,14 @@ def l2_target_evolve(
         raise typer.BadParameter("budget_profile must be standard, fixed-inner, or smoke")
     if split_policy not in {"chronological", "intent-stratified"}:
         raise typer.BadParameter("split_policy must be chronological or intent-stratified")
+    if target_scope not in {"teacher_train", "lower_miss"}:
+        raise typer.BadParameter("target_scope must be teacher_train or lower_miss")
     if local_search_space not in {"compact", "wide"}:
         raise typer.BadParameter("local_search_space must be compact or wide")
     evolution_mode: L2TargetEvolutionMode = mode  # type: ignore[assignment]
     resolved_budget_profile: L2TargetBudgetProfile = budget_profile  # type: ignore[assignment]
     resolved_split_policy: L2TargetSplitPolicy = split_policy  # type: ignore[assignment]
+    resolved_target_scope: L2TargetScope = target_scope  # type: ignore[assignment]
     resolved_rounds, resolved_inner_patience, resolved_local_search_trials = (
         _resolve_l2_target_budget(
             budget_profile=resolved_budget_profile,
@@ -833,6 +846,7 @@ def l2_target_evolve(
             local_search_cross_audit_top_k=resolved_local_search_cross_audit_top_k,
             budget_profile=resolved_budget_profile,
             split_policy=resolved_split_policy,
+            target_scope=resolved_target_scope,
             visible_validation_folds=resolved_visible_validation_folds,
             visible_cross_audit_folds=resolved_visible_cross_audit_folds,
             max_agent_rounds=resolved_max_agent_rounds,

@@ -20,6 +20,7 @@ from darjeeling.compiler.l2_target_evolution import (
     _adoption_decision,
     _selection_decision,
     evaluate_target_workspace,
+    l2_target_traces_for_scope,
     prepare_l2_target_workspace,
     run_l2_target_evolution,
     split_l2_target_traces,
@@ -51,6 +52,25 @@ def _traces() -> list[TraceRecord]:
         else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
         for index in range(12)
     ]
+
+
+def _trace_with_lower_result(
+    index: int,
+    *,
+    intent: str,
+    slots: dict[str, str],
+    lower_layer: str | None,
+) -> TraceRecord:
+    trace = _trace(index, intent=intent, slots=slots)
+    if lower_layer is None:
+        return trace
+    frame = Frame(intent=intent, slots=slots)
+    trace.layer_results.insert(
+        0,
+        LayerResult(layer=lower_layer, accepted=True, frame=frame, latency_ms=0.1),
+    )
+    trace.chosen_layer = lower_layer
+    return trace
 
 
 def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
@@ -123,10 +143,19 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "kind": "fixed_trace_snapshot_inner_loop",
         "outer_replay_cadence_bound": False,
         "teacher_labeled_traces": 12,
+        "scoped_teacher_labeled_traces": 12,
         "note": (
             "target rounds reuse this fixed split; collecting another stream prefix "
             "is not part of the inner loop"
         ),
+    }
+    assert summary["target_scope"] == {
+        "schema_version": "l2-target-scope-v1",
+        "scope": "teacher_train",
+        "input_teacher_labeled_traces": 12,
+        "scoped_teacher_labeled_traces": 12,
+        "lower_layer_accepted_excluded": 0,
+        "selection_basis": "all teacher-labeled traces",
     }
     assert summary["target_code_policy"] == {
         "core_must_remain_dataset_independent": True,
@@ -219,6 +248,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "early_stop_policy" in round_state
     assert "does not stop the inner loop" in round_state["early_stop_policy"]
     assert "candidate_selection" in objective["gates"]
+    assert objective["target_scope"]["scope"] == "teacher_train"
     assert objective["workspace_scope"]["candidate_code_writable_roots"] == ["target/"]
     assert objective["workspace_scope"]["scratch_writable_roots"] == ["runs/"]
     assert "system/darjeeling/" in objective["workspace_scope"]["protected_roots"]
@@ -277,6 +307,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "diagnostic_only_not_selection_or_adoption_gate"
     )
     assert round_state["agent_budget"]["mode"] == "dry-run"
+    assert round_state["target_scope"]["scope"] == "teacher_train"
     assert round_state["budget_policy"]["profile_intent"]["profile_role"] == (
         "cost_capped_default"
     )
@@ -399,6 +430,59 @@ def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
     for split_name in ["inner_validation", "selection_holdout", "promotion_holdout"]:
         intents = {trace.teacher_frame.intent for trace in split[split_name]}
         assert intents == {"alarm_set", "weather_query"}
+
+
+def test_l2_target_lower_miss_scope_filters_lower_layer_accepts(tmp_path: Path) -> None:
+    traces = [
+        _trace_with_lower_result(
+            index,
+            intent="alarm_set" if index % 2 == 0 else "weather_query",
+            slots=(
+                {"time": f"{index} am"}
+                if index % 2 == 0
+                else {"location": f"city {index}"}
+            ),
+            lower_layer="L0" if index < 5 else ("L1" if index < 10 else None),
+        )
+        for index in range(24)
+    ]
+    teacher_traces = traces_to_teacher_view(traces)
+
+    scoped = l2_target_traces_for_scope(teacher_traces, scope="lower_miss")
+    assert [trace.request_id for trace in scoped] == [f"r{index}" for index in range(10, 24)]
+
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=1,
+            mode="dry-run",
+            target_scope="lower_miss",
+            inner_patience_rounds=0,
+        ),
+        traces=teacher_traces,
+    )
+
+    workspace = tmp_path / "job" / "workspace" / "l2_target"
+    round_state = json.loads((workspace / "data" / "round_state.json").read_text())
+    train_rows = [
+        json.loads(line)
+        for line in (workspace / "data" / "train.jsonl").read_text().splitlines()
+    ]
+
+    assert summary["target_scope"] == {
+        "schema_version": "l2-target-scope-v1",
+        "scope": "lower_miss",
+        "input_teacher_labeled_traces": 24,
+        "scoped_teacher_labeled_traces": 14,
+        "lower_layer_accepted_excluded": 10,
+        "selection_basis": "teacher-labeled traces where L0/L1 did not accept",
+    }
+    assert summary["loop_cadence"]["teacher_labeled_traces"] == 24
+    assert summary["loop_cadence"]["scoped_teacher_labeled_traces"] == 14
+    assert sum(summary["data_split"].values()) == 14
+    assert round_state["target_scope"]["scope"] == "lower_miss"
+    assert all(int(row["request_id"][1:]) >= 10 for row in train_rows)
 
 
 def test_l2_target_visible_validation_folds_stay_visible_not_private(
@@ -749,6 +833,66 @@ def test_l2_target_evolution_local_search_can_rerank_with_visible_cross_audit(
     ]
     assert len(reranked) == 1
     assert reranked[0]["visible_cross_audit"]["split"] == "visible_cross_audit"
+
+
+def test_l2_target_local_search_vetoes_cross_audit_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "target").mkdir(parents=True)
+    config = l2_target_evolution.L2StudentConfig().model_dump(mode="json")
+    calls: list[str] = []
+
+    def metric(split: str, *, passes_gate: bool, accepted_accuracy: float) -> dict:
+        return {
+            "split": split,
+            "train_size": 10,
+            "validation_size": 10,
+            "accepted": 2,
+            "correct_accepts": 2 if passes_gate else 1,
+            "wrong_accepts": 0 if passes_gate else 1,
+            "vetoed_accepts": 0,
+            "coverage": 0.2,
+            "accepted_accuracy": accepted_accuracy,
+            "wrong_accept_rate": 0.0 if passes_gate else 0.1,
+            "passes_gate": passes_gate,
+            "config": config,
+            "wrong_examples": [],
+            "veto_examples": [],
+            "near_miss_examples": [],
+        }
+
+    def fake_evaluate_target_workspace(**kwargs) -> dict:
+        split = kwargs["split"]
+        calls.append(split)
+        if split == "visible_cross_audit":
+            return metric(split, passes_gate=False, accepted_accuracy=0.5)
+        return metric(split, passes_gate=True, accepted_accuracy=1.0)
+
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "evaluate_target_workspace",
+        fake_evaluate_target_workspace,
+    )
+
+    report = l2_target_evolution.run_local_target_search(
+        workspace_root=workspace,
+        trials=1,
+        cross_audit_folds=2,
+        cross_audit_top_k=1,
+    )
+
+    assert report["cross_audit_rerank_enabled"] is True
+    assert report["best_inner_validation"]["passes_gate"] is True
+    assert report["best_visible_cross_audit"]["passes_gate"] is False
+    assert report["cross_audit_safety_veto"] is True
+    assert report["applied"] is False
+    assert report["applied_reason"] == (
+        "best visible/cross-audit config failed visible cross-audit safety gate"
+    )
+    assert not (workspace / "target" / "config.json").exists()
+    assert calls.count("visible_cross_audit") >= 2
 
 
 def test_l2_target_evolution_respects_zero_agent_round_budget(tmp_path: Path) -> None:
@@ -1186,6 +1330,50 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
         "diagnostic_only_not_selection_or_adoption_gate"
     )
     assert summary["data_split"]["train"] > 0
+
+
+def test_l2_target_evolve_cli_accepts_lower_miss_target_scope(tmp_path: Path) -> None:
+    traces = [
+        _trace_with_lower_result(
+            index,
+            intent="alarm_set" if index % 2 == 0 else "weather_query",
+            slots=(
+                {"time": f"{index} am"}
+                if index % 2 == 0
+                else {"location": f"city {index}"}
+            ),
+            lower_layer="L0" if index < 6 else None,
+        )
+        for index in range(20)
+    ]
+    traces_path = tmp_path / "traces.jsonl"
+    traces_path.write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in traces),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "target-evolve",
+            "--traces",
+            str(traces_path),
+            "--out-dir",
+            str(tmp_path / "target-run"),
+            "--target-scope",
+            "lower_miss",
+            "--rounds",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
+    assert summary["target_scope"]["scope"] == "lower_miss"
+    assert summary["target_scope"]["input_teacher_labeled_traces"] == 20
+    assert summary["target_scope"]["scoped_teacher_labeled_traces"] == 14
+    assert summary["target_scope"]["lower_layer_accepted_excluded"] == 6
 
 
 def test_l2_target_evolve_cli_allows_zero_agent_round_budget(tmp_path: Path) -> None:

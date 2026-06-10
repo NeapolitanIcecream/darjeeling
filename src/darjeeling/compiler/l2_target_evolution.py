@@ -27,6 +27,7 @@ L2TargetEvolutionMode = Literal["dry-run", "codex-cli", "local-search"]
 L2TargetSearchSpace = Literal["compact", "wide"]
 L2TargetBudgetProfile = Literal["standard", "fixed-inner", "smoke"]
 L2TargetSplitPolicy = Literal["chronological", "intent-stratified"]
+L2TargetScope = Literal["teacher_train", "lower_miss"]
 
 DEFAULT_TARGET_EVOLVE_ROUNDS = 12
 DEFAULT_TARGET_LOCAL_SEARCH_TRIALS = 96
@@ -51,6 +52,7 @@ class L2TargetEvolutionConfig:
     local_search_cross_audit_top_k: int = 0
     budget_profile: L2TargetBudgetProfile = "standard"
     split_policy: L2TargetSplitPolicy = "chronological"
+    target_scope: L2TargetScope = "teacher_train"
     visible_validation_folds: int = 1
     visible_cross_audit_folds: int = 0
     max_agent_rounds: int | None = None
@@ -84,6 +86,8 @@ def run_l2_target_evolution(
         raise ValueError("visible_cross_audit_folds must be 0 or at least 2")
     if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
         raise ValueError("max_agent_rounds must be non-negative")
+    if config.target_scope not in {"teacher_train", "lower_miss"}:
+        raise ValueError("target_scope must be teacher_train or lower_miss")
     max_agent_rounds = _effective_max_agent_rounds(config)
     job_dir = config.job_dir
     workspace_root = job_dir / "workspace" / "l2_target"
@@ -97,13 +101,22 @@ def run_l2_target_evolution(
     transcript_dir.mkdir(parents=True, exist_ok=True)
     private_dir.mkdir(parents=True, exist_ok=True)
 
+    teacher_labeled_trace_count = sum(
+        1 for trace in traces if trace.teacher_frame is not None
+    )
+    target_traces = l2_target_traces_for_scope(traces, scope=config.target_scope)
+    target_teacher_labeled_trace_count = sum(
+        1 for trace in target_traces if trace.teacher_frame is not None
+    )
     split = split_l2_target_traces(
-        traces,
+        target_traces,
         policy=config.split_policy,
         visible_validation_folds=config.visible_validation_folds,
     )
-    teacher_labeled_trace_count = sum(
-        1 for trace in traces if trace.teacher_frame is not None
+    target_scope_payload = _target_scope_payload(
+        scope=config.target_scope,
+        input_teacher_labeled_traces=teacher_labeled_trace_count,
+        scoped_teacher_labeled_traces=target_teacher_labeled_trace_count,
     )
     private_paths = {
         "selection_holdout": private_dir / "selection_holdout.jsonl",
@@ -153,7 +166,7 @@ def run_l2_target_evolution(
             config=config,
             round_index=round_index,
             state_kind="before_round",
-            teacher_labeled_traces=teacher_labeled_trace_count,
+            target_scope=target_scope_payload,
             baseline=baseline,
             round_results=round_results,
             no_inner_improvement_rounds=no_inner_improvement_rounds,
@@ -354,7 +367,7 @@ def run_l2_target_evolution(
         config=config,
         round_index=len(round_results) + 1,
         state_kind="final",
-        teacher_labeled_traces=teacher_labeled_trace_count,
+        target_scope=target_scope_payload,
         baseline=baseline,
         round_results=round_results,
         no_inner_improvement_rounds=no_inner_improvement_rounds,
@@ -378,7 +391,7 @@ def run_l2_target_evolution(
             max_agent_rounds=max_agent_rounds,
             rounds_completed=len(round_results),
             stop_reason=stop_reason,
-            teacher_labeled_traces=teacher_labeled_trace_count,
+            teacher_labeled_traces=target_teacher_labeled_trace_count,
         ),
         "agent_budget": _agent_budget_payload(
             config=config,
@@ -389,12 +402,14 @@ def run_l2_target_evolution(
             "kind": "fixed_trace_snapshot_inner_loop",
             "outer_replay_cadence_bound": False,
             "teacher_labeled_traces": teacher_labeled_trace_count,
+            "scoped_teacher_labeled_traces": target_teacher_labeled_trace_count,
             "note": (
                 "target rounds reuse this fixed split; collecting another stream prefix "
                 "is not part of the inner loop"
             ),
         },
         "workspace": str(workspace_root),
+        "target_scope": target_scope_payload,
         "data_split": {key: len(value) for key, value in split.items()},
         "data_split_policy": _target_split_policy_payload(config.split_policy, split),
         "baseline": baseline,
@@ -443,6 +458,53 @@ def split_l2_target_traces(
         labeled,
         visible_validation_folds=visible_validation_folds,
     )
+
+
+def l2_target_traces_for_scope(
+    traces: list[TeacherTrace],
+    *,
+    scope: L2TargetScope = "teacher_train",
+) -> list[TeacherTrace]:
+    if scope == "teacher_train":
+        return traces
+    if scope == "lower_miss":
+        return [
+            trace
+            for trace in traces
+            if trace.teacher_frame is not None and not _lower_layer_accepted(trace)
+        ]
+    raise ValueError(f"unsupported L2 target scope: {scope}")
+
+
+def _lower_layer_accepted(trace: TeacherTrace) -> bool:
+    return any(
+        result.layer in {"L0", "L1"} and result.accepted and result.frame is not None
+        for result in trace.layer_results
+    )
+
+
+def _target_scope_payload(
+    *,
+    scope: L2TargetScope,
+    input_teacher_labeled_traces: int,
+    scoped_teacher_labeled_traces: int,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "l2-target-scope-v1",
+        "scope": scope,
+        "input_teacher_labeled_traces": input_teacher_labeled_traces,
+        "scoped_teacher_labeled_traces": scoped_teacher_labeled_traces,
+        "lower_layer_accepted_excluded": (
+            input_teacher_labeled_traces - scoped_teacher_labeled_traces
+            if scope == "lower_miss"
+            else 0
+        ),
+        "selection_basis": (
+            "teacher-labeled traces where L0/L1 did not accept"
+            if scope == "lower_miss"
+            else "all teacher-labeled traces"
+        ),
+    }
 
 
 def _split_l2_target_traces_chronological(
@@ -1551,7 +1613,7 @@ def _write_target_state_files(
     config: L2TargetEvolutionConfig,
     round_index: int,
     state_kind: Literal["before_round", "final"],
-    teacher_labeled_traces: int,
+    target_scope: dict[str, Any],
     baseline: dict[str, Any],
     round_results: list[dict[str, Any]],
     no_inner_improvement_rounds: int,
@@ -1561,7 +1623,8 @@ def _write_target_state_files(
     data_dir = workspace_root / "data"
     objective = _target_objective_payload(
         config,
-        teacher_labeled_traces=teacher_labeled_traces,
+        teacher_labeled_traces=target_scope["scoped_teacher_labeled_traces"],
+        target_scope=target_scope,
     )
     state = {
         "schema_version": "l2-target-round-state-v1",
@@ -1569,11 +1632,12 @@ def _write_target_state_files(
         "next_round": round_index,
         "rounds_requested": config.rounds,
         "no_inner_improvement_rounds": no_inner_improvement_rounds,
+        "target_scope": target_scope,
         "budget_policy": _target_budget_policy_payload(config),
         "evidence_policy": _target_evidence_policy_payload(
             config,
             rounds_completed=len(round_results),
-            teacher_labeled_traces=teacher_labeled_traces,
+            teacher_labeled_traces=target_scope["scoped_teacher_labeled_traces"],
         ),
         "agent_budget": _agent_budget_payload(
             config=config,
@@ -1855,10 +1919,12 @@ def _target_objective_payload(
     config: L2TargetEvolutionConfig,
     *,
     teacher_labeled_traces: int | None = None,
+    target_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": "l2-target-objective-v1",
         "primary_objective": "increase safe L2 accepts on unseen target traffic",
+        "target_scope": target_scope,
         "budget_policy": _target_budget_policy_payload(config),
         "evidence_policy": _target_evidence_policy_payload(
             config,
@@ -2378,9 +2444,19 @@ def run_local_target_search(
             default=None,
         )
         applied = False
+        cross_audit_safety_veto = False
         applied_reason = "no completed local-search trial"
         if best_report is not None:
-            if _local_search_report_score(best_report) > _local_search_current_score(
+            if (
+                cross_audit_rerank_enabled
+                and not _local_search_report_passes_cross_audit(best_report)
+            ):
+                _restore_target_config_json(config_path, original_config_text)
+                cross_audit_safety_veto = True
+                applied_reason = (
+                    "best visible/cross-audit config failed visible cross-audit safety gate"
+                )
+            elif _local_search_report_score(best_report) > _local_search_current_score(
                 current_inner=current_inner,
                 current_cross_audit=current_cross_audit,
                 cross_audit_enabled=cross_audit_rerank_enabled,
@@ -2427,6 +2503,7 @@ def run_local_target_search(
                 best_report.get("visible_cross_audit") if best_report is not None else None
             ),
             "applied": applied,
+            "cross_audit_safety_veto": cross_audit_safety_veto,
             "applied_reason": applied_reason,
             "private_holdout_visibility": (
                 "local search used only agent-visible train and validation-fold data"
@@ -2586,6 +2663,11 @@ def _local_search_report_score(
     )
 
 
+def _local_search_report_passes_cross_audit(report: dict[str, Any]) -> bool:
+    metric = report.get("visible_cross_audit")
+    return isinstance(metric, dict) and bool(metric.get("passes_gate"))
+
+
 def _local_search_current_score(
     *,
     current_inner: dict[str, Any],
@@ -2673,6 +2755,7 @@ def _visible_local_search_summary(report: dict[str, Any]) -> dict[str, Any]:
         "best_inner_validation": report["best_inner_validation"],
         "best_visible_cross_audit": report.get("best_visible_cross_audit"),
         "applied": report["applied"],
+        "cross_audit_safety_veto": report.get("cross_audit_safety_veto", False),
         "applied_reason": report["applied_reason"],
         "private_holdout_visibility": report["private_holdout_visibility"],
     }
