@@ -1037,6 +1037,16 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "visible_support_slot_keys": ["radio_name"],
             }
         )
+        probes.append(
+            {
+                "id": "play_radio_missing_radio_name_cue",
+                "utterance": "put on radio mango",
+                "input_frame": {"intent": "play_radio", "slots": {}},
+                "expectation": "veto_or_add_radio_name",
+                "expected_slot_key": "radio_name",
+                "visible_support_slot_keys": ["radio_name"],
+            }
+        )
     if "media_type" in items:
         probes.append(
             {
@@ -1224,6 +1234,8 @@ def _slot_cue_probe_passed(
         return frame.slots.get("house_place") == probe.get("expected_slot_value")
     if expectation == "veto_or_remove_radio_name":
         return "radio_name" not in frame.slots
+    if expectation == "veto_or_add_radio_name":
+        return "radio_name" in frame.slots
     if expectation == "veto_or_add_media_type":
         return "media_type" in frame.slots
     if expectation == "veto_or_add_date":
@@ -4068,9 +4080,11 @@ def _target_program_text() -> str:
             "  present: non-podcast accepted intents containing a podcast cue;",
             "  slotless accepts containing visible room values such as kitchen,",
             "  bedroom, living room, bathroom, room, or house; generic radio",
-            "  station phrases accepted as concrete `radio_name`; radio/music",
-            "  utterances accepted without a visible media slot; calendar removes",
-            "  with date cues accepted without `date`; bare upcoming events",
+            "  station phrases accepted as concrete `radio_name`; radio-name",
+            "  cue patterns such as `put on radio <name>` accepted without",
+            "  `radio_name`; radio/music utterances accepted without a visible",
+            "  media slot; calendar removes with date cues accepted without `date`;",
+            "  bare upcoming events",
             "  accepted as `recommendation_events`; `general_joke` accepts with",
             "  joke adjectives, superlatives, or `joke about ...` but no",
             "  `joke_type` slot; and volume changes with spoken amounts but no",
@@ -4130,9 +4144,9 @@ def _target_program_text() -> str:
             "non-podcast intent, room values accepted without a location slot, and",
             "joke cues accepted without `joke_type` when visible data supports",
             "those slot keys. Also handle generic radio-station names, radio",
-            "music cues, calendar date cues, bare upcoming-events intent",
-            "boundaries, and spoken volume amounts when the related visible slot",
-            "keys are present.",
+            "name cues, radio music cues, calendar date cues, bare upcoming-events",
+            "intent boundaries, and spoken volume amounts when the related visible",
+            "slot keys are present.",
             "Use `uv run --project system/darjeeling python tools/evaluate.py",
             "--split slot_cue_probes --out runs/slot_cue_probes.json` or the",
             "documented fallback to verify those checks locally.",

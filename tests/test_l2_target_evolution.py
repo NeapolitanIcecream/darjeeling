@@ -835,6 +835,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
         "non_podcast_podcast_cue",
         "slotless_radio_room_cue",
         "play_radio_generic_station_name",
+        "play_radio_missing_radio_name_cue",
         "play_radio_music_media_type_cue",
         "calendar_remove_today_date_cue",
         "recommendation_events_bare_upcoming_events",
@@ -867,6 +868,8 @@ def accept_prediction(utterance, frame, metadata, default_accept):
         return False
     if intent == "play_radio" and "radio station" in text and "radio_name" in slots:
         return False
+    if intent == "play_radio" and "radio mango" in text and "radio_name" not in slots:
+        return False
     if intent == "play_radio" and "good music" in text and "media_type" not in slots:
         return False
     if intent == "calendar_remove" and "today" in text and "date" not in slots:
@@ -888,7 +891,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
 
     assert payload["passes_gate"] is True
     assert payload["failed_checks"] == []
-    assert payload["probe_count"] == 10
+    assert payload["probe_count"] == 11
 
 
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:

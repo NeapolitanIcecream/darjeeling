@@ -1345,3 +1345,55 @@ Interpretation:
   to raise raw accepts. The agent should prefer target-local veto/postprocess
   rules and remove threshold-lowering config that only recovers coverage after
   safety vetoes.
+
+Policy-guided live result:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-policy-live-r1`.
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `30` accepted, `30` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `30` correct accepts, required `10`.
+- Final train audit: `93` accepted, `93` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `26` accepted, `26` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed: `10/10`.
+- Private selection: `5` accepted, `5` correct, `0` wrong; gate passed.
+- Private promotion: `4` accepted, `4` correct, `0` wrong; gate passed.
+- `selection_decision.selected=true`, `adoption_decision.adopted=true`.
+- The selected snapshot did not contain `target/config.json`; `accept_threshold`
+  stayed at `0.93`.
+
+Policy-guided 3k outer replay:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-policy-outer-3k-r1`.
+- Baseline: `L0=2344`, `L1=4`, `L2=0`, `L4=652`, frame EM `1.0`, cost
+  per 100 requests `0.217333`.
+- Candidate: `L0=2344`, `L1=4`, `L2=27`, `L4=625`, frame EM `1.0`, cost
+  per 100 requests `0.208378`.
+- L2 accepted accuracy was `27/27 = 1.0`; wrong accept rate was `0.0`.
+- Decision: promoted, `objective improved within gates`.
+
+Policy-guided 10k outer replay:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-policy-outer-10k-r1`.
+- Baseline: `L0=9878`, `L1=1`, `L2=0`, `L4=121`, frame EM `1.0`, cost
+  per 100 requests `0.012100`.
+- Candidate: `L0=9878`, `L1=1`, `L2=6`, `L4=115`, frame EM `0.9999`, cost
+  per 100 requests `0.011503`.
+- L2 accepted accuracy was `5/6 = 0.833333`; wrong accept rate was `0.0001`.
+- Decision: not promoted, `accuracy regression exceeds epsilon`.
+
+10k wrong accept:
+
+- `put on radio mango` was accepted as `play_radio {}`, but teacher required
+  `radio_name=radio mango`.
+
+Interpretation:
+
+- The config policy fixed the previous private-gate failure and produced the
+  first 3k outer replay in this series with zero frame regression and a
+  promoted decision.
+- The 10k replay found a longer-tail slot cue: radio-name phrases of the form
+  `put on radio <name>`. This is still in the same visible slot-cue family, so
+  the next implementation adds `play_radio_missing_radio_name_cue` to the
+  existing `slot_cue_probes` split rather than creating a new diagnostic.
