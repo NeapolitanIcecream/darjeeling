@@ -167,6 +167,10 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
             "target code may be derived from data/train.jsonl and "
             "visible data/inner_validation*.jsonl only"
         ),
+        "generalization_rule": (
+            "avoid exact utterance exceptions from a single visible row; prefer "
+            "pattern-level rules with multiple visible supports or clear schema semantics"
+        ),
         "private_holdout_visibility": (
             "selection/promotion holdouts remain outside the agent workspace"
         ),
@@ -266,6 +270,11 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "near_miss_examples" in strategy
         for strategy in objective["allowed_strategies"]
     )
+    assert any(
+        "single-visible-row exact utterance" in strategy
+        for strategy in objective["invalid_strategies"]
+    )
+    assert "multiple visible supports" in json.dumps(objective["allowed_strategies"])
     assert "Private selection" in program_text
     assert "alone is not success" in program_text
     assert "outer selection signal" in program_text
@@ -274,6 +283,8 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "near_miss_examples" in program_text
     assert "target_diagnostics.json" in program_text
     assert "latest_safety_backlog" in program_text
+    assert "Do not add exact utterance exceptions" in program_text
+    assert "multiple visible examples" in program_text
     assert target_diagnostics["schema_version"] == "l2-target-diagnostics-v1"
     assert target_diagnostics["visibility"] == "visible_validation_only"
     assert target_diagnostics["baseline_inner_validation"]["split"] == "inner_validation"

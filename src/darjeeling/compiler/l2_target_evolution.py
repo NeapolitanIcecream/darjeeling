@@ -2052,6 +2052,7 @@ def _target_objective_payload(
             "raw coverage increase with lower frame exactness",
             "lowering threshold when visible validation gate fails",
             "expanding near-miss coverage while safety_backlog has accepted-wrong items",
+            "single-visible-row exact utterance exceptions or request-id memorization",
             "treating a fixed edit/evaluate/search script as the agent plan",
             "treating private selection success alone as candidate success",
             "candidate code changes outside target/",
@@ -2070,7 +2071,10 @@ def _target_objective_payload(
             "postprocess_frame fixes that preserve exact frame correctness",
             "accept_prediction veto logic that abstains when uncertain",
             "near_miss_examples-driven mechanisms that still pass visible validation gate",
-            "target-specific lexical or state-machine rules derived from visible target data",
+            (
+                "target-specific lexical or state-machine rules derived from visible "
+                "target data with multiple visible supports or clear schema semantics"
+            ),
         ],
         "agent_session_policy": {
             "session_closure": "one L4 agent session per target-evolve job",
@@ -2091,6 +2095,10 @@ def _target_code_policy_payload() -> dict[str, Any]:
         "target_code_visibility_rule": (
             "target code may be derived from data/train.jsonl and "
             "visible data/inner_validation*.jsonl only"
+        ),
+        "generalization_rule": (
+            "avoid exact utterance exceptions from a single visible row; prefer "
+            "pattern-level rules with multiple visible supports or clear schema semantics"
         ),
         "private_holdout_visibility": (
             "selection/promotion holdouts remain outside the agent workspace"
@@ -2999,6 +3007,9 @@ def _target_program_text() -> str:
             "Darjeeling-core dataset-independence violation. It becomes invalid only",
             "if it moves into core code, uses private holdout rows or aggregates, or",
             "uses MASSIVE/external dataset knowledge that is not visible here.",
+            "Do not add exact utterance exceptions from a single visible row or",
+            "memorize request IDs. Prefer pattern-level lexical or slot-support",
+            "rules backed by multiple visible examples or clear schema semantics.",
             "Use local config search for cheap tuning when useful; reserve code edits",
             "for changes that require target-specific design judgment.",
             "Do not move target-specific code into core.",
