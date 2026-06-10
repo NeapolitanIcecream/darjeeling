@@ -2156,6 +2156,7 @@ def _visible_slot_cue_summary_payload(
     items = [
         {
             "slot_key": item["slot_key"],
+            "slot_key_terms": _slot_key_terms(str(item["slot_key"])),
             "total": int(item["total"]),
             "top_teacher_intents": _top_intent_counts(item["teacher_intents"]),
             "top_values": _top_value_counts(item["values"]),
@@ -2167,11 +2168,20 @@ def _visible_slot_cue_summary_payload(
     return {
         "schema_version": "l2-target-visible-slot-cue-summary-v1",
         "visibility": "visible_validation_only",
+        "usage_hint": (
+            "For slotless or missing-slot accepted frames, use slot_key_terms, "
+            "top_values, and examples as visible support for conservative "
+            "postprocess or veto rules. This is diagnostic-only."
+        ),
         "source_splits": source_splits,
         "item_limit": item_limit,
         "items": items[:item_limit],
         "empty_reason": None if items else "no_visible_slot_values",
     }
+
+
+def _slot_key_terms(slot_key: str) -> list[str]:
+    return [term for term in slot_key.lower().replace("-", "_").split("_") if term]
 
 
 def _top_intent_counts(
@@ -3736,6 +3746,10 @@ def _target_program_text() -> str:
             "  `visible_slot_cue_summary` summarizes visible teacher slot keys",
             "  and values across train/validation rows; use it to generalize",
             "  clear slot cues such as room words without reading private rows.",
+            "  Before stopping, check its `slot_key_terms`, `top_values`, and",
+            "  examples against any slotless or missing-slot accepted frames;",
+            "  visible cues such as podcast, radio, room, or joke-about terms",
+            "  support conservative target-local vetoes or exact postprocess.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -3780,6 +3794,10 @@ def _target_program_text() -> str:
             "high-guard wrong-intent pairs such as media intent boundary errors.",
             "Use `visible_slot_cue_summary` when a risk appears to need a slot",
             "cue that may be supported by other visible intents.",
+            "Do not treat a slotless accepted frame as safe until you have checked",
+            "`visible_slot_cue_summary` for visible slot cues that the frame omits;",
+            "prefer a veto over accepting a high-guard frame with an obvious",
+            "missing visible slot cue.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
             "abstention or target-local vetoes over accepting predictions that",
             "contradict visible teacher labels.",

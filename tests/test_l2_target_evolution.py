@@ -645,10 +645,12 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
 
     assert payload["schema_version"] == "l2-target-visible-slot-cue-summary-v1"
     assert payload["visibility"] == "visible_validation_only"
+    assert "slotless or missing-slot accepted frames" in payload["usage_hint"]
     house_place = next(
         item for item in payload["items"] if item["slot_key"] == "house_place"
     )
     assert house_place["total"] == 2
+    assert house_place["slot_key_terms"] == ["house", "place"]
     assert house_place["top_values"] == [
         {"value": "bathroom", "count": 1},
         {"value": "kitchen", "count": 1},
@@ -702,6 +704,7 @@ def test_l2_target_visible_slot_cue_summary_keeps_low_frequency_podcast_cues() -
     podcast_name = next(
         item for item in payload["items"] if item["slot_key"] == "podcast_name"
     )
+    assert podcast_name["slot_key_terms"] == ["podcast", "name"]
     assert podcast_name["top_teacher_intents"] == [
         {"intent": "play_podcasts", "count": 1}
     ]

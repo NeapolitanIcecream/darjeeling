@@ -861,3 +861,84 @@ Interpretation:
 - The next implementation keeps the same diagnostic concept and widens the
   default item budget to 40 so low-frequency, high-signal schema cues are still
   agent-visible without introducing another queue or gate.
+
+Budget-40 live command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-slot-cue-budget40-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Budget-40 live result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `21` accepted, `21` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `21` correct accepts, required `10`.
+- Final train audit: `66` accepted, `66` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `23` accepted, `23` correct, `0` wrong; gate
+  passed.
+- Private selection: `7` accepted, `5` correct, `2` wrong; gate failed.
+- Private promotion: `4` accepted, `3` correct, `1` wrong; gate failed.
+
+Interpretation:
+
+- The budget change made `podcast_name`, `podcast_descriptor`, `radio_name`,
+  `house_place`, and `joke_type` visible in `target_diagnostics.json`, but the
+  agent still did not systematically use those cues for slotless accepts.
+- The private wrong accepts were all omitted-slot or media-boundary cases that
+  visible cues could support: podcast cue omitted by a `play_radio` frame,
+  room cue omitted by a `play_radio` frame, and `joke_type` omitted by a
+  `general_joke` frame.
+- The next implementation keeps the same diagnostic object but makes its usage
+  explicit: each item exposes `slot_key_terms`, and the agent program tells the
+  agent not to stop until it checks `slot_key_terms`, top values, and examples
+  against slotless or missing-slot accepted frames.
+
+Slot-key-terms smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-visible-slot-cue-terms-smoke-r1/job \
+  --max-traces 1000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+```
+
+Slot-key-terms smoke result:
+
+- `visible_slot_cue_summary.usage_hint` tells the agent to use
+  `slot_key_terms`, top values, and examples for slotless/missing-slot accepted
+  frames.
+- `podcast_name` exposed `slot_key_terms=["podcast", "name"]`.
+- `house_place` exposed `slot_key_terms=["house", "place"]`.
+- `joke_type` exposed `slot_key_terms=["joke", "type"]`.
+- `program.md` included the stopping checklist for slotless/missing-slot
+  accepted frames.
+- `target_diagnostics.json`, `round_state.json`, and `objective.json` still did
+  not contain `selection_holdout` or `promotion_holdout`.
