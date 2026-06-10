@@ -45,6 +45,18 @@ def _trace(index: int, *, intent: str, slots: dict[str, str]) -> TraceRecord:
     )
 
 
+def _trace_with_utterance(
+    index: int,
+    *,
+    utterance: str,
+    intent: str,
+    slots: dict[str, str],
+) -> TraceRecord:
+    trace = _trace(index, intent=intent, slots=slots)
+    trace.utterance = utterance
+    return trace
+
+
 def _traces() -> list[TraceRecord]:
     return [
         _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
@@ -297,6 +309,12 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "multiple visible examples" in program_text
     assert target_diagnostics["schema_version"] == "l2-target-diagnostics-v1"
     assert target_diagnostics["visibility"] == "visible_validation_only"
+    assert target_diagnostics["visible_slot_cue_summary"]["schema_version"] == (
+        "l2-target-visible-slot-cue-summary-v1"
+    )
+    assert target_diagnostics["visible_slot_cue_summary"]["visibility"] == (
+        "visible_validation_only"
+    )
     assert target_diagnostics["baseline_inner_validation"]["split"] == "inner_validation"
     assert "families" in target_diagnostics["baseline_inner_validation"]
     assert target_diagnostics["baseline_safety_backlog"]["schema_version"] == (
@@ -594,6 +612,57 @@ def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> No
     assert payload["intent_confusion_backlog"]["visibility"] == (
         "outer_summary_only_not_agent_workspace"
     )
+
+
+def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -> None:
+    traces = traces_to_teacher_view(
+        [
+            _trace_with_utterance(
+                1,
+                utterance="turn off the kitchen lights",
+                intent="iot_hue_lightoff",
+                slots={"house_place": "kitchen"},
+            ),
+            _trace_with_utterance(
+                2,
+                utterance="start vacuuming the bathroom",
+                intent="iot_cleaning",
+                slots={"house_place": "bathroom"},
+            ),
+            _trace_with_utterance(
+                3,
+                utterance="what is the weather in paris",
+                intent="weather_query",
+                slots={"place_name": "paris"},
+            ),
+        ]
+    )
+
+    payload = l2_target_evolution._visible_slot_cue_summary_payload(
+        traces=traces,
+        source_splits=["train", "inner_validation"],
+    )
+
+    assert payload["schema_version"] == "l2-target-visible-slot-cue-summary-v1"
+    assert payload["visibility"] == "visible_validation_only"
+    house_place = next(
+        item for item in payload["items"] if item["slot_key"] == "house_place"
+    )
+    assert house_place["total"] == 2
+    assert house_place["top_values"] == [
+        {"value": "bathroom", "count": 1},
+        {"value": "kitchen", "count": 1},
+    ]
+    assert house_place["top_teacher_intents"] == [
+        {"intent": "iot_cleaning", "count": 1},
+        {"intent": "iot_hue_lightoff", "count": 1},
+    ]
+    assert house_place["examples"][0] == {
+        "request_id": "r1",
+        "utterance": "turn off the kitchen lights",
+        "teacher_intent": "iot_hue_lightoff",
+        "slot_value": "kitchen",
+    }
 
 
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:

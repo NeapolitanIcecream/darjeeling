@@ -2099,12 +2099,116 @@ def _top_slot_key_counts(
     ]
 
 
+def _visible_slot_cue_summary(workspace_root: Path) -> dict[str, Any]:
+    data_dir = workspace_root / "data"
+    sources: list[tuple[str, Path]] = [("train", data_dir / "train.jsonl")]
+    sources.extend((path.stem, path) for path in _visible_validation_paths(workspace_root))
+    traces: list[TeacherTrace] = []
+    source_splits: list[str] = []
+    for split_name, path in sources:
+        if not path.exists():
+            continue
+        source_splits.append(split_name)
+        traces.extend(_read_teacher_jsonl(path))
+    return _visible_slot_cue_summary_payload(
+        traces=traces,
+        source_splits=source_splits,
+    )
+
+
+def _visible_slot_cue_summary_payload(
+    *,
+    traces: list[TeacherTrace],
+    source_splits: list[str],
+    item_limit: int = 16,
+) -> dict[str, Any]:
+    by_slot: dict[str, dict[str, Any]] = {}
+    for trace in traces:
+        teacher_frame = trace.teacher_frame
+        if teacher_frame is None:
+            continue
+        for slot_key, slot_value in teacher_frame.slots.items():
+            value = str(slot_value)
+            item = by_slot.setdefault(
+                slot_key,
+                {
+                    "slot_key": slot_key,
+                    "total": 0,
+                    "teacher_intents": {},
+                    "values": {},
+                    "examples": [],
+                },
+            )
+            item["total"] += 1
+            item["teacher_intents"][teacher_frame.intent] = (
+                item["teacher_intents"].get(teacher_frame.intent, 0) + 1
+            )
+            item["values"][value] = item["values"].get(value, 0) + 1
+            if len(item["examples"]) < 3:
+                item["examples"].append(
+                    {
+                        "request_id": trace.request_id,
+                        "utterance": trace.utterance,
+                        "teacher_intent": teacher_frame.intent,
+                        "slot_value": value,
+                    }
+                )
+    items = [
+        {
+            "slot_key": item["slot_key"],
+            "total": int(item["total"]),
+            "top_teacher_intents": _top_intent_counts(item["teacher_intents"]),
+            "top_values": _top_value_counts(item["values"]),
+            "examples": item["examples"],
+        }
+        for item in by_slot.values()
+    ]
+    items.sort(key=lambda item: (-int(item["total"]), str(item["slot_key"])))
+    return {
+        "schema_version": "l2-target-visible-slot-cue-summary-v1",
+        "visibility": "visible_validation_only",
+        "source_splits": source_splits,
+        "item_limit": item_limit,
+        "items": items[:item_limit],
+        "empty_reason": None if items else "no_visible_slot_values",
+    }
+
+
+def _top_intent_counts(
+    counts: dict[str, int],
+    *,
+    limit: int = 5,
+) -> list[dict[str, int | str]]:
+    return [
+        {"intent": intent, "count": count}
+        for intent, count in sorted(
+            counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[:limit]
+    ]
+
+
+def _top_value_counts(
+    counts: dict[str, int],
+    *,
+    limit: int = 8,
+) -> list[dict[str, int | str]]:
+    return [
+        {"value": value, "count": count}
+        for value, count in sorted(
+            counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[:limit]
+    ]
+
+
 def _target_diagnostics_payload(
     *,
     state_kind: Literal["before_round", "final"],
     round_index: int,
     baseline: dict[str, Any],
     round_results: list[dict[str, Any]],
+    visible_slot_cue_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     recent_rounds = round_results[-6:]
     latest_metric = (
@@ -2128,6 +2232,7 @@ def _target_diagnostics_payload(
         "state_kind": state_kind,
         "next_round": round_index,
         "round_history_window": "last_6",
+        "visible_slot_cue_summary": visible_slot_cue_summary,
         "baseline_inner_validation": baseline["inner_validation"].get(
             "family_diagnostics",
         ),
@@ -2305,6 +2410,7 @@ def _write_target_state_files(
     agent_rounds_succeeded: int,
 ) -> None:
     data_dir = workspace_root / "data"
+    visible_slot_cue_summary = _visible_slot_cue_summary(workspace_root)
     objective = _target_objective_payload(
         config,
         teacher_labeled_traces=target_scope["scoped_teacher_labeled_traces"],
@@ -2374,6 +2480,7 @@ def _write_target_state_files(
                 round_index=round_index,
                 baseline=baseline,
                 round_results=round_results,
+                visible_slot_cue_summary=visible_slot_cue_summary,
             ),
             indent=2,
             sort_keys=True,
@@ -3626,6 +3733,9 @@ def _target_program_text() -> str:
             "  Then review `latest_intent_confusion_backlog` and related",
             "  train/cross-audit intent-confusion queues for high-guard teacher",
             "  intent / predicted intent mismatches.",
+            "  `visible_slot_cue_summary` summarizes visible teacher slot keys",
+            "  and values across train/validation rows; use it to generalize",
+            "  clear slot cues such as room words without reading private rows.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -3668,6 +3778,8 @@ def _target_program_text() -> str:
             "rules based on the listed slot-key deltas over broad threshold changes.",
             "After slot-risk review, inspect intent-confusion backlogs for repeated",
             "high-guard wrong-intent pairs such as media intent boundary errors.",
+            "Use `visible_slot_cue_summary` when a risk appears to need a slot",
+            "cue that may be supported by other visible intents.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
             "abstention or target-local vetoes over accepting predictions that",
             "contradict visible teacher labels.",

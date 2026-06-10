@@ -756,3 +756,56 @@ Interpretation:
   commonly map to `house_place` even when the specific `play_radio` +
   `house_place` pair is absent. That would be a visible-only generalization aid,
   not a new gate.
+
+## Visible slot-cue summary
+
+The follow-up implementation adds `visible_slot_cue_summary` to
+`target_diagnostics.json`. Unlike the safety, slot-risk, and intent-confusion
+queues, this is not a risk queue. It is a compact visible schema index built
+only from visible train and validation teacher rows.
+
+Each item is keyed by `slot_key` and includes:
+
+- `total`,
+- `top_teacher_intents`,
+- `top_values`,
+- up to three visible examples with request id, utterance, teacher intent, and
+  slot value.
+
+The purpose is to let the agent see cross-intent slot semantics. For example,
+even when the fixed split has no visible `play_radio.house_place` pair, it can
+still show that room values such as `bedroom`, `kitchen`, `bathroom`, and
+`living room` commonly map to `house_place` in visible teacher labels. This is
+diagnostic-only and does not change selection/adoption gates.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-visible-slot-cue-smoke-r1/job \
+  --max-traces 1000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+```
+
+Smoke result:
+
+- Evidence class: `short_fixed_snapshot_probe`.
+- `visible_slot_cue_summary` used `visibility=visible_validation_only`.
+- Source splits were visible `train` plus all five visible validation folds.
+- `house_place` appeared within the default 16 slot keys and listed room values
+  such as `bedroom`, `house`, `kitchen`, `living room`, and `bathroom`.
+- Its examples came from visible rows such as `bedroom lights off now`, `turn
+  off lights of kitchen`, and `can you turn my bathroom lights off`.
+- `target_diagnostics.json`, `round_state.json`, and `objective.json` did not
+  contain `selection_holdout` or `promotion_holdout`.
