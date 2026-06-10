@@ -88,6 +88,17 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "effective_max_agent_rounds": None,
         "agent_round_cap_is_cost_control": False,
     }
+    assert summary["evidence_policy"]["schema_version"] == (
+        "l2-target-evidence-policy-v1"
+    )
+    assert summary["evidence_policy"]["evidence_class"] == "cost_capped_probe"
+    assert summary["evidence_policy"]["quality_claim_supported"] is False
+    assert summary["evidence_policy"]["quality_claim"] == "not_supported_by_this_run"
+    assert summary["evidence_policy"]["fixed_trace_snapshot_inner_loop"] is True
+    assert summary["evidence_policy"]["outer_replay_cadence_bound"] is False
+    assert "standard profile is cost-capped" in summary["evidence_policy"][
+        "blocking_reasons"
+    ][0]
     assert summary["data_split_policy"] == {
         "schema_version": "l2-target-split-policy-v1",
         "policy": "chronological",
@@ -265,9 +276,12 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert round_state["budget_policy"]["profile_intent"]["profile_role"] == (
         "cost_capped_default"
     )
+    assert round_state["evidence_policy"]["evidence_class"] == "cost_capped_probe"
+    assert round_state["evidence_policy"]["quality_claim_supported"] is False
     assert objective["budget_policy"]["profile_intent"]["profile_role"] == (
         "cost_capped_default"
     )
+    assert objective["evidence_policy"]["evidence_class"] == "cost_capped_probe"
     assert objective["agent_budget"]["local_search_consumes_llm"] is False
     assert "private_holdout_evidence" not in round_state
     assert "not a" in program_text
@@ -882,12 +896,48 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
             job_dir=Path("unused"),
             mode="codex-cli",
             budget_profile="fixed-inner",
+            rounds=48,
         )
     )["profile_intent"]
+    standard_evidence = l2_target_evolution._target_evidence_policy_payload(  # noqa: SLF001
+        L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=Path("unused"),
+            mode="codex-cli",
+            budget_profile="standard",
+        )
+    )
+    fixed_inner_short_evidence = (  # noqa: SLF001
+        l2_target_evolution._target_evidence_policy_payload(
+            L2TargetEvolutionConfig(
+                source_repo_dir=Path.cwd(),
+                job_dir=Path("unused"),
+                budget_profile="fixed-inner",
+                rounds=2,
+            )
+        )
+    )
+    fixed_inner_quality_evidence = (  # noqa: SLF001
+        l2_target_evolution._target_evidence_policy_payload(
+            L2TargetEvolutionConfig(
+                source_repo_dir=Path.cwd(),
+                job_dir=Path("unused"),
+                mode="codex-cli",
+                budget_profile="fixed-inner",
+                rounds=48,
+            )
+        )
+    )
     assert standard_codex_intent["profile_role"] == "cost_capped_default"
     assert standard_codex_intent["effective_max_agent_rounds"] == 3
     assert standard_codex_intent["agent_round_cap_is_cost_control"] is True
     assert fixed_inner_intent["profile_role"] == "fixed_snapshot_research"
+    assert standard_evidence["evidence_class"] == "cost_capped_probe"
+    assert standard_evidence["quality_claim_supported"] is False
+    assert fixed_inner_short_evidence["evidence_class"] == "short_fixed_snapshot_probe"
+    assert fixed_inner_short_evidence["quality_claim_supported"] is False
+    assert fixed_inner_quality_evidence["evidence_class"] == "fixed_snapshot_research"
+    assert fixed_inner_quality_evidence["quality_claim_supported"] is True
     assert fixed_inner_intent["effective_max_agent_rounds"] == 16
     assert fixed_inner_intent["outer_replay_cadence_bound"] is False
 
@@ -1112,6 +1162,8 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert summary["data_split_policy"]["visible_validation_folds"] == 5
     assert summary["budget_policy"]["stop_on_selection_gate"] is False
     assert summary["budget_policy"]["max_agent_rounds"] is None
+    assert summary["evidence_policy"]["evidence_class"] == "short_fixed_snapshot_probe"
+    assert summary["evidence_policy"]["quality_claim_supported"] is False
     assert summary["baseline"]["visible_cross_audit"]["gate_role"] == (
         "diagnostic_only_not_selection_or_adoption_gate"
     )

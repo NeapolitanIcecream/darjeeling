@@ -467,6 +467,7 @@ def test_compiler_generation_records_l2_agent_patch_artifacts(tmp_path: Path) ->
     manifest = result.manifest
     metrics = manifest.candidate_metrics
     assert metrics["l2_agent_mode"] == "dry-run"
+    assert metrics["l2_agent_harness_role"] == "legacy_patch_generation_not_target_evolve"
     assert metrics["l2_agent_succeeded"] is True
     assert metrics["l2_agent_patch_runtime_applied"] is False
     assert "outer process apply/restart" in metrics["l2_agent_patch_runtime_reason"]

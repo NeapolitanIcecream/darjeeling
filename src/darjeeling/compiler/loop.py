@@ -457,6 +457,9 @@ def run_compiler_generation(
 
     if settings.l2_agent_mode != "disabled":
         candidate_metrics["l2_agent_mode"] = settings.l2_agent_mode
+        candidate_metrics["l2_agent_harness_role"] = (
+            "legacy_patch_generation_not_target_evolve"
+        )
         try:
             l2_agent_result = L2CodingAgentAdapter(settings).run_l2_job(
                 job_dir=generation_dir / "l2_agent",

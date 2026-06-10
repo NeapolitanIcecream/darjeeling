@@ -368,6 +368,12 @@ def run_l2_target_evolution(
             config,
             max_agent_rounds=max_agent_rounds,
         ),
+        "evidence_policy": _target_evidence_policy_payload(
+            config,
+            max_agent_rounds=max_agent_rounds,
+            rounds_completed=len(round_results),
+            stop_reason=stop_reason,
+        ),
         "agent_budget": _agent_budget_payload(
             config=config,
             agent_rounds_started=agent_rounds_started,
@@ -1556,6 +1562,10 @@ def _write_target_state_files(
         "rounds_requested": config.rounds,
         "no_inner_improvement_rounds": no_inner_improvement_rounds,
         "budget_policy": _target_budget_policy_payload(config),
+        "evidence_policy": _target_evidence_policy_payload(
+            config,
+            rounds_completed=len(round_results),
+        ),
         "agent_budget": _agent_budget_payload(
             config=config,
             agent_rounds_started=agent_rounds_started,
@@ -1711,6 +1721,101 @@ def _target_budget_profile_intent_payload(
     }
 
 
+def _target_evidence_policy_payload(
+    config: L2TargetEvolutionConfig,
+    *,
+    max_agent_rounds: int | None = None,
+    rounds_completed: int | None = None,
+    stop_reason: str | None = None,
+) -> dict[str, Any]:
+    resolved_max_agent_rounds = (
+        _effective_max_agent_rounds(config)
+        if max_agent_rounds is None
+        else max_agent_rounds
+    )
+    min_quality_rounds = 16
+    min_quality_codex_agent_rounds = 8
+    blocking_reasons: list[str] = []
+
+    if config.budget_profile == "smoke":
+        evidence_class = "connectivity_smoke"
+        blocking_reasons.append("smoke profile only validates wiring")
+    elif config.budget_profile == "standard":
+        evidence_class = "cost_capped_probe"
+        blocking_reasons.append(
+            "standard profile is cost-capped and may launch only a few live agent rounds"
+        )
+    elif config.rounds < min_quality_rounds:
+        evidence_class = "short_fixed_snapshot_probe"
+        blocking_reasons.append(
+            f"round budget {config.rounds} is below quality minimum {min_quality_rounds}"
+        )
+    elif (
+        config.mode == "codex-cli"
+        and resolved_max_agent_rounds is not None
+        and resolved_max_agent_rounds < min_quality_codex_agent_rounds
+    ):
+        evidence_class = "agent_budget_capped_fixed_snapshot"
+        blocking_reasons.append(
+            "codex-cli agent round cap is below the quality evidence minimum"
+        )
+    else:
+        evidence_class = "fixed_snapshot_research"
+
+    if (
+        evidence_class == "fixed_snapshot_research"
+        and stop_reason is not None
+        and rounds_completed is not None
+        and rounds_completed < min(config.rounds, min_quality_rounds)
+    ):
+        if stop_reason not in {"selection_gate_passed", "baseline_selection_gate_passed"}:
+            evidence_class = "incomplete_fixed_snapshot_probe"
+            blocking_reasons.append(
+                f"completed {rounds_completed} rounds before reaching the requested evidence budget"
+            )
+
+    quality_claim_supported = evidence_class == "fixed_snapshot_research"
+    return {
+        "schema_version": "l2-target-evidence-policy-v1",
+        "evidence_class": evidence_class,
+        "quality_claim_supported": quality_claim_supported,
+        "quality_claim": (
+            "eligible_after_private_gates_and_outer_replay"
+            if quality_claim_supported
+            else "not_supported_by_this_run"
+        ),
+        "result_interpretation": (
+            "May be used as L2 target-evolution quality evidence only after private "
+            "selection/promotion gates and outer e2e replay also pass."
+            if quality_claim_supported
+            else (
+                "Use this run for wiring, debugging, or bounded probing only; do not "
+                "treat failure as evidence that L2 target evolution is exhausted."
+            )
+        ),
+        "required_for_quality_claim": {
+            "budget_profile": "fixed-inner",
+            "min_rounds_requested": min_quality_rounds,
+            "min_codex_cli_agent_rounds": min_quality_codex_agent_rounds,
+            "requires_private_selection_gate": True,
+            "requires_private_promotion_gate": True,
+            "requires_outer_replay": True,
+        },
+        "blocking_reasons": blocking_reasons,
+        "profile": config.budget_profile,
+        "mode": config.mode,
+        "rounds_requested": config.rounds,
+        "rounds_completed": rounds_completed,
+        "stop_reason": stop_reason,
+        "fixed_trace_snapshot_inner_loop": True,
+        "outer_replay_cadence_bound": False,
+        "effective_max_agent_rounds": resolved_max_agent_rounds,
+        "agent_round_cap_is_cost_control": (
+            config.mode == "codex-cli" and resolved_max_agent_rounds is not None
+        ),
+    }
+
+
 def _effective_max_agent_rounds(config: L2TargetEvolutionConfig) -> int | None:
     if config.mode != "codex-cli":
         return config.max_agent_rounds
@@ -1728,6 +1833,7 @@ def _target_objective_payload(config: L2TargetEvolutionConfig) -> dict[str, Any]
         "schema_version": "l2-target-objective-v1",
         "primary_objective": "increase safe L2 accepts on unseen target traffic",
         "budget_policy": _target_budget_policy_payload(config),
+        "evidence_policy": _target_evidence_policy_payload(config),
         "agent_budget": _agent_budget_payload(
             config=config,
             agent_rounds_started=0,
