@@ -1068,3 +1068,43 @@ Interpretation:
   visible-only executable cue-probe tool would let the agent run concrete
   checks such as "slotless `play_radio` must veto visible podcast and room
   cue probes" without exposing private holdout rows.
+
+Slot-cue-probes smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-visible-slot-cue-probes-smoke-r1/job \
+  --max-traces 1000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+
+uv run --project \
+  runs/l2-target-visible-slot-cue-probes-smoke-r1/job/workspace/l2_target/system/darjeeling \
+  python runs/l2-target-visible-slot-cue-probes-smoke-r1/job/workspace/l2_target/tools/evaluate.py \
+  --workspace runs/l2-target-visible-slot-cue-probes-smoke-r1/job/workspace/l2_target \
+  --split slot_cue_probes \
+  --out runs/l2-target-visible-slot-cue-probes-smoke-r1/job/workspace/l2_target/runs/slot_cue_probes.json
+```
+
+Slot-cue-probes smoke result:
+
+- `workspace_manifest.json`, `data/commands.md`, and `program.md` exposed
+  `slot_cue_probes`.
+- The default target failed all three visible-only probes:
+  `non_podcast_podcast_cue`, `slotless_radio_room_cue`, and
+  `general_joke_missing_joke_type`.
+- The probe payload used `visibility=visible_validation_only` and
+  `gate_role=diagnostic_only_not_selection_or_adoption_gate`.
+- `target_diagnostics.json`, `round_state.json`, `objective.json`, and
+  `runs/slot_cue_probes.json` still did not contain `selection_holdout` or
+  `promotion_holdout`.

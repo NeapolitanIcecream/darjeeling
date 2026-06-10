@@ -57,6 +57,47 @@ def _trace_with_utterance(
     return trace
 
 
+def _slot_cue_probe_workspace(tmp_path: Path, target_code: str) -> Path:
+    workspace = tmp_path / "workspace"
+    (workspace / "data").mkdir(parents=True)
+    (workspace / "target").mkdir()
+    (workspace / "data" / "train.jsonl").write_text("", encoding="utf-8")
+    summary = l2_target_evolution._visible_slot_cue_summary_payload(
+        traces=traces_to_teacher_view(
+            [
+                _trace_with_utterance(
+                    1,
+                    utterance="play the latest episode of the friends podcast",
+                    intent="play_podcasts",
+                    slots={"podcast_name": "friends"},
+                ),
+                _trace_with_utterance(
+                    2,
+                    utterance="turn off lights of kitchen",
+                    intent="iot_hue_lightoff",
+                    slots={"house_place": "kitchen"},
+                ),
+                _trace_with_utterance(
+                    3,
+                    utterance="what is a funny joke about car",
+                    intent="general_joke",
+                    slots={"joke_type": "funny ; car"},
+                ),
+            ]
+        ),
+        source_splits=["train", "inner_validation"],
+    )
+    (workspace / "data" / "target_diagnostics.json").write_text(
+        json.dumps({"visible_slot_cue_summary": summary}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (workspace / "target" / "target_l2.py").write_text(
+        target_code.strip() + "\n",
+        encoding="utf-8",
+    )
+    return workspace
+
+
 def _traces() -> list[TraceRecord]:
     return [
         _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
@@ -309,6 +350,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "multiple visible examples" in program_text
     assert "Mandatory cue checks" in program_text
     assert "non-podcast accepted intents containing a podcast cue" in program_text
+    assert "slot_cue_probes" in program_text
     assert target_diagnostics["schema_version"] == "l2-target-diagnostics-v1"
     assert target_diagnostics["visibility"] == "visible_validation_only"
     assert target_diagnostics["visible_slot_cue_summary"]["schema_version"] == (
@@ -713,6 +755,75 @@ def test_l2_target_visible_slot_cue_summary_keeps_low_frequency_podcast_cues() -
     assert podcast_name["examples"][0]["utterance"] == (
         "play the latest episode of the friends podcast"
     )
+
+
+def test_l2_target_slot_cue_probes_fail_default_slotless_accepts(tmp_path: Path) -> None:
+    workspace = _slot_cue_probe_workspace(
+        tmp_path,
+        """
+def config_overrides():
+    return {}
+
+
+def postprocess_frame(utterance, frame, metadata):
+    return frame
+
+
+def accept_prediction(utterance, frame, metadata, default_accept):
+    return default_accept
+""",
+    )
+
+    payload = evaluate_target_workspace(
+        workspace_root=workspace,
+        split="slot_cue_probes",
+    )
+
+    assert payload["schema_version"] == "l2-target-slot-cue-probes-v1"
+    assert payload["visibility"] == "visible_validation_only"
+    assert payload["gate_role"] == "diagnostic_only_not_selection_or_adoption_gate"
+    assert payload["passes_gate"] is False
+    assert [item["id"] for item in payload["failed_checks"]] == [
+        "non_podcast_podcast_cue",
+        "slotless_radio_room_cue",
+        "general_joke_missing_joke_type",
+    ]
+
+
+def test_l2_target_slot_cue_probes_pass_visible_vetoes(tmp_path: Path) -> None:
+    workspace = _slot_cue_probe_workspace(
+        tmp_path,
+        """
+def config_overrides():
+    return {}
+
+
+def postprocess_frame(utterance, frame, metadata):
+    return frame
+
+
+def accept_prediction(utterance, frame, metadata, default_accept):
+    text = utterance.lower()
+    intent = frame.get("intent")
+    slots = frame.get("slots") or {}
+    if intent != "play_podcasts" and "podcast" in text:
+        return False
+    if intent == "play_radio" and not slots and "kitchen" in text:
+        return False
+    if intent == "general_joke" and "joke_type" not in slots and "joke about" in text:
+        return False
+    return default_accept
+""",
+    )
+
+    payload = evaluate_target_workspace(
+        workspace_root=workspace,
+        split="slot_cue_probes",
+    )
+
+    assert payload["passes_gate"] is True
+    assert payload["failed_checks"] == []
+    assert payload["probe_count"] == 3
 
 
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
