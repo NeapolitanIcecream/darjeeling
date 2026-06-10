@@ -1203,6 +1203,9 @@ def _aggregate_slot_risk_backlogs(
                     "max_slot_mismatch_guard_probability": 0.0,
                     "top_predicted_intents": item.get("top_predicted_intents", []),
                     "slot_mismatch_examples": [],
+                    "missing_slot_keys": {},
+                    "extra_slot_keys": {},
+                    "changed_slot_keys": {},
                     "recommended_action": item.get(
                         "recommended_action",
                         (
@@ -1225,6 +1228,18 @@ def _aggregate_slot_risk_backlogs(
             aggregate["slot_mismatch_examples"].extend(
                 item.get("slot_mismatch_examples", []),
             )
+            _merge_slot_key_counts(
+                aggregate["missing_slot_keys"],
+                item.get("missing_slot_keys", []),
+            )
+            _merge_slot_key_counts(
+                aggregate["extra_slot_keys"],
+                item.get("extra_slot_keys", []),
+            )
+            _merge_slot_key_counts(
+                aggregate["changed_slot_keys"],
+                item.get("changed_slot_keys", []),
+            )
     items = []
     for aggregate in by_intent.values():
         items.append(
@@ -1233,6 +1248,15 @@ def _aggregate_slot_risk_backlogs(
                 "slot_mismatch_examples": _top_guard_examples(
                     aggregate["slot_mismatch_examples"],
                     limit=3,
+                ),
+                "missing_slot_keys": _top_slot_key_counts(
+                    aggregate["missing_slot_keys"],
+                ),
+                "extra_slot_keys": _top_slot_key_counts(
+                    aggregate["extra_slot_keys"],
+                ),
+                "changed_slot_keys": _top_slot_key_counts(
+                    aggregate["changed_slot_keys"],
                 ),
             },
         )
@@ -1269,6 +1293,17 @@ def _aggregate_slot_risk_backlogs(
         if items
         else _slot_risk_backlog_empty_reason(split),
     }
+
+
+def _merge_slot_key_counts(
+    counts: dict[str, int],
+    rows: list[dict[str, Any]],
+) -> None:
+    for row in rows:
+        slot_key = str(row.get("slot_key") or "")
+        if not slot_key:
+            continue
+        counts[slot_key] = counts.get(slot_key, 0) + int(row.get("count") or 0)
 
 
 def _visible_validation_paths(workspace_root: Path) -> list[Path]:
@@ -1510,6 +1545,9 @@ def _record_family_diagnostic(
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 0,
+            "missing_slot_keys": {},
+            "extra_slot_keys": {},
+            "changed_slot_keys": {},
             "predicted_intents": {},
             "examples": {
                 "accepted_wrong": [],
@@ -1526,6 +1564,22 @@ def _record_family_diagnostic(
     correct = frame == teacher_frame
     if predicted_intent == teacher_intent and not correct:
         stats["intent_correct_slot_wrong"] += 1
+        slot_key_deltas = _slot_key_deltas(
+            teacher_slots=teacher_frame.slots,
+            predicted_slots=frame.slots,
+        )
+        _increment_slot_key_counts(
+            stats["missing_slot_keys"],
+            slot_key_deltas["missing"],
+        )
+        _increment_slot_key_counts(
+            stats["extra_slot_keys"],
+            slot_key_deltas["extra"],
+        )
+        _increment_slot_key_counts(
+            stats["changed_slot_keys"],
+            slot_key_deltas["changed"],
+        )
         _append_diagnostic_example(
             stats["examples"]["intent_correct_slot_wrong"],
             trace=trace,
@@ -1566,6 +1620,30 @@ def _record_family_diagnostic(
         )
     else:
         stats["rejected_wrong"] += 1
+
+
+def _slot_key_deltas(
+    *,
+    teacher_slots: dict[str, Any],
+    predicted_slots: dict[str, Any],
+) -> dict[str, list[str]]:
+    teacher_keys = set(teacher_slots)
+    predicted_keys = set(predicted_slots)
+    shared_keys = teacher_keys & predicted_keys
+    return {
+        "missing": sorted(teacher_keys - predicted_keys),
+        "extra": sorted(predicted_keys - teacher_keys),
+        "changed": sorted(
+            key
+            for key in shared_keys
+            if str(teacher_slots.get(key)) != str(predicted_slots.get(key))
+        ),
+    }
+
+
+def _increment_slot_key_counts(counts: dict[str, int], slot_keys: list[str]) -> None:
+    for slot_key in slot_keys:
+        counts[slot_key] = counts.get(slot_key, 0) + 1
 
 
 def _append_diagnostic_example(
@@ -1647,6 +1725,9 @@ def _finalize_family_diagnostic(stats: dict[str, Any]) -> dict[str, Any]:
         "vetoed_correct": vetoed_correct,
         "vetoed_wrong": int(stats["vetoed_wrong"]),
         "intent_correct_slot_wrong": int(stats["intent_correct_slot_wrong"]),
+        "missing_slot_keys": _top_slot_key_counts(stats.get("missing_slot_keys", {})),
+        "extra_slot_keys": _top_slot_key_counts(stats.get("extra_slot_keys", {})),
+        "changed_slot_keys": _top_slot_key_counts(stats.get("changed_slot_keys", {})),
         "opportunity_score": rejected_correct + vetoed_correct - (10 * accepted_wrong),
         "top_predicted_intents": [
             {"intent": intent, "count": count} for intent, count in predicted_intents
@@ -1797,12 +1878,29 @@ def _slot_risk_backlog_item(family: dict[str, Any]) -> dict[str, Any]:
         "intent_correct_slot_wrong": int(family["intent_correct_slot_wrong"]),
         "max_slot_mismatch_guard_probability": max_slot_guard,
         "top_predicted_intents": family["top_predicted_intents"],
+        "missing_slot_keys": family.get("missing_slot_keys", []),
+        "extra_slot_keys": family.get("extra_slot_keys", []),
+        "changed_slot_keys": family.get("changed_slot_keys", []),
         "slot_mismatch_examples": slot_examples,
         "recommended_action": (
             "add precise postprocess or abstain rules for visible slot-risk patterns "
             "before broad coverage expansion"
         ),
     }
+
+
+def _top_slot_key_counts(
+    counts: dict[str, int],
+    *,
+    limit: int = 5,
+) -> list[dict[str, int | str]]:
+    return [
+        {"slot_key": slot_key, "count": count}
+        for slot_key, count in sorted(
+            counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[:limit]
+    ]
 
 
 def _target_diagnostics_payload(
@@ -3280,7 +3378,8 @@ def _target_program_text() -> str:
             "  they show visible intent-correct slot mismatches that may become",
             "  accepted wrongs under broader coverage. Review both `items` and",
             "  `high_guard_items`; the latter catches lower-frequency risks near",
-            "  the accept threshold.",
+            "  the accept threshold. Use `missing_slot_keys`, `extra_slot_keys`,",
+            "  and `changed_slot_keys` to choose precise postprocess or veto rules.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -3320,7 +3419,7 @@ def _target_program_text() -> str:
             "When accepted-wrong backlogs are empty, review the visible slot-risk",
             "backlogs before stopping; inspect `high_guard_items` as well as the",
             "count-ranked `items`, and prefer precise postprocess or abstention",
-            "rules over broad threshold changes.",
+            "rules based on the listed slot-key deltas over broad threshold changes.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
             "abstention or target-local vetoes over accepting predictions that",
             "contradict visible teacher labels.",

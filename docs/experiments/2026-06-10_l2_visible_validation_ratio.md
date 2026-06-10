@@ -521,3 +521,94 @@ Smoke result:
   family was `calendar_set`, while its high-guard top family was
   `email_sendemail`. This verifies that the new view exposes low-frequency
   high-guard risks without replacing the volume queue.
+
+## High-guard live result and slot-key deltas
+
+Run:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-high-guard-slot-risk-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `28` accepted, `28` correct, `0` wrong; gate passed.
+- Visible support passed: `28` correct accepts, required `10`.
+- Final train audit: `82` accepted, `82` correct, `0` wrong; train-audit safety
+  passed.
+- Final visible cross-audit: `26` accepted, `26` correct, `0` wrong; gate
+  passed.
+- Private selection: `7` accepted, `5` correct, `2` wrong; gate failed.
+- Private promotion: `8` accepted, `6` correct, `2` wrong; gate failed.
+- Adoption remained `adopted=false`.
+
+Interpretation:
+
+- The high-guard view reached the agent: the initial visible validation
+  high-guard top family was `play_radio`, and train-audit high-guard top family
+  was `general_joke`.
+- The final candidate still missed slot/schema boundary cases. The remaining
+  private failures included slotless accepts where the teacher frame required
+  keys such as `house_place` or `joke_type`.
+- This suggests the queue now has the right families but still makes the agent
+  infer the actual schema delta from examples. The next diagnostic should
+  summarize slot key differences directly in each slot-risk item.
+
+Follow-up implementation:
+
+- Each slot-risk item now includes `missing_slot_keys`, `extra_slot_keys`, and
+  `changed_slot_keys`, sorted by count.
+- Aggregated visible cross-audit slot-risk backlogs merge the same key counts
+  across folds.
+- This remains visible-only diagnostic context and does not change candidate
+  selection/adoption gates.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-slot-key-deltas-smoke-r1/job \
+  --max-traces 1000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+```
+
+Smoke result:
+
+- Evidence class: `short_fixed_snapshot_probe`.
+- The visible validation high-guard slot-risk item was `play_radio` and listed
+  missing `radio_name`.
+- The visible train-audit high-guard slot-risk item was `iot_hue_lightoff` and
+  listed missing `house_place`.
+- The visible cross-audit high-guard slot-risk item was `email_sendemail` and
+  listed missing `person`, `relation`, and `email_address`, plus extra
+  `email_address` and `person`.
+- `target_diagnostics.json`, `round_state.json`, and `objective.json` did not
+  contain `selection_holdout` or `promotion_holdout`.

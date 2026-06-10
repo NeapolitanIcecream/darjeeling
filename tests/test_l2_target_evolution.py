@@ -427,6 +427,9 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 2,
+            "missing_slot_keys": {},
+            "extra_slot_keys": {"date": 1},
+            "changed_slot_keys": {},
             "predicted_intents": {"general_quirky": 5},
             "examples": {
                 "accepted_wrong": [risky_example],
@@ -445,6 +448,9 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 1,
+            "missing_slot_keys": {"house_place": 1},
+            "extra_slot_keys": {},
+            "changed_slot_keys": {},
             "predicted_intents": {"play_radio": 2},
             "examples": {
                 "accepted_wrong": [],
@@ -490,6 +496,12 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
     assert slot_risk_backlog["high_guard_items"][0]["teacher_intent"] == "play_radio"
     assert slot_risk_backlog["high_guard_items"][0]["slot_mismatch_examples"] == [
         high_guard_slot_example,
+    ]
+    assert slot_risk_backlog["high_guard_items"][0]["missing_slot_keys"] == [
+        {"slot_key": "house_place", "count": 1},
+    ]
+    assert slot_risk_backlog["items"][1]["extra_slot_keys"] == [
+        {"slot_key": "date", "count": 1},
     ]
     assert "postprocess" in slot_risk_backlog["items"][0]["recommended_action"]
 
@@ -568,6 +580,11 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
                         "top_predicted_intents": [
                             {"intent": "calendar_set", "count": 20},
                         ],
+                        "missing_slot_keys": [
+                            {"slot_key": "date", "count": 10},
+                        ],
+                        "extra_slot_keys": [],
+                        "changed_slot_keys": [],
                         "slot_mismatch_examples": [volume_example],
                     },
                     {
@@ -580,6 +597,11 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
                         "top_predicted_intents": [
                             {"intent": "general_joke", "count": 3},
                         ],
+                        "missing_slot_keys": [
+                            {"slot_key": "joke_type", "count": 1},
+                        ],
+                        "extra_slot_keys": [],
+                        "changed_slot_keys": [],
                         "slot_mismatch_examples": [high_guard_example],
                     },
                 ],
@@ -591,6 +613,9 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
     assert payload["high_guard_items"][0]["teacher_intent"] == "general_joke"
     assert payload["high_guard_items"][0]["slot_mismatch_examples"] == [
         high_guard_example,
+    ]
+    assert payload["high_guard_items"][0]["missing_slot_keys"] == [
+        {"slot_key": "joke_type", "count": 1},
     ]
 
 
