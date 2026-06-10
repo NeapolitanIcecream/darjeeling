@@ -1543,3 +1543,58 @@ Interpretation:
 - The next implementation adds `play_radio_bare_station_name` beside the
   existing random-station probe. This keeps the diagnostic focused on the same
   radio-name overfill family and avoids adding a broader threshold/config rule.
+
+Bare-station-probe live result:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-bare-station-live-r1`.
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `31` accepted, `31` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `31` correct accepts, required `10`.
+- Final train audit: `106` accepted, `106` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `27` accepted, `27` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed: `14/14`.
+- Private selection: `6` accepted, `6` correct, `0` wrong; gate passed.
+- Private promotion: `7` accepted, `7` correct, `0` wrong; gate passed.
+- `selection_decision.selected=true`, `adoption_decision.adopted=true`.
+
+Bare-station-probe 3k outer replay:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-bare-station-outer-3k-r1`.
+- Baseline: `L0=2344`, `L1=4`, `L2=0`, `L4=652`, frame EM `1.0`, cost
+  per 100 requests `0.217333`.
+- Candidate: `L0=2344`, `L1=4`, `L2=29`, `L4=623`, frame EM `1.0`, cost
+  per 100 requests `0.207715`.
+- L2 accepted accuracy was `29/29 = 1.0`; wrong accept rate was `0.0`.
+- Decision: promoted, `objective improved within gates`.
+
+Bare-station-probe 10k outer replay:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-bare-station-outer-10k-r1`.
+- Baseline: `L0=9878`, `L1=1`, `L2=0`, `L4=121`, frame EM `1.0`, cost
+  per 100 requests `0.012100`.
+- Candidate: `L0=9878`, `L1=1`, `L2=6`, `L4=115`, frame EM `1.0`, cost
+  per 100 requests `0.011503`.
+- L2 accepted accuracy was `6/6 = 1.0`; wrong accept rate was `0.0`.
+- Decision: not promoted, `objective did not improve`.
+
+10k near-miss check:
+
+- Candidate L2 had `32` correct rejected predictions after L0/L1, but the
+  highest scores were still below the `0.93` threshold: `switch off bedroom
+  light` at `0.8957`, `list things on my list` at `0.8749`.
+- The highest wrong rejected prediction was `turn the chandelier all the way
+  up` as `audio_volume_up {}` at `0.8758`.
+
+Interpretation:
+
+- The final cue-probe target is safe and useful on the 3k parent, but the 10k
+  parent already routes most requests through L0 (`9878/10000`). Only `121`
+  requests reach L4 at baseline, so six safe L2 accepts reduce L4 calls without
+  offsetting the target artifact complexity penalty.
+- Further 10k promotion would require lowering the L2 threshold and adding
+  broader wrong-intent vetoes around light/audio and other families. That is a
+  different coverage-expansion design, not a remaining slot-cue safety gap.
+  The current iteration should therefore stop at "3k promoted, 10k safe but not
+  promoted" rather than adding more target-local concepts.
