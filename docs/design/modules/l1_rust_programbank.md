@@ -47,15 +47,17 @@ check、private gate 和 outer replay promotion。L1 的 editable surface 是高
 Rust/native ProgramBank source；workspace tools 是 compile、unit test、bench 和
 replay，而不是 Optuna 或 prompt eval。
 
-已实现第一版 `L4CodingAgentAdapter` / `run_l1_coding_agent_job`：
+已实现 `L4CodingAgentAdapter` / `run_l1_coding_agent_job`：
 
-- 将当前 Rust crate 复制到 generation-scoped candidate workspace。
-- 写入 `contexts/teacher_train.jsonl`、`hard_cases.jsonl`、`context_families.json`、`current_metrics.json`、`objective.json`、`constraints.md` 和 `commands.md`。
+- 将当前 Rust crate 复制到 generation-scoped `workspace/l1_programbank/`。
+- 写入 protected `workspace/program.md`、`workspace/workspace_manifest.json` 和 `workspace/contexts/teacher_train.jsonl`、`hard_cases.jsonl`、`context_families.json`、`current_metrics.json`、`objective.json`、`constraints.md`、`commands.md`。
 - `context_families.json` 使用 dataset-independent、schema-aware 聚合：按 teacher intent 与 slot signature 形成 family，记录 support、hard-case support、chosen layer counts、当前 L1 outcome counts、common tokens 和少量例子。Codex prompt 要求优先阅读该 summary，再按需查看 raw JSONL。
 - context 输入类型使用 `TeacherTrace`，并扫描 forbidden gold/eval/future 字段。
 - 支持 `dry-run` 模式，通过 fixture patch 修改 candidate workspace，用于测试 artifact packaging 和 state machine。
-- 支持 `codex-cli` 模式，调用 `codex --model <model> --sandbox <mode> -a <policy> exec --cd <workspace> --json -o agent_report.md -`，并记录 raw transcript、commands、diff、report 和 `provenance.json`。
-- `provenance.json` 使用 `l1-agent-provenance-v1` schema，汇总 Codex JSONL event type、外层命令 return code/stdout/stderr tail、diff 文件数和增删行数。
+- 支持 `agent-session` 模式，调用一次 Codex over `workspace/`，让 agent 在同一 session 内自主 edit/compile/test/bench/replay/stop；只允许修改 `l1_programbank/` 和写 `runs/` scratch。
+- 支持 legacy `codex-cli` 模式，仍以 crate 目录为 cwd 运行一次 Codex，用于兼容旧实验；真实 L1 evolve 应优先使用 `agent-session`。
+- `agent-session` 结束后会 scope check protected `contexts/`、`program.md` 和 `workspace_manifest.json`；越界修改会以 scope violation 失败，不进入 validation/promotion。
+- `provenance.json` 使用 `l1-agent-provenance-v1` schema，汇总 agent-session policy、workspace scope policy、Codex JSONL event type、外层命令 return code/stdout/stderr tail、diff 文件数和增删行数。
 - 可选运行 `cargo test` 作为 agent job validation。
 - compiler generation 已在 `L1_AGENT_MODE` 非 disabled 时调用该 harness。
 - L1 candidate 成功后写入 artifact manifest，并进入 `L0 -> L1 -> L2 -> teacher fallback` 离线 replay gate。
@@ -68,7 +70,7 @@ replay，而不是 Optuna 或 prompt eval。
 
 非阻塞后续项：
 
-- `L1_AGENT_MODE` 默认仍是 disabled；真实 L1 evolution 实验必须显式开启 `codex-cli`。`experiment preflight` 会把 disabled 记为 warn，避免误以为默认 smoke 配置已经覆盖 L1 coding-agent evolution。
+- `L1_AGENT_MODE` 默认仍是 disabled；真实 L1 evolution 实验必须显式开启 `agent-session`。`experiment preflight` 会把 disabled 记为 warn，避免误以为默认 smoke 配置已经覆盖 L1 coding-agent evolution。
 - 更深层的 agent 内部命令重建仍取决于 Codex JSON event schema；当前已稳定记录 raw transcript、event type summary、外层命令摘要和 candidate diff summary。
 - Rust crate 尚未接入 Criterion/cargo bench；当前跨代曲线基于 worker smoke benchmark，而不是 Criterion microbench。
 

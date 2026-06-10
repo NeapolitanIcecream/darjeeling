@@ -181,3 +181,127 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
     ]
     assert Path(command[command.index("--cd") + 1]).is_absolute()
     assert Path(command[command.index("-o") + 1]).is_absolute()
+
+
+def test_l1_agent_session_uses_workspace_root_and_records_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import json",
+                "import pathlib",
+                "import sys",
+                "workspace = pathlib.Path(sys.argv[sys.argv.index('--cd') + 1])",
+                "out = pathlib.Path(sys.argv[sys.argv.index('-o') + 1])",
+                "prompt = sys.stdin.read()",
+                "(workspace / 'l1_programbank' / 'AGENT_SESSION_MARKER').write_text(",
+                "    'agent session marker\\n', encoding='utf-8'",
+                ")",
+                "(workspace / 'runs' / 'agent_note.txt').write_text(",
+                "    'agent session completed\\n', encoding='utf-8'",
+                ")",
+                "out.write_text('fake L1 agent-session report\\n', encoding='utf-8')",
+                "print(json.dumps({'event': 'done', 'autonomous': 'autonomous L1' in prompt}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+
+    result = run_l1_coding_agent_job(
+        config=L1CodingAgentJobConfig(
+            mode="agent-session",
+            source_crate_dir=repo_root / "native/l1_programbank",
+            job_dir=Path("job"),
+            codex_command=str(fake_codex),
+            codex_model=None,
+            run_validation=False,
+        ),
+        teacher_train=[_teacher_trace()],
+        hard_cases=[],
+        current_metrics={},
+        objective={},
+    )
+
+    workspace_root = result.job_dir / "workspace"
+    commands = [
+        json.loads(line)
+        for line in result.commands_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    command = commands[0]["command"]
+    provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
+    manifest = json.loads((workspace_root / "workspace_manifest.json").read_text(encoding="utf-8"))
+
+    assert result.succeeded
+    assert Path(command[command.index("--cd") + 1]) == workspace_root.resolve()
+    assert (result.workspace_crate_dir / "AGENT_SESSION_MARKER").exists()
+    assert (workspace_root / "runs" / "agent_note.txt").exists()
+    assert provenance["agent_session"]["applies_to_mode"] is True
+    assert provenance["agent_session"]["internal_loop_control"] == (
+        "agent_decides_edit_compile_test_bench_replay_stop"
+    )
+    assert provenance["workspace_scope_policy"]["candidate_code_writable_roots"] == [
+        "l1_programbank/"
+    ]
+    assert manifest["agent_session_policy"]["applies_to_mode"] is True
+    assert "AGENT_SESSION_MARKER" in result.diff_path.read_text(encoding="utf-8")
+
+
+def test_l1_agent_session_rejects_protected_workspace_edits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import pathlib",
+                "import sys",
+                "workspace = pathlib.Path(sys.argv[sys.argv.index('--cd') + 1])",
+                "out = pathlib.Path(sys.argv[sys.argv.index('-o') + 1])",
+                "(workspace / 'program.md').write_text('tampered\\n', encoding='utf-8')",
+                "out.write_text('fake report\\n', encoding='utf-8')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+
+    result = run_l1_coding_agent_job(
+        config=L1CodingAgentJobConfig(
+            mode="agent-session",
+            source_crate_dir=repo_root / "native/l1_programbank",
+            job_dir=Path("job"),
+            codex_command=str(fake_codex),
+            codex_model=None,
+            run_validation=False,
+        ),
+        teacher_train=[_teacher_trace()],
+        hard_cases=[],
+        current_metrics={},
+        objective={},
+    )
+
+    commands = [
+        json.loads(line)
+        for line in result.commands_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
+
+    assert not result.succeeded
+    assert result.return_code == 1
+    assert commands[-1]["command"] == ["l1-workspace-scope-check"]
+    assert commands[-1]["return_code"] == 1
+    assert "program.md" in commands[-1]["stderr"]
+    assert provenance["succeeded"] is False

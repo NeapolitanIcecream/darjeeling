@@ -56,6 +56,10 @@ The architecture is homologous; the artifact surfaces are not identical.
 
 ## Current Implementation Status
 
+- L1 now has an explicit `agent-session` mode. It launches one Codex session
+  over an isolated workspace root with editable `l1_programbank/`, protected
+  `program.md`/`contexts/`, `runs/` scratch output, scope checking, and
+  provenance for the session policy.
 - L2 has the first concrete `agent-session` entry point. It launches one Codex
   session over `workspace/l2_target/`, then evaluates the resulting `target/`
   candidate with the existing visible/private gates.
@@ -67,5 +71,5 @@ The architecture is homologous; the artifact surfaces are not identical.
   The old `local-search` mode is retained for deterministic tests and protocol
   probes, not as the preferred L2 evolve methodology.
 - L2 `dry-run` remains a fixture path for tests and controlled patch replay.
-- L1 and L3 should be migrated onto the same session boundary before their next
-  real agent-evolve experiments.
+- L3 should be migrated onto the same session boundary before its next real
+  agent-evolve experiment; its current direct prompt proposal path is legacy.

@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     )
     l1_rust_binary: Path | None = Field(default=None, validation_alias="L1_RUST_BINARY")
     l1_worker_timeout_s: float = Field(default=5.0, validation_alias="L1_WORKER_TIMEOUT_S")
-    l1_agent_mode: Literal["disabled", "dry-run", "codex-cli"] = Field(
+    l1_agent_mode: Literal["disabled", "dry-run", "codex-cli", "agent-session"] = Field(
         default="disabled",
         validation_alias="L1_AGENT_MODE",
     )

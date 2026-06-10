@@ -20,7 +20,7 @@ def validate_l1_candidates(candidates: list[dict]) -> list[ProgramRule]:
     return [ProgramRule.model_validate(candidate) for candidate in candidates]
 
 
-L1AgentMode = Literal["dry-run", "codex-cli"]
+L1AgentMode = Literal["dry-run", "codex-cli", "agent-session"]
 
 
 @dataclass(frozen=True)
@@ -106,9 +106,10 @@ def run_l1_coding_agent_job(
     objective: dict[str, Any],
 ) -> L1CodingAgentJobResult:
     job_dir = config.job_dir
-    context_dir = job_dir / "contexts"
-    workspace_crate_dir = job_dir / "workspace" / "l1_programbank"
-    prompt_path = job_dir / "prompt.md"
+    workspace_root = job_dir / "workspace"
+    context_dir = workspace_root / "contexts"
+    workspace_crate_dir = workspace_root / "l1_programbank"
+    prompt_path = workspace_root / "program.md"
     transcript_path = job_dir / "transcript.jsonl"
     diff_path = job_dir / "diff.patch"
     commands_path = job_dir / "commands.jsonl"
@@ -116,6 +117,9 @@ def run_l1_coding_agent_job(
     report_path = job_dir / "agent_report.md"
 
     job_dir.mkdir(parents=True, exist_ok=True)
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    workspace_root.mkdir(parents=True, exist_ok=True)
     _copy_crate(config.source_crate_dir, workspace_crate_dir)
     _write_context_files(
         context_dir=context_dir,
@@ -124,9 +128,20 @@ def run_l1_coding_agent_job(
         current_metrics=current_metrics,
         objective=objective,
     )
+    legacy_context_dir = job_dir / "contexts"
+    if legacy_context_dir.exists():
+        shutil.rmtree(legacy_context_dir)
+    shutil.copytree(context_dir, legacy_context_dir)
     prompt_path.write_text(
         _build_l1_agent_prompt(context_dir=context_dir, workspace_crate_dir=workspace_crate_dir),
         encoding="utf-8",
+    )
+    _write_l1_workspace_manifest(
+        mode=config.mode,
+        workspace_root=workspace_root,
+        workspace_crate_dir=workspace_crate_dir,
+        context_dir=context_dir,
+        program_path=prompt_path,
     )
 
     command_results: list[dict[str, Any]] = []
@@ -139,16 +154,31 @@ def run_l1_coding_agent_job(
             command_results=command_results,
         )
     else:
+        protected_snapshot = _protected_l1_workspace_snapshot(workspace_root)
         result_code = _run_codex_cli_job(
             config=config,
+            workspace_root=workspace_root,
             workspace_crate_dir=workspace_crate_dir,
             prompt_path=prompt_path,
             transcript_path=transcript_path,
             report_path=report_path,
             command_results=command_results,
         )
+        if config.mode == "agent-session":
+            scope_report = _l1_workspace_scope_violation_report(
+                workspace_root=workspace_root,
+                before=protected_snapshot,
+            )
+            if scope_report is not None:
+                command_results.append(
+                    _l1_workspace_scope_violation_command_result(
+                        workspace_root=workspace_root,
+                        report=scope_report,
+                    ),
+                )
+                result_code = 1
 
-    if config.run_validation:
+    if config.run_validation and result_code == 0:
         cargo_result = _run_command(
             ["cargo", "test"],
             cwd=workspace_crate_dir,
@@ -164,6 +194,7 @@ def run_l1_coding_agent_job(
     _write_l1_agent_provenance(
         provenance_path=provenance_path,
         config=config,
+        workspace_root=workspace_root,
         workspace_crate_dir=workspace_crate_dir,
         prompt_path=prompt_path,
         context_dir=context_dir,
@@ -251,6 +282,38 @@ def _build_l1_agent_prompt(*, context_dir: Path, workspace_crate_dir: Path) -> s
             "- Summarize commands run and results.",
             "- Identify any known risk or failed check.",
         ]
+    )
+
+
+def _write_l1_workspace_manifest(
+    *,
+    mode: L1AgentMode,
+    workspace_root: Path,
+    workspace_crate_dir: Path,
+    context_dir: Path,
+    program_path: Path,
+) -> None:
+    manifest = {
+        "schema_version": "l1-agent-workspace-v1",
+        "editable_roots": [workspace_crate_dir.relative_to(workspace_root).as_posix() + "/"],
+        "scratch_roots": ["runs/"],
+        "protected_roots": [
+            context_dir.relative_to(workspace_root).as_posix() + "/",
+            program_path.relative_to(workspace_root).as_posix(),
+            "workspace_manifest.json",
+        ],
+        "tools": {
+            "compile": "cargo check --manifest-path l1_programbank/Cargo.toml",
+            "unit_test": "cargo test --manifest-path l1_programbank/Cargo.toml",
+            "bench": "edge-mvp l1 bench --out runs/l1_benchmark.json",
+            "replay": "edge-mvp run ...",
+        },
+        "agent_session_policy": _l1_agent_session_policy(mode),
+    }
+    (workspace_root / "runs").mkdir(exist_ok=True)
+    (workspace_root / "workspace_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -408,12 +471,14 @@ def _run_dry_run_job(
 def _run_codex_cli_job(
     *,
     config: L1CodingAgentJobConfig,
+    workspace_root: Path,
     workspace_crate_dir: Path,
     prompt_path: Path,
     transcript_path: Path,
     report_path: Path,
     command_results: list[dict[str, Any]],
 ) -> int:
+    cwd = workspace_root if config.mode == "agent-session" else workspace_crate_dir
     command = [config.codex_command]
     if config.codex_model:
         command.extend(["--model", config.codex_model])
@@ -425,17 +490,28 @@ def _run_codex_cli_job(
             config.approval_policy,
             "exec",
             "--cd",
-            str(workspace_crate_dir.resolve()),
+            str(cwd.resolve()),
             "--json",
             "-o",
             str(report_path.resolve()),
             "-",
         ]
     )
-    prompt = prompt_path.read_text(encoding="utf-8")
+    prompt = (
+        "\n".join(
+            [
+                "Read program.md and run one autonomous L1 ProgramBank evolution session.",
+                "Edit only l1_programbank/. Use contexts/ and workspace_manifest.json",
+                "for visible data, constraints, and tools. Stop when the visible",
+                "objective is met, no safe progress remains, or budget/risk says to stop.",
+            ]
+        )
+        if config.mode == "agent-session"
+        else prompt_path.read_text(encoding="utf-8")
+    )
     result = _run_command(
         command,
-        cwd=workspace_crate_dir,
+        cwd=cwd,
         timeout_s=config.timeout_s,
         stdin=prompt,
     )
@@ -485,6 +561,7 @@ def _write_l1_agent_provenance(
     *,
     provenance_path: Path,
     config: L1CodingAgentJobConfig,
+    workspace_root: Path,
     workspace_crate_dir: Path,
     prompt_path: Path,
     context_dir: Path,
@@ -508,6 +585,7 @@ def _write_l1_agent_provenance(
         "approval_policy": config.approval_policy,
         "paths": {
             "job_dir": str(config.job_dir),
+            "workspace_root": str(workspace_root),
             "workspace_crate_dir": str(workspace_crate_dir),
             "prompt": str(prompt_path),
             "context_dir": str(context_dir),
@@ -516,6 +594,8 @@ def _write_l1_agent_provenance(
             "commands": str(commands_path),
             "report": str(report_path),
         },
+        "agent_session": _l1_agent_session_policy(config.mode),
+        "workspace_scope_policy": _l1_workspace_scope_policy(),
         "transcript": _transcript_summary(transcript_path),
         "commands": [_command_summary(result) for result in command_results],
         "diff": _diff_summary(diff_text),
@@ -632,6 +712,113 @@ def _diff_summary(diff_text: str) -> dict[str, Any]:
         "additions": additions,
         "deletions": deletions,
     }
+
+
+def _l1_agent_session_policy(mode: L1AgentMode | str) -> dict[str, Any]:
+    return {
+        "schema_version": "l1-agent-session-policy-v1",
+        "applies_to_mode": mode == "agent-session",
+        "session_scope": (
+            "single long-running L4 agent session"
+            if mode == "agent-session"
+            else "legacy one-shot codex-cli or dry-run fixture"
+        ),
+        "internal_loop_control": (
+            "agent_decides_edit_compile_test_bench_replay_stop"
+            if mode == "agent-session"
+            else None
+        ),
+        "editable_surface": "l1_programbank/",
+        "tool_policy": "compile, unit test, bench, and replay are workspace tools",
+        "adoption_authority": "outer replay and promotion policy",
+    }
+
+
+def _l1_workspace_scope_policy() -> dict[str, Any]:
+    return {
+        "schema_version": "l1-agent-workspace-scope-v1",
+        "candidate_code_writable_roots": ["l1_programbank/"],
+        "scratch_writable_roots": ["runs/"],
+        "protected_roots": ["contexts/", "program.md", "workspace_manifest.json"],
+        "ignored_generated_files": ["target/", "__pycache__/", ".pytest_cache/", "*.pyc"],
+        "enforcement": "checked_after_agent_session_before_validation",
+    }
+
+
+def _protected_l1_workspace_snapshot(workspace_root: Path) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    if not workspace_root.exists():
+        return snapshot
+    for path in workspace_root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel_path = path.relative_to(workspace_root)
+        if _is_l1_workspace_scope_ignored(rel_path) or _is_l1_workspace_scope_writable(rel_path):
+            continue
+        snapshot[rel_path.as_posix()] = _file_sha256(path)
+    return snapshot
+
+
+def _l1_workspace_scope_violation_report(
+    *,
+    workspace_root: Path,
+    before: dict[str, str],
+) -> dict[str, Any] | None:
+    after = _protected_l1_workspace_snapshot(workspace_root)
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    modified = sorted(path for path in set(before) & set(after) if before[path] != after[path])
+    if not added and not removed and not modified:
+        return None
+    return {
+        "schema_version": "l1-agent-workspace-scope-violation-v1",
+        "policy": _l1_workspace_scope_policy(),
+        "added_protected_files": added,
+        "removed_protected_files": removed,
+        "modified_protected_files": modified,
+        "message": (
+            "L1 agent-session may change l1_programbank/ and write runs/ scratch "
+            "outputs; protected workspace files changed before validation"
+        ),
+    }
+
+
+def _l1_workspace_scope_violation_command_result(
+    *,
+    workspace_root: Path,
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "command": ["l1-workspace-scope-check"],
+        "cwd": str(workspace_root),
+        "started_at": datetime.now(UTC).isoformat(),
+        "return_code": 1,
+        "stdout": "",
+        "stderr": json.dumps(report, sort_keys=True),
+        "workspace_scope_violation": report,
+    }
+
+
+def _is_l1_workspace_scope_writable(rel_path: Path) -> bool:
+    parts = rel_path.parts
+    return bool(parts and parts[0] in {"l1_programbank", "runs"})
+
+
+def _is_l1_workspace_scope_ignored(rel_path: Path) -> bool:
+    ignored_dirs = {"target", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+    if any(part in ignored_dirs for part in rel_path.parts):
+        return True
+    return rel_path.suffix in {".pyc", ".pyo"}
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _copy_crate(source_crate_dir: Path, workspace_crate_dir: Path) -> None:
