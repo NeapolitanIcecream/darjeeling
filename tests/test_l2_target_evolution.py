@@ -388,6 +388,16 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
         },
         "guard_probability": 0.99,
     }
+    high_guard_slot_example = {
+        "request_id": "visible-risk-2",
+        "utterance": "play the morning show in the kitchen",
+        "teacher_frame": {
+            "intent": "play_radio",
+            "slots": {"house_place": "kitchen"},
+        },
+        "predicted_frame": {"intent": "play_radio", "slots": {}},
+        "guard_probability": 0.995,
+    }
     family_stats = {
         "coverage_opportunity": {
             "teacher_intent": "calendar_query",
@@ -425,6 +435,24 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
                 "intent_correct_slot_wrong": [risky_example],
             },
         },
+        "high_guard_slot_risk": {
+            "teacher_intent": "play_radio",
+            "total": 2,
+            "accepted_correct": 0,
+            "accepted_wrong": 0,
+            "rejected_correct": 1,
+            "rejected_wrong": 0,
+            "vetoed_correct": 0,
+            "vetoed_wrong": 0,
+            "intent_correct_slot_wrong": 1,
+            "predicted_intents": {"play_radio": 2},
+            "examples": {
+                "accepted_wrong": [],
+                "rejected_correct": [],
+                "vetoed_correct": [],
+                "intent_correct_slot_wrong": [high_guard_slot_example],
+            },
+        },
     }
 
     payload = l2_target_evolution._family_diagnostics_payload(
@@ -454,9 +482,15 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
     assert [item["teacher_intent"] for item in slot_risk_backlog["items"]] == [
         "calendar_query",
         "general_quirky",
+        "play_radio",
     ]
     assert slot_risk_backlog["items"][0]["intent_correct_slot_wrong"] == 5
     assert slot_risk_backlog["items"][1]["slot_mismatch_examples"] == [risky_example]
+    assert slot_risk_backlog["high_guard_item_limit"] == 8
+    assert slot_risk_backlog["high_guard_items"][0]["teacher_intent"] == "play_radio"
+    assert slot_risk_backlog["high_guard_items"][0]["slot_mismatch_examples"] == [
+        high_guard_slot_example,
+    ]
     assert "postprocess" in slot_risk_backlog["items"][0]["recommended_action"]
 
 
@@ -494,6 +528,70 @@ def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> No
     assert payload["slot_risk_backlog"]["visibility"] == (
         "outer_summary_only_not_agent_workspace"
     )
+
+
+def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
+    volume_example = {
+        "request_id": "visible-volume-risk",
+        "utterance": "add reminder for tomorrow",
+        "teacher_frame": {
+            "intent": "calendar_set",
+            "slots": {"date": "tomorrow"},
+        },
+        "predicted_frame": {"intent": "calendar_set", "slots": {}},
+        "guard_probability": 0.4,
+    }
+    high_guard_example = {
+        "request_id": "visible-high-guard-risk",
+        "utterance": "tell me a joke about airplanes",
+        "teacher_frame": {
+            "intent": "general_joke",
+            "slots": {"joke_type": "airplanes"},
+        },
+        "predicted_frame": {"intent": "general_joke", "slots": {}},
+        "guard_probability": 0.97,
+    }
+
+    payload = l2_target_evolution._aggregate_slot_risk_backlogs(
+        split="visible_cross_audit",
+        validation_size=100,
+        backlogs=[
+            {
+                "items": [
+                    {
+                        "teacher_intent": "calendar_set",
+                        "total": 20,
+                        "accepted_correct": 0,
+                        "accepted_wrong": 0,
+                        "intent_correct_slot_wrong": 10,
+                        "max_slot_mismatch_guard_probability": 0.4,
+                        "top_predicted_intents": [
+                            {"intent": "calendar_set", "count": 20},
+                        ],
+                        "slot_mismatch_examples": [volume_example],
+                    },
+                    {
+                        "teacher_intent": "general_joke",
+                        "total": 3,
+                        "accepted_correct": 0,
+                        "accepted_wrong": 0,
+                        "intent_correct_slot_wrong": 1,
+                        "max_slot_mismatch_guard_probability": 0.97,
+                        "top_predicted_intents": [
+                            {"intent": "general_joke", "count": 3},
+                        ],
+                        "slot_mismatch_examples": [high_guard_example],
+                    },
+                ],
+            },
+        ],
+    )
+
+    assert payload["items"][0]["teacher_intent"] == "calendar_set"
+    assert payload["high_guard_items"][0]["teacher_intent"] == "general_joke"
+    assert payload["high_guard_items"][0]["slot_mismatch_examples"] == [
+        high_guard_example,
+    ]
 
 
 def test_l2_target_intent_stratified_split_samples_private_splits() -> None:

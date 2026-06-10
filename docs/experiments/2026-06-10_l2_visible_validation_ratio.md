@@ -424,3 +424,100 @@ Result:
 Next live-agent work should use these slot-risk queues after clearing
 accepted-wrong backlogs. A target should not stop just because visible accepted
 wrongs are gone if high-priority visible slot-risk families remain unaddressed.
+
+## Slot-risk live result and high-guard view
+
+Run:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-slot-risk-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Baseline visible validation: `33` accepted, `25` correct, `8` wrong; gate
+  failed.
+- Final visible validation: `28` accepted, `28` correct, `0` wrong; gate passed.
+- Visible support passed: `28` correct accepts, required `10`.
+- Final train audit: `78` accepted, `78` correct, `0` wrong; train-audit safety
+  passed.
+- Final visible cross-audit: `31` accepted, `31` correct, `0` wrong; gate
+  passed.
+- Private selection: `7` accepted, `5` correct, `2` wrong; gate failed.
+- Private promotion: `8` accepted, `7` correct, `1` wrong; gate failed.
+- `selection_gate_diagnosis=selection_wrong_accepts_for_inner_passing_rounds`.
+- Adoption remained `adopted=false`.
+
+Interpretation:
+
+- Slot-risk diagnostics improved the candidate shape but did not solve hidden
+  wrong accepts. Compared with the previous support-gated live run, private
+  promotion wrong accepts dropped from `3` to `1`, but private selection still
+  had `2` wrong accepts.
+- The remaining wrong accepts were low-frequency slot/schema boundary errors.
+  The visible slot-risk queue did expose many slot mismatch families, but the
+  top `items` were dominated by high-volume families such as calendar, weather,
+  music, datetime, news, factoid, email, and transport.
+- The design gap is therefore presentation, not another gate: a low-frequency
+  family with very high guard probability can be more relevant to hidden wrong
+  accepts than a high-volume family with lower guard pressure.
+
+Follow-up implementation:
+
+- `slot_risk_backlog` now keeps its existing count-ranked `items`.
+- The same payload also includes `high_guard_items`, sorted by
+  `max_slot_mismatch_guard_probability`, then slot-mismatch count.
+- This field is present for visible validation, visible train audit, and visible
+  cross-audit diagnostics. It remains diagnostic-only, visible-only in agent
+  workspaces, and does not change candidate selection or adoption gates.
+
+Smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-slot-risk-high-guard-smoke-r1/job \
+  --max-traces 1000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+```
+
+Smoke result:
+
+- Evidence class: `short_fixed_snapshot_probe`.
+- `latest_slot_risk_backlog`, `latest_train_audit_slot_risk_backlog`, and
+  `latest_visible_cross_audit_slot_risk_backlog` all include
+  `high_guard_items`.
+- The diagnostics remained `visible_validation_only` and did not contain
+  `selection_holdout` or `promotion_holdout`.
+- The visible validation count-ranked top family was `calendar_set`, while the
+  high-guard top family was `play_radio`; the cross-audit count-ranked top
+  family was `calendar_set`, while its high-guard top family was
+  `email_sendemail`. This verifies that the new view exposes low-frequency
+  high-guard risks without replacing the volume queue.

@@ -1245,6 +1245,16 @@ def _aggregate_slot_risk_backlogs(
         ),
         reverse=True,
     )
+    high_guard_items = sorted(
+        items,
+        key=lambda item: (
+            float(item["max_slot_mismatch_guard_probability"]),
+            int(item["intent_correct_slot_wrong"]),
+            int(item["accepted_wrong"]),
+            item["teacher_intent"],
+        ),
+        reverse=True,
+    )[:limit]
     return {
         "schema_version": "l2-target-slot-risk-backlog-v1",
         "split": split,
@@ -1253,6 +1263,8 @@ def _aggregate_slot_risk_backlogs(
         "priority": "review_visible_slot_mismatches_after_accepted_wrong_backlog",
         "item_limit": limit,
         "items": items[:limit],
+        "high_guard_item_limit": limit,
+        "high_guard_items": high_guard_items,
         "empty_reason": None
         if items
         else _slot_risk_backlog_empty_reason(split),
@@ -1739,6 +1751,16 @@ def _slot_risk_backlog_payload(
         ),
         reverse=True,
     )
+    high_guard_items = sorted(
+        items,
+        key=lambda item: (
+            float(item["max_slot_mismatch_guard_probability"]),
+            int(item["intent_correct_slot_wrong"]),
+            int(item["accepted_wrong"]),
+            item["teacher_intent"],
+        ),
+        reverse=True,
+    )[:limit]
     return {
         "schema_version": "l2-target-slot-risk-backlog-v1",
         "split": split,
@@ -1747,6 +1769,8 @@ def _slot_risk_backlog_payload(
         "priority": "review_visible_slot_mismatches_after_accepted_wrong_backlog",
         "item_limit": limit,
         "items": items[:limit],
+        "high_guard_item_limit": limit,
+        "high_guard_items": high_guard_items,
         "empty_reason": None
         if items
         else _slot_risk_backlog_empty_reason(split),
@@ -3254,7 +3278,9 @@ def _target_program_text() -> str:
             "  If accepted-wrong backlogs are empty, read `latest_slot_risk_backlog`",
             "  and related train/cross-audit slot-risk queues before stopping;",
             "  they show visible intent-correct slot mismatches that may become",
-            "  accepted wrongs under broader coverage.",
+            "  accepted wrongs under broader coverage. Review both `items` and",
+            "  `high_guard_items`; the latter catches lower-frequency risks near",
+            "  the accept threshold.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -3292,8 +3318,9 @@ def _target_program_text() -> str:
             "accepted-wrong families before coverage expansion or broad threshold",
             "changes.",
             "When accepted-wrong backlogs are empty, review the visible slot-risk",
-            "backlogs before stopping; prefer precise postprocess or abstention",
-            "rules for repeated slot mismatches over broad threshold changes.",
+            "backlogs before stopping; inspect `high_guard_items` as well as the",
+            "count-ranked `items`, and prefer precise postprocess or abstention",
+            "rules over broad threshold changes.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
             "abstention or target-local vetoes over accepting predictions that",
             "contradict visible teacher labels.",
