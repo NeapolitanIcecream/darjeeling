@@ -1103,6 +1103,17 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "visible_support_slot_keys": ["joke_type"],
             }
         )
+    if "joke_type" in items:
+        probes.append(
+            {
+                "id": "general_joke_tell_me_about_missing_joke_type",
+                "utterance": "tell me a joke about birds",
+                "input_frame": {"intent": "general_joke", "slots": {}},
+                "expectation": "veto_or_add_joke_type",
+                "expected_slot_key": "joke_type",
+                "visible_support_slot_keys": ["joke_type"],
+            }
+        )
     adjective_joke_utterance = _slot_cue_example_utterance(
         [items.get("joke_type")],
         required_text="joke",
@@ -4086,9 +4097,9 @@ def _target_program_text() -> str:
             "  media slot; calendar removes with date cues accepted without `date`;",
             "  bare upcoming events",
             "  accepted as `recommendation_events`; `general_joke` accepts with",
-            "  joke adjectives, superlatives, or `joke about ...` but no",
-            "  `joke_type` slot; and volume changes with spoken amounts but no",
-            "  `change_amount` slot.",
+            "  joke adjectives, superlatives, or `joke about ...` / `tell me a",
+            "  joke about ...` but no `joke_type` slot; and volume changes with",
+            "  spoken amounts but no `change_amount` slot.",
             "  Run `tools/evaluate.py --split slot_cue_probes` after editing",
             "  target cue rules; this diagnostic is visible-only and not a private",
             "  selection/adoption gate.",

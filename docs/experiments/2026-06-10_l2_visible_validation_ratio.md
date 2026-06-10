@@ -1397,3 +1397,32 @@ Interpretation:
   `put on radio <name>`. This is still in the same visible slot-cue family, so
   the next implementation adds `play_radio_missing_radio_name_cue` to the
   existing `slot_cue_probes` split rather than creating a new diagnostic.
+
+Radio-name-probe live result:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-radio-name-live-r1`.
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `31` accepted, `31` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `31` correct accepts, required `10`.
+- Final train audit: `102` accepted, `102` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `27` accepted, `27` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed: `11/11`.
+- Private selection: `7` accepted, `7` correct, `0` wrong; gate passed.
+- Private promotion: `7` accepted, `6` correct, `1` wrong; gate failed.
+- `selection_decision.selected=true`, `adoption_decision.adopted=false`.
+
+Private promotion wrong accept:
+
+- `tell me a joke about birds` was accepted as `general_joke {}`, but teacher
+  required `joke_type=birds`.
+
+Interpretation:
+
+- The new radio-name probe fixed the 10k radio cue risk locally, but private
+  promotion exposed that the existing `joke about` probe was too tied to the
+  visible example shape. It did not force the common `tell me a joke about X`
+  pattern.
+- The next implementation adds
+  `general_joke_tell_me_about_missing_joke_type` to the same diagnostic split.

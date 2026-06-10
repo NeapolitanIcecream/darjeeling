@@ -840,6 +840,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
         "calendar_remove_today_date_cue",
         "recommendation_events_bare_upcoming_events",
         "general_joke_missing_joke_type",
+        "general_joke_tell_me_about_missing_joke_type",
         "general_joke_adjective_missing_joke_type",
         "general_joke_superlative_missing_joke_type",
         "audio_volume_spoken_amount_cue",
@@ -891,7 +892,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
 
     assert payload["passes_gate"] is True
     assert payload["failed_checks"] == []
-    assert payload["probe_count"] == 11
+    assert payload["probe_count"] == 12
 
 
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
