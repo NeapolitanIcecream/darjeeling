@@ -128,7 +128,7 @@ L3 local SLM 是 proposal 的重要层级，但本地模型可能慢，且本地
 - 同一 teacher cache key 命中时不刷新。
 - prompt/schema/model 变化进入新的 cache namespace。
 
-## 决策 9：L2 evolve 拆成 coding-agent 结构改造与 Optuna 调参
+## 决策 9：L2 evolve 拆成 coding-agent 结构改造与 agent-invoked Optuna 调参
 
 **状态：用户决策。**
 
@@ -137,7 +137,8 @@ L2 的演化不应让 L4 模型手工猜超参。L4 coding agent 负责需要 ge
 设计含义：
 
 - 调参是本地、可复现、可审计的工具调用，不消耗 L4 token 做人工搜索。
-- L4 coding agent 可以自由调用 `edge-mvp l2 tune` 或等价 Python API，并读取 tuning report。
+- L4 coding agent 可以自由调用 `edge-mvp l2 tune`、target workspace
+  `tools/search_config.py` 或等价 Python API，并读取 tuning report。
 - Optuna 不能直接优化最终 e2e test；compiler 中的 tuning 只使用 `teacher_train` 内部切分出的 validation，不读取 promotion holdout、gold eval 或 future stream。
 - `L2_TUNING_MODE=optuna` 是显式开关，默认关闭，避免普通 replay 默认变慢。
 - 旧的 direct L4 bounded L2 config proposal 只保留为轻量 proposal path；它不能取代 coding-agent 级别的 L2 code evolution。
@@ -154,25 +155,26 @@ Semantic cache 是有价值的，但第一阶段不强制启用。先让 exact c
 - Semantic cache 作为第二阶段 artifact。
 - Report 中区分 exact cache 贡献和 semantic cache 贡献。
 
-## 决策 11：L2 evolve 使用 Target-dependent inner loop，不能改 Darjeeling core
+## 决策 11：L2 evolve 使用 single-session Target-dependent inner loop，不能改 Darjeeling core
 
 **状态：用户决策。**
 
-L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution loop。Darjeeling core 保持 dataset-independent；具体 target/dataset 的 L2 runtime code 放在隔离 target workspace，由 L4 coding agent 多轮修改、训练和评估。
+L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution job。Darjeeling core 保持 dataset-independent；具体 target/dataset 的 L2 runtime code 放在隔离 target workspace。真实 evolve 主路径是在一个 long-running L4 agent session 内自主多轮修改、训练、评估和调用 Optuna/search 工具。
 
 设计含义：
 
 - Outer Darjeeling loop 负责 replay、teacher-visible split、workspace/provenance、promotion holdout、artifact registry 和 core invariants。
 - Inner L2 target loop 在固定 workspace 内运行，不等待新的 stream prefix，也不受 `compile_every` 限制。
 - `target/` 是唯一可写 target-dependent code 区域；`system/darjeeling/` 是只读 core/evaluator copy。
-- 每轮 mutating command 后、candidate evaluation 前必须做 workspace scope check：候选代码只能改 `target/`；`runs/` 只允许作为 scratch output；`data/`、`tools/`、`system/darjeeling/` 和 `program.md` 是 protected surface。越界写入直接停止该 target-evolve job，不能参与 selection 或 promotion。
+- Agent session 结束后、candidate evaluation 前必须做 workspace scope check：候选代码只能改 `target/`；`runs/` 只允许作为 scratch output；`data/`、`tools/`、`system/darjeeling/` 和 `program.md` 是 protected surface。越界写入直接停止该 target-evolve job，不能参与 selection 或 promotion。
 - `data/train.jsonl`、`data/inner_validation.jsonl` 和可选的 `data/inner_validation_shadow_*.jsonl` 可以给 agent 读；selection holdout 和 promotion holdout 存在 outer job 的私有目录，不进入 agent workspace。
 - Target split 默认保持 chronological；小样本或窄 target patch 诊断可以显式使用 `intent-stratified`，让 visible validation、selection 和 promotion 都覆盖更多 intent family。该策略只改变 fixed target split 的采样方式，不放宽 visible validation、private selection、private promotion 或 outer replay gates。
 - `--visible-validation-folds N` 是 agent-visible validation pressure 开关。未显式传入时，`standard`/`smoke` 默认 1 fold，`fixed-inner` 默认 5 folds。`N=1` 保持 60/20/10/10 split；`N>1` 使用 capped 50/30/10/10 split，创建额外可见 `inner_validation_shadow_*` folds 并用 aggregate visible validation gate 做 candidate selection。继续增加 folds 只切分同一个 30% visible pool，不继续压缩 train；它不把 private holdout rows 或 aggregates 暴露给 L4 agent。
-- 调参不应占用 L4 coding-agent round。Inner loop 先在固定 target data 上通过 `local-search`/Optuna 做大量 cheap trials，搜索结果只写 `target/config.json`；L4 coding agent 主要负责修改 `target/` 中真正需要设计判断的代码、特征、后处理和 search space。
+- 调参不应消耗 L4 推理来手工猜参数。Optuna/search 是 workspace tool，由 L4 coding agent 在同一个 session 里按需调用；外层 harness 不把 `local-search` 固定成真实 evolve 的独立阶段。
 - Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 visible validation、target holdout/promotion 指标和 outer replay 决定是否采用；不能仅因为它是 target-dependent 就拒绝。Darjeeling core 仍必须保持 dataset-independent。
-- Inner loop 必须先评估 baseline，再评估 target rounds；可见 round history 只包含 visible validation 聚合，不包含 selection/promotion holdout 聚合。
-- L4 agent budget 由 outer harness 控制：`rounds` 是最大 target round 数，不是数据收集次数；默认不会因为 private selection gate 通过而中止 inner loop，selection/promotion 只参与最终 candidate selection/adoption。真实固定 snapshot 探索使用 `fixed-inner` budget profile，其默认 live `codex-cli` cap 高于 smoke/standard；若做 smoke 或节省 live LLM cost，可使用 `smoke` profile、`--max-agent-rounds 0` 或显式打开 selection-gate early stop。
+- Inner job 必须先评估 baseline，再启动 agent session；agent 只看到 visible validation/history/diagnostics，不包含 selection/promotion holdout rows 或 private aggregate feedback。
+- Agent-visible state 不能写入由 private selection/promotion gate 推导出的 pass/fail 字段；这些只属于 outer summary、promotion metadata 和最终人工/自动 adoption 判断。
+- L4 agent budget 由 outer harness 控制：限制 wall time、LLM token、工具调用、Optuna trials 和 evaluation cost，但不规定 agent 内部的 edit/evaluate/search 步骤。`rounds` 在 `agent-session` 主路径中是给 agent 的内部迭代预算提示，不代表外层多次 Codex launch；旧 `codex-cli` multi-launch round loop 只保留为兼容/诊断路径。
 - Candidate selection gate 要求 visible validation gate 和 private selection holdout gate 同时通过；private selection 不能掩盖 visible validation regression。
 - Visible validation improvement 不能直接触发采用；通过 candidate selection gate 的 target round 只表示可被选中，只有同时通过 private promotion holdout gate 才能进入 `adoption_decision.adopted=true`。
 - 旧的 `L2_AGENT_MODE=codex-cli` patch harness 只能作为 legacy core-patch artifact 生成路径，不是 L2 evolve 主线。

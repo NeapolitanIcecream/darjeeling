@@ -14,8 +14,11 @@
    不是“一个 L4 模型给另一个 agent 发指令”，而是 L4 层在 L1 compiler mode 下通过 Codex CLI harness 运行，模型搭载在 coding agent 内部，利用多轮对话、局部读写文件、构建、测试和 benchmark 能力修改 L1 Rust 代码。
 4. **L2 evolve 拆成 coding-agent 结构改造和本地调参工具。**
    L4 coding agent 负责真正需要 generalized intelligence 的 L2 代码/特征/验证协议改造；Optuna 等本地工具负责在 agent 设计的搜索空间内做超参搜索。旧的 direct L2 bounded config proposal 只保留为轻量 proposal path，不代表最终 L2 evolve 主路径。
-5. **L3、guard 的 L4 使用方式不随 L1 改变。**
-   它们仍使用 direct model API 生成 bounded prompt 或 threshold proposal。
+5. **L1/L2/L3 evolve 应采用同构的 L4 coding-agent 架构。**
+   三层都使用隔离 workspace、一个 long-running L4 agent session、agent
+   自主 edit/evaluate/search、outer private gate 和 outer replay promotion。
+   不同层的 editable surface 和工具不同：L1 是 Rust/native program，L2
+   是 target student code/Optuna/evaluate，L3 是 prompt/context/bench。
 
 ## 文档结构
 
@@ -31,6 +34,7 @@
 - [modules/l2_student.md](modules/l2_student.md)
 - [modules/l3_local_slm.md](modules/l3_local_slm.md)
 - [modules/l4_layer.md](modules/l4_layer.md)
+- [modules/l4_agent_evolve_harness.md](modules/l4_agent_evolve_harness.md)
 - [modules/l4_context.md](modules/l4_context.md)
 - [modules/compiler.md](modules/compiler.md)
 - [modules/replay_promotion.md](modules/replay_promotion.md)

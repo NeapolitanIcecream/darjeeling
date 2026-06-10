@@ -674,7 +674,9 @@ def l2_target_evolve(
     ] = None,
     mode: Annotated[
         str,
-        typer.Option(help="Evolution mode: dry-run, local-search, or codex-cli."),
+        typer.Option(
+            help="Evolution mode: agent-session, dry-run, local-search, or codex-cli.",
+        ),
     ] = "dry-run",
     budget_profile: Annotated[
         str,
@@ -776,16 +778,19 @@ def l2_target_evolve(
         typer.Option(
             min=0,
             help=(
-                "Maximum live codex-cli agent rounds. Defaults are profile-specific; "
-                "0 prepares/evaluates the workspace without launching Codex."
+                "Maximum live agent launches. agent-session defaults to 1; "
+                "codex-cli defaults are profile-specific; 0 prepares/evaluates "
+                "the workspace without launching Codex."
             ),
         ),
     ] = None,
 ) -> None:
     """Run an inner target-dependent L2 evolution loop over fixed trace splits."""
 
-    if mode not in {"dry-run", "local-search", "codex-cli"}:
-        raise typer.BadParameter("mode must be dry-run, local-search, or codex-cli")
+    if mode not in {"dry-run", "local-search", "codex-cli", "agent-session"}:
+        raise typer.BadParameter(
+            "mode must be dry-run, local-search, codex-cli, or agent-session",
+        )
     if budget_profile not in {"standard", "fixed-inner", "smoke"}:
         raise typer.BadParameter("budget_profile must be standard, fixed-inner, or smoke")
     if split_policy not in {"chronological", "intent-stratified"}:
@@ -905,10 +910,12 @@ def _resolve_l2_target_agent_rounds(
     budget_profile: L2TargetBudgetProfile,
     max_agent_rounds: int | None,
 ) -> int | None:
-    if mode != "codex-cli":
+    if mode not in {"codex-cli", "agent-session"}:
         return max_agent_rounds
     if max_agent_rounds is not None:
         return max_agent_rounds
+    if mode == "agent-session":
+        return 1
     if budget_profile == "standard":
         return 3
     if budget_profile == "fixed-inner":

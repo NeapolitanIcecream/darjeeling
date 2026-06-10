@@ -104,6 +104,21 @@ no parser hard failure
 
 ## L4 参与方式
 
-L4 对 L3 使用 direct model API 提议 prompt artifact。Few-shot labels 必须来自 teacher traces，L4 只能选择 example IDs，不能发明 labels。
+设计目标是让 L3 evolve 使用与 L1/L2 同构的 L4 agent-session
+harness：outer job 准备隔离 workspace，写入 prompt/context packing/routing
+guard prompt 的 editable surface、teacher-visible train/validation、prompt
+eval、本地 SLM bench 和 latency/cost eval 工具；一个 long-running L4 agent
+session 在 workspace 内自主修改 prompt artifact、few-shot/context packing 和
+guard prompt，并自行决定 eval/bench/stop 的次数。Outer harness 只负责 scope
+check、private selection/promotion gate 和 outer replay adoption。
 
-L4 生成的 prompt candidate 不是 runtime artifact。它必须先经过显式 `l3 replay-prompt`，再由 `l3 promote-prompt` 写入 manifest。Runtime 是否实际调用 L3 仍由 settings 中的 L3 mode 决定；manifest 中的 `l3_prompt` 只提供 prompt artifact。
+Few-shot labels 必须来自 teacher-visible traces；agent 只能选择或重排
+example IDs，不能发明 labels。Private selection/promotion rows、aggregate
+feedback 和 private-gate-derived pass/fail 不进入 workspace。
+
+当前 `L4_PROPOSAL_MODE=live` 的 direct model API prompt proposal 是 legacy
+bounded path，只能产出 `l3_prompt_candidate` artifact，不代表目标 L3 evolve
+方法论。该 candidate 不是 runtime artifact；它必须先经过显式
+`l3 replay-prompt`，再由 `l3 promote-prompt` 写入 manifest。Runtime 是否实际
+调用 L3 仍由 settings 中的 L3 mode 决定；manifest 中的 `l3_prompt` 只提供
+prompt artifact。

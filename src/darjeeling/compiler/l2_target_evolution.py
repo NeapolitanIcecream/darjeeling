@@ -23,7 +23,12 @@ from darjeeling.layers.l2_target import (
 )
 from darjeeling.schemas import TeacherTrace
 
-L2TargetEvolutionMode = Literal["dry-run", "codex-cli", "local-search"]
+L2TargetEvolutionMode = Literal[
+    "dry-run",
+    "codex-cli",
+    "local-search",
+    "agent-session",
+]
 L2TargetSearchSpace = Literal["compact", "wide"]
 L2TargetBudgetProfile = Literal["standard", "fixed-inner", "smoke"]
 L2TargetSplitPolicy = Literal["chronological", "intent-stratified"]
@@ -86,6 +91,8 @@ def run_l2_target_evolution(
         raise ValueError("visible_cross_audit_folds must be 0 or at least 2")
     if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
         raise ValueError("max_agent_rounds must be non-negative")
+    if config.mode not in {"dry-run", "local-search", "codex-cli", "agent-session"}:
+        raise ValueError("mode must be dry-run, local-search, codex-cli, or agent-session")
     if config.target_scope not in {"teacher_train", "lower_miss"}:
         raise ValueError("target_scope must be teacher_train or lower_miss")
     max_agent_rounds = _effective_max_agent_rounds(config)
@@ -251,6 +258,43 @@ def run_l2_target_evolution(
                 )
                 stop_reason = "local_search_failed"
                 break
+        elif config.mode == "agent-session":
+            if (
+                max_agent_rounds is not None
+                and agent_rounds_started >= max_agent_rounds
+            ):
+                stop_reason = "agent_session_budget_exhausted"
+                break
+            transcript_path = transcript_dir / "agent_session.jsonl"
+            report_path = rounds_dir / "agent_session_report.md"
+            agent_rounds_started += 1
+            command_results.append(
+                _run_agent_session(
+                    config=config,
+                    workspace_root=workspace_root,
+                    transcript_path=transcript_path,
+                    report_path=report_path,
+                )
+            )
+            if command_results[-1]["return_code"] != 0:
+                stop_reason = "agent_session_failed"
+                break
+            scope_report = _workspace_scope_violation_report(
+                workspace_root=workspace_root,
+                before=protected_snapshot,
+            )
+            if scope_report is not None:
+                command_results.append(
+                    _workspace_scope_violation_command_result(
+                        workspace_root=workspace_root,
+                        round_index=round_index,
+                        report=scope_report,
+                    ),
+                )
+                stop_reason = "workspace_scope_violation"
+                break
+            agent_rounds_succeeded += 1
+            local_search_report = None
         else:
             if (
                 max_agent_rounds is not None
@@ -342,11 +386,26 @@ def run_l2_target_evolution(
             round_payload["local_search"] = _visible_local_search_summary(
                 local_search_report,
             )
+        if config.mode == "agent-session":
+            round_payload["agent_session"] = {
+                "schema_version": "l2-target-agent-session-v1",
+                "session_scope": "single long-running L4 agent session",
+                "internal_loop_control": "agent_decides_edit_evaluate_search_stop",
+                "tool_policy": (
+                    "agent may call visible tools/evaluate.py and tools/search_config.py"
+                ),
+                "private_holdout_visibility": (
+                    "selection and promotion holdouts are evaluated only after session exit"
+                ),
+            }
         (rounds_dir / f"round_{round_index:03d}.json").write_text(
             json.dumps(round_payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         round_results.append(round_payload)
+        if config.mode == "agent-session":
+            stop_reason = "agent_session_completed"
+            break
         if (
             config.stop_on_selection_gate
             and inner_result["passes_gate"]
@@ -1702,24 +1761,32 @@ def _agent_budget_payload(
 ) -> dict[str, Any]:
     max_rounds = _effective_max_agent_rounds(config)
     remaining = None if max_rounds is None else max(0, max_rounds - agent_rounds_started)
+    live_agent_mode = config.mode in {"codex-cli", "agent-session"}
     return {
         "schema_version": "l2-target-agent-budget-v1",
-        "applies_to_mode": config.mode == "codex-cli",
+        "applies_to_mode": live_agent_mode,
         "mode": config.mode,
-        "codex_command": config.codex_command if config.mode == "codex-cli" else None,
-        "codex_model": config.codex_model if config.mode == "codex-cli" else None,
-        "timeout_s": config.timeout_s if config.mode == "codex-cli" else None,
+        "codex_command": config.codex_command if live_agent_mode else None,
+        "codex_model": config.codex_model if live_agent_mode else None,
+        "timeout_s": config.timeout_s if live_agent_mode else None,
         "max_agent_rounds": max_rounds,
         "agent_rounds_started": agent_rounds_started,
         "agent_rounds_succeeded": agent_rounds_succeeded,
         "agent_rounds_remaining": remaining,
+        "agent_session_scope": (
+            "single_session_agent_controls_internal_loop"
+            if config.mode == "agent-session"
+            else "one_codex_process_per_outer_round"
+            if config.mode == "codex-cli"
+            else None
+        ),
         "local_search_consumes_llm": False,
         "prompt_strategy": (
             "stable short stdin prompt; dynamic target context stays in workspace files"
         ),
         "cost_policy": (
-            "codex-cli rounds consume live GPT budget; local-search rounds are cheap "
-            "deterministic/Optuna work and do not count against this budget"
+            "live agent modes consume GPT budget; local-search/tool calls are cheap "
+            "deterministic/Optuna work and do not count as live agent launches"
         ),
     }
 
@@ -1784,12 +1851,14 @@ def _target_budget_profile_intent_payload(
         "guidance": guidance,
         "fixed_trace_snapshot_inner_loop": True,
         "outer_replay_cadence_bound": False,
-        "rounds_are_l2_train_eval_iterations": True,
+        "rounds_are_l2_train_eval_iterations": config.mode != "agent-session",
+        "agent_session_controls_internal_loop": config.mode == "agent-session",
         "local_search_consumes_llm": False,
         "codex_cli_rounds_consume_llm": config.mode == "codex-cli",
+        "live_agent_session_consumes_llm": config.mode == "agent-session",
         "effective_max_agent_rounds": max_agent_rounds,
         "agent_round_cap_is_cost_control": (
-            config.mode == "codex-cli" and max_agent_rounds is not None
+            config.mode in {"codex-cli", "agent-session"} and max_agent_rounds is not None
         ),
     }
 
@@ -1844,11 +1913,28 @@ def _target_evidence_policy_payload(
         blocking_reasons.append(
             "codex-cli agent round cap is below the quality evidence minimum"
         )
+    elif config.mode == "agent-session" and resolved_max_agent_rounds == 0:
+        evidence_class = "agent_session_not_launched_probe"
+        blocking_reasons.append("agent-session mode did not launch a live agent session")
+    elif (
+        config.mode == "agent-session"
+        and stop_reason is not None
+        and (
+            stop_reason != "agent_session_completed"
+            or rounds_completed is None
+            or rounds_completed < 1
+        )
+    ):
+        evidence_class = "incomplete_agent_session_probe"
+        blocking_reasons.append(
+            "agent-session did not complete one scoped candidate evaluation"
+        )
     else:
         evidence_class = "fixed_snapshot_research"
 
     if (
         evidence_class == "fixed_snapshot_research"
+        and config.mode != "agent-session"
         and stop_reason is not None
         and rounds_completed is not None
         and rounds_completed < min(config.rounds, min_quality_rounds)
@@ -1882,6 +1968,7 @@ def _target_evidence_policy_payload(
             "budget_profile": "fixed-inner",
             "min_rounds_requested": min_quality_rounds,
             "min_codex_cli_agent_rounds": min_quality_codex_agent_rounds,
+            "agent_session_requires_one_completed_session": True,
             "min_teacher_labeled_traces": min_quality_teacher_labeled_traces,
             "requires_private_selection_gate": True,
             "requires_private_promotion_gate": True,
@@ -1898,16 +1985,19 @@ def _target_evidence_policy_payload(
         "outer_replay_cadence_bound": False,
         "effective_max_agent_rounds": resolved_max_agent_rounds,
         "agent_round_cap_is_cost_control": (
-            config.mode == "codex-cli" and resolved_max_agent_rounds is not None
+            config.mode in {"codex-cli", "agent-session"}
+            and resolved_max_agent_rounds is not None
         ),
     }
 
 
 def _effective_max_agent_rounds(config: L2TargetEvolutionConfig) -> int | None:
-    if config.mode != "codex-cli":
+    if config.mode not in {"codex-cli", "agent-session"}:
         return config.max_agent_rounds
     if config.max_agent_rounds is not None:
         return config.max_agent_rounds
+    if config.mode == "agent-session":
+        return 1
     if config.budget_profile == "standard":
         return 3
     if config.budget_profile == "fixed-inner":
@@ -1962,6 +2052,7 @@ def _target_objective_payload(
             "raw coverage increase with lower frame exactness",
             "lowering threshold when visible validation gate fails",
             "expanding near-miss coverage while safety_backlog has accepted-wrong items",
+            "treating a fixed edit/evaluate/search script as the agent plan",
             "treating private selection success alone as candidate success",
             "candidate code changes outside target/",
             "modifying data/, tools/, system/darjeeling/, or program.md",
@@ -1972,8 +2063,8 @@ def _target_objective_payload(
             "target-dependent code derived from visible train and validation-fold files",
             "config_overrides for bounded L2StudentConfig parameters",
             (
-                "local Optuna/config search over visible train/validation with optional "
-                "visible cross-audit top-k rerank"
+                "agent-invoked Optuna/config search over visible train/validation "
+                "with optional visible cross-audit top-k rerank"
             ),
             "visible cross-audit diagnostics for selection-like safety pressure",
             "postprocess_frame fixes that preserve exact frame correctness",
@@ -1981,6 +2072,14 @@ def _target_objective_payload(
             "near_miss_examples-driven mechanisms that still pass visible validation gate",
             "target-specific lexical or state-machine rules derived from visible target data",
         ],
+        "agent_session_policy": {
+            "session_closure": "one L4 agent session per target-evolve job",
+            "internal_loop_control": "agent_decides_edit_evaluate_optuna_stop",
+            "outer_harness_role": (
+                "prepare workspace, launch agent, check scope, evaluate private gates"
+            ),
+            "adoption_authority": "outer_private_gates_and_outer_replay",
+        },
     }
 
 
@@ -2009,7 +2108,7 @@ def _workspace_scope_policy_payload() -> dict[str, Any]:
         "scratch_writable_roots": ["runs/"],
         "protected_roots": ["data/", "system/darjeeling/", "tools/", "program.md"],
         "ignored_generated_files": ["__pycache__/", ".pytest_cache/", "*.pyc", "*.pyo"],
-        "enforcement": "checked_after_each_mutating_round_before_candidate_evaluation",
+        "enforcement": "checked_after_each_mutating_round_or_session_before_candidate_evaluation",
     }
 
 
@@ -2192,7 +2291,9 @@ def _visible_round_summary(round_result: dict[str, Any]) -> dict[str, Any]:
     return {
         "round": round_result["round"],
         "inner_improved": round_result["inner_improved"],
-        "passes_candidate_selection_gate": round_result["passes_candidate_selection_gate"],
+        "passes_visible_validation_gate": bool(
+            round_result["inner_validation"]["passes_gate"],
+        ),
         "inner_score": round_result["inner_score"],
         "inner_delta_vs_baseline": round_result["inner_delta_vs_baseline"],
         "inner_validation": _visible_metric_summary(round_result["inner_validation"]),
@@ -2839,7 +2940,7 @@ def _target_program_text() -> str:
             "Workspace layout:",
             "- `target/` is editable target-specific L2 code.",
             "- `runs/` is scratch output; it is not promoted.",
-            "- `target/config.json` is local-search-owned L2StudentConfig overrides.",
+            "- `target/config.json` contains target-specific L2StudentConfig overrides.",
             "- `system/darjeeling/` is read-only Darjeeling core/evaluator code.",
             "- `data/train.jsonl` is visible training data.",
             "- `data/inner_validation.jsonl` is visible fast feedback data.",
@@ -2857,7 +2958,14 @@ def _target_program_text() -> str:
             "  folds to expose selection-like risks without using private holdouts.",
             "- `data/commands.md` lists local commands.",
             "- `tools/evaluate.py` trains/evaluates the target code in seconds.",
-            "- `tools/search_config.py` runs visible-data Optuna config search.",
+            "- `tools/search_config.py` runs visible-data Optuna config search",
+            "  when you decide tuning is useful.",
+            "",
+            "This is one autonomous L4 agent session. The outer harness does not",
+            "prescribe an edit/evaluate/search script. You decide how many times to",
+            "inspect context, edit `target/`, evaluate visible splits, run Optuna,",
+            "debug, and stop. Stop when the visible objective is met, no safe",
+            "progress remains, risk is too high, or budget is near exhaustion.",
             "",
             "Optimize generalization from the visible train and validation-fold data.",
             "Wrong accepts are worse than abstentions. A raw coverage increase is not",
@@ -2866,9 +2974,8 @@ def _target_program_text() -> str:
             "and the outer private selection holdout passes. Private selection",
             "alone is not success if visible validation has wrong accepts.",
             "Adoption also requires the private promotion holdout to pass.",
-            "By default, private selection is an outer selection signal, not an",
-            "inner-loop early-stop signal; keep improving target code until the",
-            "round budget or visible validation patience is exhausted.",
+            "Private selection is an outer selection signal, not a signal you can",
+            "read during this session. Adoption is decided after this session exits.",
             "Use `near_miss_examples` from visible validation to find safe",
             "coverage opportunities, and use `wrong_examples` / `veto_examples`",
             "to tighten safety. Do not lower threshold globally unless the visible",
@@ -2892,8 +2999,8 @@ def _target_program_text() -> str:
             "Darjeeling-core dataset-independence violation. It becomes invalid only",
             "if it moves into core code, uses private holdout rows or aggregates, or",
             "uses MASSIVE/external dataset knowledge that is not visible here.",
-            "Use local config search for cheap tuning; reserve code edits for changes",
-            "that require target-specific design judgment.",
+            "Use local config search for cheap tuning when useful; reserve code edits",
+            "for changes that require target-specific design judgment.",
             "Do not move target-specific code into core.",
         ]
     )
@@ -2986,6 +3093,48 @@ def _run_codex_round(
         ]
     )
     prompt = f"Read program.md and complete target L2 evolution round {round_index}."
+    result = _run_command(command, cwd=workspace_root, timeout_s=config.timeout_s, stdin=prompt)
+    transcript_path.write_text(str(result["stdout"]), encoding="utf-8")
+    return result
+
+
+def _run_agent_session(
+    *,
+    config: L2TargetEvolutionConfig,
+    workspace_root: Path,
+    transcript_path: Path,
+    report_path: Path,
+) -> dict[str, Any]:
+    command = [config.codex_command]
+    if config.codex_model:
+        command.extend(["--model", config.codex_model])
+    command.extend(["--sandbox", config.sandbox, "-a", config.approval_policy, "exec"])
+    if config.ignore_user_config:
+        command.append("--ignore-user-config")
+    if config.ignore_rules:
+        command.append("--ignore-rules")
+    if config.ephemeral:
+        command.append("--ephemeral")
+    command.extend(
+        [
+            "--skip-git-repo-check",
+            "--cd",
+            str(workspace_root.resolve()),
+            "--json",
+            "-o",
+            str(report_path.resolve()),
+            "-",
+        ]
+    )
+    prompt = "\n".join(
+        [
+            "Read program.md and run one autonomous L2 target evolution session.",
+            "You decide how many times to inspect, edit target/, evaluate, and run",
+            "tools/search_config.py within the available budget. Stop when the",
+            "visible objective is met, no safe progress remains, or budget/risk says",
+            "to stop. Leave the final candidate in target/.",
+        ]
+    )
     result = _run_command(command, cwd=workspace_root, timeout_s=config.timeout_s, stdin=prompt)
     transcript_path.write_text(str(result["stdout"]), encoding="utf-8")
     return result

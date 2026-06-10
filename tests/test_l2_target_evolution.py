@@ -103,8 +103,10 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "fixed_trace_snapshot_inner_loop": True,
         "outer_replay_cadence_bound": False,
         "rounds_are_l2_train_eval_iterations": True,
+        "agent_session_controls_internal_loop": False,
         "local_search_consumes_llm": False,
         "codex_cli_rounds_consume_llm": False,
+        "live_agent_session_consumes_llm": False,
         "effective_max_agent_rounds": None,
         "agent_round_cap_is_cost_control": False,
     }
@@ -247,6 +249,14 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "visible validation gate" in round_state["candidate_selection_gate"]
     assert "early_stop_policy" in round_state
     assert "does not stop the inner loop" in round_state["early_stop_policy"]
+    assert all(
+        "passes_candidate_selection_gate" not in entry
+        for entry in round_state["round_history"]
+    )
+    assert all(
+        "passes_visible_validation_gate" in entry
+        for entry in round_state["round_history"]
+    )
     assert "candidate_selection" in objective["gates"]
     assert objective["target_scope"]["scope"] == "teacher_train"
     assert objective["workspace_scope"]["candidate_code_writable_roots"] == ["target/"]
@@ -259,7 +269,8 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "Private selection" in program_text
     assert "alone is not success" in program_text
     assert "outer selection signal" in program_text
-    assert "inner-loop early-stop signal" in program_text
+    assert "not a signal you can" in program_text
+    assert "read during this session" in program_text
     assert "near_miss_examples" in program_text
     assert "target_diagnostics.json" in program_text
     assert "latest_safety_backlog" in program_text
@@ -632,7 +643,9 @@ def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Pa
         "scratch_writable_roots": ["runs/"],
         "protected_roots": ["data/", "system/darjeeling/", "tools/", "program.md"],
         "ignored_generated_files": ["__pycache__/", ".pytest_cache/", "*.pyc", "*.pyo"],
-        "enforcement": "checked_after_each_mutating_round_before_candidate_evaluation",
+        "enforcement": (
+            "checked_after_each_mutating_round_or_session_before_candidate_evaluation"
+        ),
     }
 
 
@@ -993,6 +1006,164 @@ def test_l2_target_evolution_respects_zero_agent_round_budget(tmp_path: Path) ->
     assert round_state["agent_budget"]["agent_rounds_remaining"] == 0
 
 
+def test_l2_target_agent_session_launches_once_and_evaluates_candidate(
+    tmp_path: Path,
+) -> None:
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+workspace = Path(args[args.index("--cd") + 1])
+report = Path(args[args.index("-o") + 1])
+prompt = sys.stdin.read()
+(workspace / "target" / "config.json").write_text(
+    json.dumps({"accept_threshold": 0.98, "min_examples": 4}) + "\\n",
+    encoding="utf-8",
+)
+(workspace / "runs").mkdir(exist_ok=True)
+(workspace / "runs" / "agent_note.txt").write_text(
+    "fake agent session completed\\n",
+    encoding="utf-8",
+)
+report.write_text("fake agent session report\\n", encoding="utf-8")
+print(json.dumps({"prompt": prompt, "workspace": str(workspace)}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=5,
+            mode="agent-session",
+            codex_command=str(fake_codex),
+            codex_model=None,
+            inner_patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    workspace = tmp_path / "job" / "workspace" / "l2_target"
+    round_state = json.loads(
+        (workspace / "data" / "round_state.json").read_text(encoding="utf-8")
+    )
+    transcript = (tmp_path / "job" / "transcripts" / "agent_session.jsonl").read_text(
+        encoding="utf-8",
+    )
+
+    assert summary["mode"] == "agent-session"
+    assert summary["rounds_requested"] == 5
+    assert summary["rounds_completed"] == 1
+    assert summary["stop_reason"] == "agent_session_completed"
+    assert summary["agent_budget"]["applies_to_mode"] is True
+    assert summary["agent_budget"]["max_agent_rounds"] == 1
+    assert summary["agent_budget"]["agent_rounds_started"] == 1
+    assert summary["agent_budget"]["agent_rounds_succeeded"] == 1
+    assert summary["agent_budget"]["agent_rounds_remaining"] == 0
+    assert summary["agent_budget"]["agent_session_scope"] == (
+        "single_session_agent_controls_internal_loop"
+    )
+    assert summary["rounds"][0]["agent_session"] == {
+        "schema_version": "l2-target-agent-session-v1",
+        "session_scope": "single long-running L4 agent session",
+        "internal_loop_control": "agent_decides_edit_evaluate_search_stop",
+        "tool_policy": "agent may call visible tools/evaluate.py and tools/search_config.py",
+        "private_holdout_visibility": (
+            "selection and promotion holdouts are evaluated only after session exit"
+        ),
+    }
+    assert "autonomous L2 target evolution session" in transcript
+    assert (workspace / "target" / "config.json").exists()
+    assert (workspace / "runs" / "agent_note.txt").exists()
+    assert not (workspace / "data" / "selection_holdout.jsonl").exists()
+    assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
+    assert round_state["state_kind"] == "final"
+    assert round_state["agent_budget"]["agent_rounds_succeeded"] == 1
+
+
+def test_l2_target_agent_session_failure_cannot_support_quality_claim(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\nimport sys\nsys.exit(7)\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    def metric(split: str) -> dict:
+        return {
+            "split": split,
+            "train_size": 260,
+            "validation_size": 50,
+            "accepted": 0,
+            "correct_accepts": 0,
+            "wrong_accepts": 0,
+            "vetoed_accepts": 0,
+            "coverage": 0.0,
+            "accepted_accuracy": 0.0,
+            "wrong_accept_rate": 0.0,
+            "passes_gate": False,
+            "config": {},
+            "wrong_examples": [],
+            "veto_examples": [],
+            "near_miss_examples": [],
+        }
+
+    def fake_evaluate_candidate(**kwargs) -> dict:
+        label = kwargs["label"]
+        return {
+            "label": label,
+            "inner_validation": metric("inner_validation"),
+            "selection_holdout": metric("selection_holdout"),
+            "promotion_holdout": metric("promotion_holdout"),
+        }
+
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "_evaluate_target_candidate",
+        fake_evaluate_candidate,
+    )
+
+    traces = [
+        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        if index % 2 == 0
+        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        for index in range(520)
+    ]
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=48,
+            mode="agent-session",
+            budget_profile="fixed-inner",
+            codex_command=str(fake_codex),
+            codex_model=None,
+            inner_patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(traces),
+    )
+
+    assert summary["stop_reason"] == "agent_session_failed"
+    assert summary["rounds_completed"] == 0
+    assert summary["evidence_policy"]["evidence_class"] == "incomplete_agent_session_probe"
+    assert summary["evidence_policy"]["quality_claim_supported"] is False
+    assert any(
+        "did not complete one scoped candidate evaluation" in reason
+        for reason in summary["evidence_policy"]["blocking_reasons"]
+    )
+
+
 def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> None:
     assert _resolve_l2_target_budget(
         budget_profile="standard",
@@ -1029,6 +1200,16 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
     ) == 1
     assert _resolve_l2_target_agent_rounds(
         mode="codex-cli",
+        budget_profile="fixed-inner",
+        max_agent_rounds=0,
+    ) == 0
+    assert _resolve_l2_target_agent_rounds(
+        mode="agent-session",
+        budget_profile="fixed-inner",
+        max_agent_rounds=None,
+    ) == 1
+    assert _resolve_l2_target_agent_rounds(
+        mode="agent-session",
         budget_profile="fixed-inner",
         max_agent_rounds=0,
     ) == 0
@@ -1468,6 +1649,41 @@ def test_l2_target_evolve_cli_allows_zero_agent_round_budget(tmp_path: Path) -> 
     summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
     assert summary["stop_reason"] == "agent_round_budget_exhausted"
     assert summary["rounds_completed"] == 0
+    assert summary["agent_budget"]["max_agent_rounds"] == 0
+    assert summary["agent_budget"]["agent_rounds_started"] == 0
+
+
+def test_l2_target_evolve_cli_accepts_agent_session_no_launch(tmp_path: Path) -> None:
+    traces_path = tmp_path / "traces.jsonl"
+    traces_path.write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in _traces()),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "l2",
+            "target-evolve",
+            "--traces",
+            str(traces_path),
+            "--out-dir",
+            str(tmp_path / "target-run"),
+            "--mode",
+            "agent-session",
+            "--rounds",
+            "2",
+            "--max-agent-rounds",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
+    assert summary["mode"] == "agent-session"
+    assert summary["stop_reason"] == "agent_session_budget_exhausted"
+    assert summary["rounds_completed"] == 0
+    assert summary["agent_budget"]["applies_to_mode"] is True
     assert summary["agent_budget"]["max_agent_rounds"] == 0
     assert summary["agent_budget"]["agent_rounds_started"] == 0
 

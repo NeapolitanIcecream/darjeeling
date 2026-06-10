@@ -155,15 +155,15 @@ Agent 权限：
 Outer/Inner loop 分工：
 
 - Outer Darjeeling loop 负责 replay、teacher-visible split、workspace creation、provenance、promotion holdout、artifact registry 和 core invariants。
-- Inner L2 target-evolution loop 在固定 target workspace 内多轮运行：L4 coding agent 改 `target/`，本地 evaluator 训练/验证 L2，直到 inner validation 收敛或预算耗尽。
+- Inner L2 target-evolution job 在固定 target workspace 内启动一个 long-running L4 coding agent session：agent 自主决定 edit、evaluate、调用 Optuna/search 和停止的次数；本地 evaluator 训练/验证 L2，outer harness 在 session 结束后做 scope check 和 private gates。
 - Inner loop 不等待新的 stream prefix，也不把 target-specific code 回写到 Darjeeling core。
 - `data/train.jsonl`、`data/inner_validation.jsonl` 和可选的 `data/inner_validation_shadow_*.jsonl` 可以给 agent 使用；selection/promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer harness 使用。
-- Workspace scope 是硬 gate：每轮 mutating command 后、candidate evaluation 前检查 protected files。候选代码只能改 `target/`；`runs/` 是 scratch output；`data/`、`tools/`、`system/darjeeling/` 和 `program.md` 不能被 agent 修改。越界修改以 `workspace_scope_violation` 停止 job，不进入 private selection/promotion。
-- Inner loop 先评估 baseline，再跑 target rounds。Agent 可见的 `round_state.json` 只包含 visible validation 历史、visible train audit 和可选 visible cross-audit；`target_diagnostics.json` 只包含 visible validation / train-audit / cross-audit 的 bounded family-level triage、`latest_safety_backlog`、diagnostic-only `latest_train_audit_safety_backlog` 和 `latest_visible_cross_audit_safety_backlog`；outer harness 使用 visible validation gate + private selection holdout 做 candidate selection，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。Private selection 默认不是 early-stop 信号。
+- Workspace scope 是硬 gate：agent session 结束后、candidate evaluation 前检查 protected files。候选代码只能改 `target/`；`runs/` 是 scratch output；`data/`、`tools/`、`system/darjeeling/` 和 `program.md` 不能被 agent 修改。越界修改以 `workspace_scope_violation` 停止 job，不进入 private selection/promotion。
+- Inner job 先评估 baseline，再启动 agent session。Agent 可见的 `round_state.json` 只包含 visible validation 历史、visible train audit 和可选 visible cross-audit；它不能包含 private gate rows、aggregate feedback，或由 private gate 推导出的 pass/fail 布尔值。`target_diagnostics.json` 只包含 visible validation / train-audit / cross-audit 的 bounded family-level triage、`latest_safety_backlog`、diagnostic-only `latest_train_audit_safety_backlog` 和 `latest_visible_cross_audit_safety_backlog`；outer harness 使用 visible validation gate + private selection holdout 做 candidate selection，使用 private promotion holdout 做最终验收，但不会把两者的 rows 或 aggregate feedback 写回 workspace。
 - Outer summary 可以记录 `private_holdout_evidence`，用于人类和 outer harness 判断 private gate 失败是 zero-accept sparsity、wrong accepts 还是 promotion gate failure；该 evidence 不进入 agent workspace，不能成为下一轮 L4 agent 的可见反馈。
 - Target split 默认 `chronological`；`intent-stratified` 是显式诊断选项，用来降低小样本 private selection/promotion 对窄 target family 的 zero-accept 稀疏性。它仍然只在 outer harness 内生成 split，不把 private rows 或 aggregate feedback 写回 agent workspace。
 - `fixed-inner` 默认使用 5 个 visible validation folds；`standard`/`smoke` 默认 1 个。多个 folds 只切分 capped 30% visible validation pool，不继续压缩 train。
-- `rounds` 是最大 target round 数，不等同于 LLM 调用次数。`local-search` round 可在不消耗 LLM token 的情况下跑多次 Optuna trial，并可对 top-k trial 做 visible cross-audit re-rank；`codex-cli` round 才消耗 GPT-5.5 agent budget。`standard` profile 默认 `rounds=12`、`inner_patience_rounds=4`、`local_search_trials=96`、`local_search_cross_audit_top_k=0`；`fixed-inner` profile 用于真实固定 snapshot 探索，默认 `rounds=48`、`inner_patience_rounds=0`、`local_search_trials=32`、`local_search_cross_audit_top_k=4`，更大的 Optuna budget 需要显式传参。Live `codex-cli` 另有 `max_agent_rounds` cap：默认 `standard=3`、`fixed-inner=16`、`smoke=1`，且 summary/round state 写入 `agent_budget`。`standard` 的三轮 Codex cap 是成本保护，不是 L2 evolve 能力上限；正式质量实验必须显式使用 `fixed-inner` 或覆盖 `--max-agent-rounds`。`budget_policy.profile_intent` 会把这一点写入 summary、round state 和 agent-visible objective。`--max-agent-rounds 0` 是 no-launch budget check，用于准备 workspace、baseline 和 context 而不调用 Codex。`--stop-on-selection-gate` 是显式 opt-in 的 smoke/cost-control 开关。
+- `agent-session` 默认只启动一个 live GPT-5.5/Codex session；`rounds` 是 agent-visible 内部迭代预算提示，不是 harness 固定步骤。Optuna/search 是 workspace tool，由 agent 自己调用。Harness budget 限制 wall time、LLM spend、tool/eval/search cost，但不规定 agent 内部顺序。旧 `codex-cli` multi-launch、`local-search` mode 和 `dry-run` mode 只保留为兼容、smoke 和回归测试路径。`budget_policy.profile_intent` 会把这些边界写入 summary、round state 和 agent-visible objective。`--max-agent-rounds 0` 是 no-launch budget check，用于准备 workspace、baseline 和 context 而不调用 Codex；未启动、agent 命令失败或 workspace scope violation 的 run 不能支持质量结论。
 - Visible validation improvement 只驱动继续探索；visible validation gate 是 selection 的必要条件，但不是充分条件。Adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 visible validation、private selection 和 private promotion gates 时接受。
 
 职责：
@@ -237,9 +237,9 @@ Agent 权限：
 - compiler generation 已在 `L2_AGENT_MODE` 非 disabled 时运行该 harness，并记录 `l2_agent_*` artifact paths 与 metrics。
 - `edge-mvp experiment l2-agent` 会开启 `L2_AGENT_MODE=codex-cli` 和 Optuna tuning，用于真实 L2 patch generation 实验。
 - 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。
-- 已新增 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve`，用于新的 target-dependent inner loop。该路径当前支持 dry-run 多轮、固定 split evaluator、target workspace scope gate 和 target snapshot promotion；后续应把 Codex 多轮 evolve 作为主线实验入口，而不是继续依赖 outer `compile_every` cadence。
-- `target-evolve` 已加入 baseline-first evaluation、private selection/promotion holdouts、visible objective/round-state files、visible validation folds、inner-validation patience stop、explicit selection/adoption decision 和 `local-search` Optuna tuning mode。Private selection 默认只参与最终 candidate selection，不作为 inner-loop early stop；`--stop-on-selection-gate` 仅作为 smoke/cost-control opt-in。下一步真实 L4 experiment 应优先走该路径，而不是 legacy `l2_research/candidate` patch harness。
-- `local-search` 不消耗 LLM tokens；它只优化可见 train/validation folds，并把 best visible config 写入 `target/config.json`。L4 coding agent 应在此基础上改 target-owned code/search-space，而不是手工猜 threshold、ngram 或模型 family。
+- 已新增 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve --mode agent-session`，用于新的 target-dependent single-session inner job。该路径当前支持 baseline-first evaluation、one-session Codex launch、fixed split evaluator、target workspace scope gate、private selection/promotion gates 和 target snapshot promotion。
+- `target-evolve` 仍保留 legacy `dry-run`、`local-search` 和 multi-launch `codex-cli` 模式用于 fixture、protocol probe 和兼容测试。下一步真实 L4 experiment 应优先使用 `agent-session`，而不是 legacy `l2_research/candidate` patch harness 或外层 `local-search` mode。
+- `tools/search_config.py` 不消耗 LLM tokens；它只优化可见 train/validation folds，并把 best visible config 写入 `target/config.json`。L4 coding agent 可在同一个 session 内调用它，但 search 结果不能自证 adoption。
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
 - Target workspace 也暴露 `postprocess_frame(...)`。当 visible target data 支持稳定解析时，L4 agent 应优先用 postprocess 补全 slot 或修正 frame；这类 target-specific code 只能留在 `target/`，不能进入 Darjeeling core。
 - Adopted target workspace 通过 `edge-mvp l2 promote-target` 进入 manifest，写入 `l2_student` 和 `l2_target` artifacts。Runtime replay 与 compiler offline replay 都加载 target wrapper，避免 target-loop evaluator 与系统 replay 语义分叉。
@@ -247,7 +247,14 @@ Agent 权限：
 
 ## Direct API session 策略
 
-Teacher、L2、L3、guard 的 direct API calls 不使用长期多轮 session。Retry/repair 也是显式 stateless request，包含原始 context hash、invalid output 和 validator errors。
+Teacher/fallback 和 legacy bounded proposal 的 direct API calls 不使用长期多轮
+session。Retry/repair 也是显式 stateless request，包含原始 context hash、
+invalid output 和 validator errors。
+
+真实 artifact evolve 不再以 direct proposal 为主路径：L1、L2、L3 使用隔离
+workspace + one long-running L4 agent session + outer private gate。当前 direct
+L2/L3/guard proposal 代码是兼容和轻量 bounded proposal path，不能替代
+agent-session evolve，也不能自证 adoption。
 
 ## OpenAI client
 

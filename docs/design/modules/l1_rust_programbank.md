@@ -41,6 +41,12 @@ Promoted artifact 中保存完整 source snapshot、binary 或 build instruction
 
 ## L1 coding-agent harness 当前状态
 
+目标架构与 L2/L3 同构：隔离 L1 workspace、一个 long-running L4 agent
+session、agent 自主决定 edit/compile/unit test/bench/replay/stop、outer scope
+check、private gate 和 outer replay promotion。L1 的 editable surface 是高性能
+Rust/native ProgramBank source；workspace tools 是 compile、unit test、bench 和
+replay，而不是 Optuna 或 prompt eval。
+
 已实现第一版 `L4CodingAgentAdapter` / `run_l1_coding_agent_job`：
 
 - 将当前 Rust crate 复制到 generation-scoped candidate workspace。
