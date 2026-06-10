@@ -1502,3 +1502,44 @@ Interpretation:
   `iot_lightchange_room_cue`, requiring exact `house_place` repair for
   parseable light color room phrases instead of adding another broad threshold
   or config rule.
+
+Lightchange-room-probe live result:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-lightchange-room-live-r1`.
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `29` accepted, `29` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `29` correct accepts, required `10`.
+- Final train audit: `93` accepted, `93` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `24` accepted, `24` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed: `13/13`.
+- Private selection: `7` accepted, `7` correct, `0` wrong; gate passed.
+- Private promotion: `5` accepted, `5` correct, `0` wrong; gate passed.
+- `selection_decision.selected=true`, `adoption_decision.adopted=true`.
+
+Lightchange-room-probe 3k outer replay:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-lightchange-room-outer-3k-r1`.
+- Baseline: `L0=2344`, `L1=4`, `L2=0`, `L4=652`, frame EM `1.0`, cost
+  per 100 requests `0.217333`.
+- Candidate: `L0=2344`, `L1=4`, `L2=27`, `L4=625`, frame EM `0.999667`,
+  cost per 100 requests `0.208378`.
+- L2 accepted accuracy was `26/27 = 0.962963`; wrong accept rate was
+  `0.000333`.
+- Decision: not promoted, `accuracy regression exceeds epsilon`.
+
+3k wrong accept:
+
+- `play the radio station` was accepted as
+  `play_radio {radio_name=the radio station}`, but teacher required
+  `play_radio {}`.
+
+Interpretation:
+
+- The lightchange room probe fixed the private promotion miss, but the broader
+  exact-repair target overgeneralized generic station text into a concrete
+  `radio_name`.
+- The next implementation adds `play_radio_bare_station_name` beside the
+  existing random-station probe. This keeps the diagnostic focused on the same
+  radio-name overfill family and avoids adding a broader threshold/config rule.

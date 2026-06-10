@@ -1050,6 +1050,19 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
         )
         probes.append(
             {
+                "id": "play_radio_bare_station_name",
+                "utterance": "play the radio station",
+                "input_frame": {
+                    "intent": "play_radio",
+                    "slots": {"radio_name": "the radio station"},
+                },
+                "expectation": "veto_or_remove_radio_name",
+                "forbidden_slot_key": "radio_name",
+                "visible_support_slot_keys": ["radio_name"],
+            }
+        )
+        probes.append(
+            {
                 "id": "play_radio_missing_radio_name_cue",
                 "utterance": "put on radio mango",
                 "input_frame": {"intent": "play_radio", "slots": {}},
@@ -4117,7 +4130,7 @@ def _target_program_text() -> str:
             "  slotless accepts containing visible room values such as kitchen,",
             "  bedroom, living room, bathroom, room, or house; light color",
             "  changes with a room cue accepted without `house_place`; generic",
-            "  radio station phrases accepted as concrete `radio_name`; radio-name",
+            "  or bare radio station phrases accepted as concrete `radio_name`; radio-name",
             "  cue patterns such as `put on radio <name>` accepted without",
             "  `radio_name`; radio/music utterances accepted without a visible",
             "  media slot; calendar removes with date cues accepted without `date`;",

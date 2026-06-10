@@ -836,6 +836,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
         "slotless_radio_room_cue",
         "iot_lightchange_room_cue",
         "play_radio_generic_station_name",
+        "play_radio_bare_station_name",
         "play_radio_missing_radio_name_cue",
         "play_radio_music_media_type_cue",
         "calendar_remove_today_date_cue",
@@ -908,7 +909,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
 
     assert payload["passes_gate"] is True
     assert payload["failed_checks"] == []
-    assert payload["probe_count"] == 13
+    assert payload["probe_count"] == 14
 
 
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
