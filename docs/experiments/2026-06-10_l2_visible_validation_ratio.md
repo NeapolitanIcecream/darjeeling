@@ -1019,3 +1019,52 @@ Budget-64 smoke result:
   `joke about` omitted-slot cases.
 - `target_diagnostics.json`, `round_state.json`, and `objective.json` still did
   not contain `selection_holdout` or `promotion_holdout`.
+
+Budget-64 live command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-slot-cue-budget64-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Budget-64 live result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `28` accepted, `28` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `28` correct accepts, required `10`.
+- Final train audit: `78` accepted, `78` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `26` accepted, `26` correct, `0` wrong; gate
+  passed.
+- Private selection: `7` accepted, `5` correct, `2` wrong; gate failed.
+- Private promotion: `6` accepted, `6` correct, `0` wrong; gate passed.
+
+Interpretation:
+
+- Widening to 64 and adding concrete cue checks fixed the private promotion
+  `joke_type` failure, but did not fix private selection.
+- The two remaining private selection wrong accepts were stable:
+  `play me a radio drama podcast` accepted as slotless `play_radio`, and
+  `i want the ryan seacrest show on the radio in the kitchen` accepted as
+  slotless `play_radio`.
+- The agent still did not add a podcast-specific `play_radio` veto, and its
+  room handling did not cover slotless `play_radio` with room values.
+- The next design step should avoid more prose-only prompt pressure. A small
+  visible-only executable cue-probe tool would let the agent run concrete
+  checks such as "slotless `play_radio` must veto visible podcast and room
+  cue probes" without exposing private holdout rows.
