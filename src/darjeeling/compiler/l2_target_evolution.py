@@ -1048,6 +1048,17 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "visible_support_slot_keys": ["media_type"],
             }
         )
+    if "date" in items:
+        probes.append(
+            {
+                "id": "calendar_remove_today_date_cue",
+                "utterance": "delete all the events of today",
+                "input_frame": {"intent": "calendar_remove", "slots": {}},
+                "expectation": "veto_or_add_date",
+                "expected_slot_key": "date",
+                "visible_support_slot_keys": ["date"],
+            }
+        )
     event_name_intents = {
         str(intent.get("intent"))
         for intent in items.get("event_name", {}).get("top_teacher_intents", [])
@@ -1092,6 +1103,17 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
             {
                 "id": "general_joke_adjective_missing_joke_type",
                 "utterance": adjective_joke_utterance,
+                "input_frame": {"intent": "general_joke", "slots": {}},
+                "expectation": "veto_or_add_joke_type",
+                "expected_slot_key": "joke_type",
+                "visible_support_slot_keys": ["joke_type"],
+            }
+        )
+    if "joke_type" in items:
+        probes.append(
+            {
+                "id": "general_joke_superlative_missing_joke_type",
+                "utterance": "what's the funniest joke",
                 "input_frame": {"intent": "general_joke", "slots": {}},
                 "expectation": "veto_or_add_joke_type",
                 "expected_slot_key": "joke_type",
@@ -1204,6 +1226,8 @@ def _slot_cue_probe_passed(
         return "radio_name" not in frame.slots
     if expectation == "veto_or_add_media_type":
         return "media_type" in frame.slots
+    if expectation == "veto_or_add_date":
+        return "date" in frame.slots
     if expectation == "veto_or_repair_away_from_recommendation_events":
         return frame.intent != "recommendation_events"
     if expectation == "veto_or_add_joke_type":
@@ -4041,10 +4065,12 @@ def _target_program_text() -> str:
             "  slotless accepts containing visible room values such as kitchen,",
             "  bedroom, living room, bathroom, room, or house; generic radio",
             "  station phrases accepted as concrete `radio_name`; radio/music",
-            "  utterances accepted without a visible media slot; bare upcoming",
-            "  events accepted as `recommendation_events`; `general_joke` accepts",
-            "  with joke adjectives or `joke about ...` but no `joke_type` slot;",
-            "  and volume changes with spoken amounts but no `change_amount` slot.",
+            "  utterances accepted without a visible media slot; calendar removes",
+            "  with date cues accepted without `date`; bare upcoming events",
+            "  accepted as `recommendation_events`; `general_joke` accepts with",
+            "  joke adjectives, superlatives, or `joke about ...` but no",
+            "  `joke_type` slot; and volume changes with spoken amounts but no",
+            "  `change_amount` slot.",
             "  Run `tools/evaluate.py --split slot_cue_probes` after editing",
             "  target cue rules; this diagnostic is visible-only and not a private",
             "  selection/adoption gate.",
@@ -4100,8 +4126,9 @@ def _target_program_text() -> str:
             "non-podcast intent, room values accepted without a location slot, and",
             "joke cues accepted without `joke_type` when visible data supports",
             "those slot keys. Also handle generic radio-station names, radio",
-            "music cues, bare upcoming-events intent boundaries, and spoken",
-            "volume amounts when the related visible slot keys are present.",
+            "music cues, calendar date cues, bare upcoming-events intent",
+            "boundaries, and spoken volume amounts when the related visible slot",
+            "keys are present.",
             "Use `uv run --project system/darjeeling python tools/evaluate.py",
             "--split slot_cue_probes --out runs/slot_cue_probes.json` or the",
             "documented fallback to verify those checks locally.",

@@ -1218,3 +1218,70 @@ Interpretation:
   `slot_cue_probes` rather than introducing a new gate or more terminology.
   The goal is to make these visible-derived cue risks executable for the next
   agent run before private selection/promotion or outer replay are consulted.
+
+Expanded-probes live command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-slot-cue-probes-expanded-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Expanded-probes live result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `24` accepted, `24` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `24` correct accepts, required `10`.
+- Final train audit: `76` accepted, `76` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `23` accepted, `23` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed: `8/8`.
+- Private selection: `4` accepted, `4` correct, `0` wrong; gate passed.
+- Private promotion: `4` accepted, `4` correct, `0` wrong; gate passed.
+- `selection_decision.selected=true`, `adoption_decision.adopted=true`.
+
+Expanded-probes outer replay result:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-expanded-outer-3k-r1`.
+- Baseline: `L0=2344`, `L1=4`, `L2=0`, `L4=652`, frame EM `1.0`, cost
+  per 100 requests `0.217333`.
+- Candidate: `L0=2344`, `L1=4`, `L2=21`, `L4=631`, frame EM `0.999333`,
+  cost per 100 requests `0.210368`.
+- L2 accepted accuracy was `19/21 = 0.904762`; wrong accept rate was
+  `0.000667`.
+- Decision: not promoted, `accuracy regression exceeds epsilon`; regressed
+  layer: `L2`.
+
+Remaining outer replay wrong accepts:
+
+- `delete all the events of today` was accepted as `calendar_remove {}` but the
+  teacher frame required `date=today`.
+- `what's the funniest joke` was accepted as `general_joke {}` but the teacher
+  frame required `joke_type=funniest`.
+
+Interpretation:
+
+- The expanded probes materially improved outer behavior: L2 wrong accepts
+  dropped from `8` to `2`, and candidate L4 calls dropped by `21` instead of
+  `32`, but zero-regression replay still failed.
+- The two remaining failures are still visible-schema cue omissions. The next
+  implementation adds two more visible-only probes:
+  `calendar_remove_today_date_cue` and
+  `general_joke_superlative_missing_joke_type`.
+- Re-evaluating the expanded target with those new probes produced `10`
+  probes, `8` passes, and exactly those `2` failures.
