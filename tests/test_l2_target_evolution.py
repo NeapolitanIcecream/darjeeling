@@ -177,7 +177,8 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
             "selection/promotion holdouts remain outside the agent workspace"
         ),
         "adoption_authority": (
-            "visible validation gate, private selection/promotion gates, and final outer replay"
+            "visible validation/support/train-audit gates, "
+            "private selection/promotion gates, and final outer replay"
         ),
     }
     assert summary["adoption_decision"]["adopted"] is False
@@ -1547,7 +1548,12 @@ def test_l2_target_selection_requires_visible_validation_gate() -> None:
 def test_l2_target_selection_requires_train_audit_safety_gate() -> None:
     round_result = {
         "round": 1,
-        "inner_validation": {"passes_gate": True},
+        "inner_validation": {
+            "passes_gate": True,
+            "accepted": 2,
+            "correct_accepts": 2,
+            "validation_size": 10,
+        },
         "train_audit": {"wrong_accepts": 1},
         "selection_holdout": {
             "passes_gate": True,
@@ -1569,6 +1575,90 @@ def test_l2_target_selection_requires_train_audit_safety_gate() -> None:
         [round_result],
     )
     assert evidence["selection_gate_diagnosis"] == "train_audit_safety_gate_failed"
+    assert evidence["inner_passing_train_audit_wrong_accept_rounds"] == 1
+
+
+def test_l2_target_selection_requires_visible_support_gate() -> None:
+    round_result = {
+        "round": 1,
+        "inner_validation": {
+            "passes_gate": True,
+            "accepted": 7,
+            "correct_accepts": 7,
+            "validation_size": 774,
+            "coverage": 7 / 774,
+            "accepted_accuracy": 1.0,
+            "wrong_accepts": 0,
+            "wrong_accept_rate": 0.0,
+            "visible_validation_splits": [
+                "inner_validation",
+                "inner_validation_shadow_1",
+                "inner_validation_shadow_2",
+                "inner_validation_shadow_3",
+                "inner_validation_shadow_4",
+            ],
+        },
+        "train_audit": {"wrong_accepts": 0},
+        "selection_holdout": {
+            "passes_gate": True,
+            "coverage": 0.1,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+        },
+        "promotion_holdout": {
+            "passes_gate": True,
+            "coverage": 0.1,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+        },
+    }
+
+    assert _selection_decision([round_result])["selected"] is False
+    assert _adoption_decision([round_result])["adopted"] is False
+    evidence = l2_target_evolution._private_holdout_evidence(  # noqa: SLF001
+        [round_result],
+    )
+    assert evidence["selection_gate_diagnosis"] == "visible_support_gate_failed"
+    assert evidence["inner_passing_visible_support_failed_rounds"] == 1
+    assert evidence["visible_support_passing_rounds"] == 0
+
+
+def test_l2_target_private_evidence_keeps_train_audit_count_when_support_fails() -> None:
+    round_result = {
+        "round": 1,
+        "inner_validation": {
+            "passes_gate": True,
+            "accepted": 1,
+            "correct_accepts": 1,
+            "validation_size": 100,
+        },
+        "train_audit": {"wrong_accepts": 1},
+        "selection_holdout": {
+            "passes_gate": False,
+            "accepted": 0,
+            "correct_accepts": 0,
+            "wrong_accepts": 0,
+            "coverage": 0.0,
+            "accepted_accuracy": None,
+            "wrong_accept_rate": 0.0,
+        },
+        "promotion_holdout": {
+            "passes_gate": False,
+            "accepted": 0,
+            "correct_accepts": 0,
+            "wrong_accepts": 0,
+            "coverage": 0.0,
+            "accepted_accuracy": None,
+            "wrong_accept_rate": 0.0,
+        },
+    }
+
+    evidence = l2_target_evolution._private_holdout_evidence(  # noqa: SLF001
+        [round_result],
+    )
+
+    assert evidence["selection_gate_diagnosis"] == "visible_support_gate_failed"
+    assert evidence["inner_passing_visible_support_failed_rounds"] == 1
     assert evidence["inner_passing_train_audit_wrong_accept_rounds"] == 1
 
 

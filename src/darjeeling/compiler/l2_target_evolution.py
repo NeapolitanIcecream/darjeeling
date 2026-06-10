@@ -39,6 +39,7 @@ DEFAULT_TARGET_LOCAL_SEARCH_TRIALS = 96
 DEFAULT_TARGET_INNER_PATIENCE_ROUNDS = 4
 DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS = 3
 DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K = 4
+MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD = 2
 
 
 @dataclass(frozen=True)
@@ -166,8 +167,7 @@ def run_l2_target_evolution(
     agent_rounds_succeeded = 0
     if (
         config.stop_on_selection_gate
-        and baseline["inner_validation"]["passes_gate"]
-        and _passes_train_audit_safety_gate(baseline)
+        and _passes_visible_selection_inputs(baseline)
         and baseline["selection_holdout"]["passes_gate"]
     ):
         stop_reason = "baseline_selection_gate_passed"
@@ -348,6 +348,7 @@ def run_l2_target_evolution(
             label=f"round_{round_index:03d}",
         )
         inner_result = candidate["inner_validation"]
+        visible_support_gate = _visible_support_gate_payload(inner_result)
         train_audit_safety_passed = _passes_train_audit_safety_gate(candidate)
         selection_result = candidate["selection_holdout"]
         promotion_result = candidate["promotion_holdout"]
@@ -366,6 +367,8 @@ def run_l2_target_evolution(
                 round_index=round_index,
             ),
             "inner_improved": inner_improved,
+            "passes_visible_support_gate": visible_support_gate["passes_gate"],
+            "visible_support_gate": visible_support_gate,
             "passes_train_audit_safety_gate": train_audit_safety_passed,
             "passes_candidate_selection_gate": _passes_candidate_selection_gate(
                 candidate,
@@ -417,8 +420,7 @@ def run_l2_target_evolution(
             break
         if (
             config.stop_on_selection_gate
-            and inner_result["passes_gate"]
-            and train_audit_safety_passed
+            and _passes_visible_selection_inputs(candidate)
             and selection_result["passes_gate"]
         ):
             stop_reason = "selection_gate_passed"
@@ -1766,8 +1768,8 @@ def _write_target_state_files(
             agent_rounds_succeeded=agent_rounds_succeeded,
         ),
         "candidate_selection_gate": (
-            "visible validation gate, visible train-audit safety gate, and private "
-            "selection holdout gate must all pass"
+            "visible validation gate, visible support gate, visible train-audit "
+            "safety gate, and private selection holdout gate must all pass"
         ),
         "early_stop_policy": (
             "private selection is evaluated for outer candidate selection, but does not stop "
@@ -1781,6 +1783,11 @@ def _write_target_state_files(
         "train_audit_policy": (
             "visible train audit is a safety gate for accepted wrongs; it is not "
             "a coverage target and does not expose private holdouts"
+        ),
+        "visible_support_policy": (
+            "before private selection, visible validation must retain at least "
+            f"{MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD} correct accepts "
+            "per visible validation fold"
         ),
         "visible_cross_audit_policy": (
             "visible cross-audit is diagnostic-only; it retrains on visible folds to "
@@ -2093,12 +2100,18 @@ def _target_objective_payload(
             "min_accepted_accuracy": config.min_accepted_accuracy,
             "max_wrong_accept_rate": config.max_wrong_accept_rate,
             "candidate_selection": (
-                "visible validation gate AND visible train-audit safety gate "
-                "AND private selection holdout gate"
+                "visible validation gate AND visible support gate AND visible "
+                "train-audit safety gate AND private selection holdout gate"
             ),
             "adoption": (
-                "visible validation gate AND visible train-audit safety gate "
-                "AND private selection holdout gate AND private promotion holdout gate"
+                "visible validation gate AND visible support gate AND visible "
+                "train-audit safety gate AND private selection holdout gate "
+                "AND private promotion holdout gate"
+            ),
+            "visible_support": (
+                "at least "
+                f"{MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD} correct accepts "
+                "per visible validation fold before private selection"
             ),
             "train_audit_safety": "zero accepted wrong on visible train audit",
             "visible_validation_folds": config.visible_validation_folds,
@@ -2111,6 +2124,7 @@ def _target_objective_payload(
             "zero or lower wrong accepts",
             "clear visible safety_backlog accepted-wrong families before coverage work",
             "clear visible train-audit accepted wrongs before private selection",
+            "retain enough visible correct accepts before private selection",
             "visible validation gate must pass before candidate selection",
             "accepted accuracy at or above gate",
             "coverage increase only after safety gates",
@@ -2172,7 +2186,8 @@ def _target_code_policy_payload() -> dict[str, Any]:
             "selection/promotion holdouts remain outside the agent workspace"
         ),
         "adoption_authority": (
-            "visible validation gate, private selection/promotion gates, and final outer replay"
+            "visible validation/support/train-audit gates, "
+            "private selection/promotion gates, and final outer replay"
         ),
     }
 
@@ -2364,12 +2379,19 @@ def _target_commands_text() -> str:
 
 
 def _visible_round_summary(round_result: dict[str, Any]) -> dict[str, Any]:
+    visible_support_gate = round_result.get("visible_support_gate")
+    if not isinstance(visible_support_gate, dict):
+        visible_support_gate = _visible_support_gate_payload(
+            round_result["inner_validation"],
+        )
     return {
         "round": round_result["round"],
         "inner_improved": round_result["inner_improved"],
         "passes_visible_validation_gate": bool(
             round_result["inner_validation"]["passes_gate"],
         ),
+        "passes_visible_support_gate": bool(visible_support_gate["passes_gate"]),
+        "visible_support_gate": visible_support_gate,
         "passes_train_audit_safety_gate": _passes_train_audit_safety_gate(
             round_result,
         ),
@@ -3051,9 +3073,10 @@ def _target_program_text() -> str:
             "Wrong accepts are worse than abstentions. A raw coverage increase is not",
             "useful if frame exactness or wrong-accept safety gets worse.",
             "A target round is selectable only if visible validation passes,",
-            "visible train audit has zero accepted wrongs, and the outer private",
-            "selection holdout passes. Private selection alone is not success if",
-            "visible validation or train audit has wrong accepts.",
+            "visible validation keeps enough correct accepts, visible train audit",
+            "has zero accepted wrongs, and the outer private selection holdout",
+            "passes. Private selection alone is not success if visible validation",
+            "or train audit has wrong accepts.",
             "Adoption also requires the private promotion holdout to pass.",
             "Private selection is an outer selection signal, not a signal you can",
             "read during this session. Adoption is decided after this session exits.",
@@ -3069,6 +3092,9 @@ def _target_program_text() -> str:
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
             "abstention or target-local vetoes over accepting predictions that",
             "contradict visible teacher labels.",
+            "Do not stop with a near-zero-coverage target that only passes by",
+            "abstaining from almost everything; keep at least two correct accepts",
+            "per visible validation fold before relying on private selection.",
             "If visible validation backlog is empty but candidate selection still",
             "fails, use visible cross-audit and train-audit backlogs to design",
             "broader safety rules; do not inspect private holdout rows.",
@@ -3336,9 +3362,49 @@ def _passes_train_audit_safety_gate(round_result: dict[str, Any]) -> bool:
     return int(train_audit.get("wrong_accepts") or 0) == 0
 
 
+def _visible_validation_fold_count(metric: dict[str, Any]) -> int:
+    splits = metric.get("visible_validation_splits")
+    if isinstance(splits, list) and splits:
+        return len(splits)
+    folds = metric.get("visible_validation_folds")
+    if isinstance(folds, list) and folds:
+        return len(folds)
+    return 1
+
+
+def _visible_support_gate_payload(metric: dict[str, Any]) -> dict[str, Any]:
+    fold_count = _visible_validation_fold_count(metric)
+    validation_size = int(metric.get("validation_size") or 0)
+    min_correct_accepts = MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD * fold_count
+    if validation_size > 0:
+        min_correct_accepts = min(min_correct_accepts, validation_size)
+    correct_accepts = int(metric.get("correct_accepts") or 0)
+    return {
+        "schema_version": "l2-target-visible-support-gate-v1",
+        "visible_validation_folds": fold_count,
+        "min_correct_accepts": min_correct_accepts,
+        "correct_accepts": correct_accepts,
+        "passes_gate": correct_accepts >= min_correct_accepts,
+        "policy": (
+            "retain at least "
+            f"{MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD} correct accepts "
+            "per visible validation fold before private selection"
+        ),
+    }
+
+
+def _passes_visible_support_gate(round_result: dict[str, Any]) -> bool:
+    support_gate = round_result.get("visible_support_gate")
+    if not isinstance(support_gate, dict):
+        support_gate = _visible_support_gate_payload(round_result["inner_validation"])
+    return bool(support_gate["passes_gate"])
+
+
 def _passes_visible_selection_inputs(round_result: dict[str, Any]) -> bool:
-    return bool(round_result["inner_validation"]["passes_gate"]) and (
-        _passes_train_audit_safety_gate(round_result)
+    return (
+        bool(round_result["inner_validation"]["passes_gate"])
+        and _passes_visible_support_gate(round_result)
+        and _passes_train_audit_safety_gate(round_result)
     )
 
 
@@ -3361,9 +3427,14 @@ def _private_holdout_evidence(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         for round_result in rounds
         if bool(round_result.get("inner_validation", {}).get("passes_gate"))
     ]
-    visible_selection_input_rounds = [
+    visible_support_rounds = [
         round_result
         for round_result in inner_passing_rounds
+        if _passes_visible_support_gate(round_result)
+    ]
+    visible_selection_input_rounds = [
+        round_result
+        for round_result in visible_support_rounds
         if _passes_train_audit_safety_gate(round_result)
     ]
     selected_round = _best_selection_round(rounds)
@@ -3383,9 +3454,15 @@ def _private_holdout_evidence(rounds: list[dict[str, Any]]) -> dict[str, Any]:
             else None
         ),
         "inner_passing_rounds": len(inner_passing_rounds),
+        "visible_support_passing_rounds": len(visible_support_rounds),
         "visible_selection_input_passing_rounds": len(visible_selection_input_rounds),
-        "inner_passing_train_audit_wrong_accept_rounds": (
-            len(inner_passing_rounds) - len(visible_selection_input_rounds)
+        "inner_passing_visible_support_failed_rounds": (
+            len(inner_passing_rounds) - len(visible_support_rounds)
+        ),
+        "inner_passing_train_audit_wrong_accept_rounds": sum(
+            1
+            for round_result in inner_passing_rounds
+            if not _passes_train_audit_safety_gate(round_result)
         ),
         "inner_passing_selection_zero_accept_rounds": sum(
             1
@@ -3445,9 +3522,16 @@ def _selection_gate_diagnosis(rounds: list[dict[str, Any]]) -> str:
     ]
     if not inner_passing_rounds:
         return "visible_validation_gate_failed"
-    visible_selection_input_rounds = [
+    visible_support_rounds = [
         round_result
         for round_result in inner_passing_rounds
+        if _passes_visible_support_gate(round_result)
+    ]
+    if not visible_support_rounds:
+        return "visible_support_gate_failed"
+    visible_selection_input_rounds = [
+        round_result
+        for round_result in visible_support_rounds
         if _passes_train_audit_safety_gate(round_result)
     ]
     if not visible_selection_input_rounds:
@@ -3491,6 +3575,11 @@ def _private_holdout_recommendation(rounds: list[dict[str, Any]]) -> str:
             "clear visible train-audit accepted wrongs before private selection; "
             "abstain rather than override visible teacher labels"
         )
+    if diagnosis == "visible_support_gate_failed":
+        return (
+            "retain enough visible correct accepts before private selection; "
+            "avoid targets that pass only by abstaining from almost everything"
+        )
     if diagnosis == "selection_wrong_accepts_for_inner_passing_rounds":
         return "fix wrong accepts before staging; do not trade frame exactness for coverage"
     if diagnosis == "visible_validation_gate_failed":
@@ -3502,19 +3591,19 @@ def _selection_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
     best_selection = _best_selection_round(rounds)
     if best_selection is None:
         return {
-        "selected": False,
-        "round": None,
-        "reason": (
-            "no target round passed visible validation, visible train-audit safety, "
-            "and private selection gates"
-        ),
+            "selected": False,
+            "round": None,
+            "reason": (
+                "no target round passed visible validation, visible support, visible "
+                "train-audit safety, and private selection gates"
+            ),
         }
     return {
         "selected": True,
         "round": best_selection["round"],
         "reason": (
-            "target round passed visible validation, visible train-audit safety, "
-            "and private selection gates"
+            "target round passed visible validation, visible support, visible "
+            "train-audit safety, and private selection gates"
         ),
     }
 
@@ -3526,8 +3615,8 @@ def _adoption_decision(rounds: list[dict[str, Any]]) -> dict[str, Any]:
             "adopted": False,
             "round": None,
             "reason": (
-                "no target round passed visible validation, visible train-audit safety, "
-                "and private selection gates"
+                "no target round passed visible validation, visible support, visible "
+                "train-audit safety, and private selection gates"
             ),
         }
     best_adoptable = _best_adoptable_round(rounds)

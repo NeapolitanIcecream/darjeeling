@@ -171,10 +171,145 @@ Result:
 - Visible validation still failed: `14` accepted, `11` correct, `3` wrong.
 - Train-audit safety gate failed: `47` accepted, `35` correct, `12` wrong.
 - Summary recorded `passes_train_audit_safety_gate=false`.
-- `round_state.json` recorded the new candidate selection gate:
+- `round_state.json` recorded the then-current candidate selection gate:
   visible validation, visible train-audit safety, and private selection must all
   pass.
 - Adoption remained `adopted=false`.
 
 This smoke verifies the new gate is wired through summary and agent-visible
 state. It is not a quality result.
+
+## Train-audit live rerun
+
+With the train-audit safety gate in place, I reran the live agent-session on the
+same 2000-row lower-miss fixed snapshot:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-trainaudit-r2/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Agent session: completed, `1` started, `1` succeeded.
+- Split: train `787`, visible validation `774`, private selection `199`,
+  private promotion `190`.
+- Requested visible validation ratio: `0.4`.
+- Effective visible validation ratio: `0.39692307692307693`.
+- Baseline visible validation: `33` accepted, `25` correct, `8` wrong; gate
+  failed.
+- Final visible validation: `7` accepted, `7` correct, `0` wrong; gate passed.
+- Final visible cross-audit: `5` accepted, `5` correct, `0` wrong; gate passed.
+- Final train audit: `59` accepted, `59` correct, `0` wrong; train-audit safety
+  gate passed.
+- Private selection: `0` accepted, `0` wrong; gate failed.
+- Private promotion: `3` accepted, `2` correct, `1` wrong; gate failed.
+- Adoption: `adopted=false`.
+
+Interpretation:
+
+- The train-audit gate changed the agent behavior: it no longer stopped with a
+  known visible train-audit wrong accept.
+- The new failure mode is a conservative target that passes visible safety by
+  reducing visible accepts from baseline `33` to `7`. Private selection then
+  observes no accepts, while private promotion still observes one wrong accept.
+- This is not a reason to expose private feedback to the agent. The visible side
+  needs a small support floor so that near-zero coverage candidates do not reach
+  candidate selection just because their remaining accepts are clean.
+
+## Visible support gate
+
+The follow-up implementation adds a visible support gate before private
+selection. Candidate selection now requires:
+
+- visible validation gate,
+- visible support gate,
+- visible train-audit accepted-wrong safety gate,
+- private selection holdout gate.
+
+The visible support rule is intentionally small: the candidate must keep at
+least `2` correct accepts per visible validation fold before private selection.
+For the five-fold fixed-inner runs here, the floor is `10` visible correct
+accepts. This keeps the concept simple and prevents an overly conservative
+target from being treated as selection-ready.
+
+`private_holdout_evidence` now records:
+
+- `visible_support_passing_rounds`,
+- `inner_passing_visible_support_failed_rounds`,
+- `inner_passing_train_audit_wrong_accept_rounds`.
+
+The last count remains based on all inner-passing rounds, even when visible
+support also fails, so known visible train-audit safety problems are not hidden
+by an earlier support failure.
+
+I saved the live agent target shape as a reproducible dry-run patch:
+
+```text
+docs/experiments/patches/l2_target_ratio40_trainaudit_conservative_r2.patch
+```
+
+Then I reran it under the updated harness:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-visible-support-r6/job \
+  --max-traces 2000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --dry-run-patch docs/experiments/patches/l2_target_ratio40_trainaudit_conservative_r2.patch \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1
+```
+
+Result:
+
+- Evidence class: `short_fixed_snapshot_probe`.
+- Split and effective visible ratio matched the live train-audit rerun.
+- Visible validation passed: `7` accepted, `7` correct, `0` wrong.
+- Visible support failed: `7` correct accepts, required `10`.
+- Train-audit safety also failed in this dry-run replay: `60` accepted,
+  `59` correct, `1` wrong. The live run had `59/59/0`, so the replay is used as
+  protocol verification rather than a claim of exact candidate reproduction.
+- Visible cross-audit passed: `5` accepted, `5` correct, `0` wrong.
+- Private selection: `0` accepted, `0` wrong; gate failed.
+- Private promotion: `3` accepted, `2` correct, `1` wrong; gate failed.
+- `selection_gate_diagnosis=visible_support_gate_failed`.
+- `inner_passing_visible_support_failed_rounds=1`.
+- `inner_passing_train_audit_wrong_accept_rounds=1`.
+- Adoption remained `adopted=false`.
+
+Conclusion:
+
+- The support gate catches the low-coverage candidate before it can be described
+  as merely a sparse private-selection result.
+- The gate does not relax private isolation: private selection/promotion rows
+  and aggregates remain outer-summary-only.
+- The next live-agent run should keep visible safety first, but it must avoid
+  solving safety by simply raising the threshold until visible coverage is too
+  thin. Structural target work should preserve at least the visible support
+  floor while clearing visible validation and train-audit wrong accepts.
