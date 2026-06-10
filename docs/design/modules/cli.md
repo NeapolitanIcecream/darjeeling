@@ -35,7 +35,7 @@ L1 子命令是 harness/debug 入口，不代表 L1 用 Python 实现。`l1 benc
 
 L3 `bench` 是显式硬件/model preflight，默认用 `shadow` 模式和 settings 中的本地 SLM 配置，输出 `l3-benchmark-v1` JSON。失败时也可写出 error status；只有传 `--fail-on-error` 才把失败变成非零退出码。
 
-L3 `prompt-evolve` 是真实 L3 evolve 主入口。它创建隔离 `workspace/l3_prompt/`，只允许 agent 修改 `prompt/`，把 `contexts/`、`tools/`、`program.md` 和 `workspace_manifest.json` 作为 protected surface，启动一个 long-running L4 agent session，然后由 outer harness 做 scope check、candidate prompt snapshot、visible validation replay、private selection/promotion replay 和 summary。Agent 可见数据只包含 train、visible validation 和 task schema；private selection/promotion rows 留在 outer private 目录。`--skip-replay` 只用于 smoke/no-model wiring，不支持 L3 质量结论。
+L3 `prompt-evolve` 是真实 L3 evolve 主入口。它创建隔离 `workspace/l3_prompt/`，只允许 agent 修改 `prompt/`，把 `contexts/`、`tools/`、`program.md` 和 `workspace_manifest.json` 作为 protected surface，启动一个 long-running L4 agent session，然后由 outer harness 做 scope check、candidate prompt snapshot、visible validation replay、private selection/promotion replay 和 summary。Agent 可见数据只包含 train、visible validation、task schema、objective 和 local SLM config；private selection/promotion rows 留在 outer private 目录。Workspace tools 包含 prompt validate、visible prompt eval、local SLM bench 和 latency/cost eval，输出只能写入 `runs/`。`--skip-replay` 只用于 smoke/no-model wiring，不支持 L3 质量结论。
 
 L3 `replay-prompt` 是显式 regenerated replay 入口：它读取一个 `L3PromptArtifact` 和带 teacher labels 的 traces，强制以 shadow 语义调用本地 SLM，并写出 `l3-prompt-replay-v1`。该命令会加载本地模型，因此不属于默认 compiler 路径。
 

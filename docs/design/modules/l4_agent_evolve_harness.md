@@ -73,6 +73,8 @@ The architecture is homologous; the artifact surfaces are not identical.
 - L2 `dry-run` remains a fixture path for tests and controlled patch replay.
 - L3 now has an explicit `prompt-evolve` agent-session path. It launches one
   Codex session over `workspace/l3_prompt/`, exposes editable `prompt/`,
-  protects `contexts/` and tools, snapshots the candidate prompt, and can run
-  visible/private replay gates through the existing local SLM replay evaluator.
+  protects `contexts/` and tools, provides prompt validation, visible prompt
+  eval, local SLM bench, and latency/cost eval as workspace tools, snapshots the
+  candidate prompt, and can run visible/private replay gates through the
+  existing local SLM replay evaluator.
   The direct L3 prompt proposal path remains legacy bounded proposal support.

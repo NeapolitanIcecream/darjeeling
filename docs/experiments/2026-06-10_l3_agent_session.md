@@ -16,7 +16,10 @@ harness.
 - exposes editable `prompt/l3_prompt.json`, `prompt/context_packing.json`, and
   `prompt/routing_guard.md`
 - writes protected `contexts/train.jsonl`, `contexts/visible_validation.jsonl`,
-  `contexts/task_schema.json`, and `contexts/objective.json`
+  `contexts/task_schema.json`, `contexts/objective.json`, and
+  `contexts/local_slm_config.json`
+- provides protected workspace tools for prompt validation, visible prompt eval,
+  local SLM bench, and latency/cost eval
 - stores private selection/promotion holdouts under the outer job `private/`
   directory, not in the workspace
 - launches one Codex command with `--cd workspace/l3_prompt`
@@ -33,15 +36,15 @@ run cannot select or adopt a candidate.
 Command used a fake Codex command and skipped local SLM replay:
 
 ```bash
-rm -rf runs/l3-agent-session-smoke-r2
-mkdir -p runs/l3-agent-session-smoke-r2
+rm -rf runs/l3-agent-session-smoke-r3
+mkdir -p runs/l3-agent-session-smoke-r3
 L3_AGENT_CODEX_COMMAND=$(pwd)/runs/l3-agent-session-smoke-r1/fake_codex.py \
   uv run edge-mvp l3 prompt-evolve \
     --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
-    --out-dir runs/l3-agent-session-smoke-r2/job \
+    --out-dir runs/l3-agent-session-smoke-r3/job \
     --max-traces 40 \
     --skip-replay \
-    > runs/l3-agent-session-smoke-r2/stdout.json
+    > runs/l3-agent-session-smoke-r3/stdout.json
 ```
 
 Result:
@@ -53,6 +56,9 @@ Result:
   promotion `4`
 - Candidate prompt snapshot: `candidates/candidate_l3_prompt.json`
 - Candidate prompt hash: present
+- Workspace tools: present, concrete commands, no placeholder replay command
+- Tool smoke: `validate_prompt.py` passed; `latency_cost_eval.py` wrote a visible
+  validation-only estimate with `private_data_visible=false`
 - Workspace private holdout files: absent
 - Outer private holdout files: present
 - Selection: `selected=false`

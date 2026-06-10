@@ -171,6 +171,7 @@ def run_l3_prompt_evolution(
         task_schema=task_schema,
         prompt_artifact=baseline_prompt,
         config=config,
+        local_slm_config=local_slm_config,
     )
 
     command_results: list[dict[str, Any]] = []
@@ -305,6 +306,7 @@ def prepare_l3_prompt_workspace(
     task_schema: TaskSchema,
     prompt_artifact: L3PromptArtifact,
     config: L3PromptEvolutionConfig,
+    local_slm_config: LocalSLMConfig,
 ) -> None:
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
@@ -355,9 +357,25 @@ def prepare_l3_prompt_workspace(
         json.dumps(_l3_objective_payload(config), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    (workspace_root / "contexts" / "local_slm_config.json").write_text(
+        local_slm_config.model_dump_json(indent=2) + "\n",
+        encoding="utf-8",
+    )
     (workspace_root / "program.md").write_text(_l3_program_text(), encoding="utf-8")
     (workspace_root / "tools" / "validate_prompt.py").write_text(
         _l3_validate_prompt_tool_text(),
+        encoding="utf-8",
+    )
+    (workspace_root / "tools" / "evaluate_prompt.py").write_text(
+        _l3_evaluate_prompt_tool_text(),
+        encoding="utf-8",
+    )
+    (workspace_root / "tools" / "bench_prompt.py").write_text(
+        _l3_bench_prompt_tool_text(),
+        encoding="utf-8",
+    )
+    (workspace_root / "tools" / "latency_cost_eval.py").write_text(
+        _l3_latency_cost_eval_tool_text(),
         encoding="utf-8",
     )
     (workspace_root / "workspace_manifest.json").write_text(
@@ -366,7 +384,12 @@ def prepare_l3_prompt_workspace(
                 "schema_version": "l3-prompt-workspace-v1",
                 "editable_roots": ["prompt/"],
                 "scratch_roots": ["runs/"],
-                "protected_roots": ["contexts/", "tools/", "program.md", "workspace_manifest.json"],
+                "protected_roots": [
+                    "contexts/",
+                    "tools/",
+                    "program.md",
+                    "workspace_manifest.json",
+                ],
                 "visible_context_files": sorted(
                     path.name for path in (workspace_root / "contexts").iterdir()
                 ),
@@ -376,8 +399,16 @@ def prepare_l3_prompt_workspace(
                 ],
                 "commands": {
                     "validate_prompt": "python3 tools/validate_prompt.py",
-                    "replay_prompt": "edge-mvp l3 replay-prompt --prompt prompt/l3_prompt.json ...",
-                    "bench": "edge-mvp l3 bench --out runs/l3_benchmark.json",
+                    "evaluate_visible_prompt": (
+                        "python3 tools/evaluate_prompt.py --split visible_validation "
+                        "--out runs/visible_prompt_eval.json"
+                    ),
+                    "bench_prompt": "python3 tools/bench_prompt.py --out runs/l3_benchmark.json",
+                    "latency_cost_eval": (
+                        "python3 tools/latency_cost_eval.py "
+                        "--eval runs/visible_prompt_eval.json "
+                        "--out runs/latency_cost_eval.json"
+                    ),
                 },
             },
             indent=2,
@@ -588,6 +619,12 @@ def _l3_objective_payload(config: L3PromptEvolutionConfig) -> dict[str, Any]:
             "prompt/context_packing.json",
             "prompt/routing_guard.md",
         ],
+        "workspace_tools": [
+            "tools/validate_prompt.py",
+            "tools/evaluate_prompt.py",
+            "tools/bench_prompt.py",
+            "tools/latency_cost_eval.py",
+        ],
         "gates": {
             "min_accepted_accuracy": config.min_accepted_accuracy,
             "max_wrong_accept_rate": config.max_wrong_accept_rate,
@@ -621,6 +658,9 @@ def _l3_program_text() -> str:
             "This is one autonomous L4 agent session. Decide how many times to inspect",
             "context, edit prompt/context packing/routing guard files, validate, run",
             "prompt replay or local SLM bench when available, debug, and stop.",
+            "Available tools include prompt structure validation, visible prompt eval,",
+            "local SLM bench, and latency/cost estimation. Tool outputs belong under",
+            "`runs/` and do not decide adoption.",
             "",
             "Visible data includes only train and visible validation rows. Private",
             "selection and promotion holdouts are outside this workspace; do not try",
@@ -650,6 +690,216 @@ for example in few_shots:
         raise SystemExit("few-shot example must include trace_id, utterance, and frame")
 print("l3 prompt candidate is structurally valid")
 """
+
+
+def _l3_tool_repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _l3_tool_prelude_text() -> str:
+    repo_root = json.dumps(_l3_tool_repo_root().as_posix())
+    return f"""from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path({repo_root})
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+root = Path(__file__).resolve().parents[1]
+
+"""
+
+
+def _l3_evaluate_prompt_tool_text() -> str:
+    return (
+        _l3_tool_prelude_text()
+        + """from darjeeling.compiler.l3_prompt_optimizer import replay_l3_prompt_artifact
+from darjeeling.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
+from darjeeling.layers.l4_cloud_llm import TaskSchema
+from darjeeling.schemas import TeacherTrace
+
+
+def read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_traces(path: Path) -> list[TeacherTrace]:
+    rows: list[TeacherTrace] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(TeacherTrace.model_validate_json(line))
+    return rows
+
+
+parser = argparse.ArgumentParser(description="Evaluate the L3 prompt on visible rows only.")
+parser.add_argument(
+    "--split",
+    choices=["train", "visible_validation"],
+    default="visible_validation",
+)
+parser.add_argument("--out", default="runs/visible_prompt_eval.json")
+parser.add_argument("--max-requests", type=int, default=None)
+args = parser.parse_args()
+
+prompt = L3PromptArtifact.model_validate_json(
+    (root / "prompt" / "l3_prompt.json").read_text(encoding="utf-8")
+)
+task_schema_payload = read_json(root / "contexts" / "task_schema.json")
+task_schema = TaskSchema(
+    intent_names=task_schema_payload["intent_names"],
+    slot_names=task_schema_payload["slot_names"],
+)
+config = LocalSLMConfig.model_validate(read_json(root / "contexts" / "local_slm_config.json"))
+traces = read_traces(root / "contexts" / f"{args.split}.jsonl")
+
+payload = replay_l3_prompt_artifact(
+    prompt_artifact=prompt,
+    traces=traces,
+    task_schema=task_schema,
+    config=config,
+    max_requests=args.max_requests,
+)
+payload["workspace_tool"] = {
+    "name": "evaluate_prompt",
+    "split": args.split,
+    "visible_only": True,
+    "private_data_visible": False,
+}
+out = root / args.out
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+print(json.dumps(payload, sort_keys=True))
+"""
+    )
+
+
+def _l3_bench_prompt_tool_text() -> str:
+    return (
+        _l3_tool_prelude_text()
+        + """from darjeeling.compiler.l3_prompt_optimizer import l3_prompt_artifact_hash
+from darjeeling.layers.l3_local_slm import (
+    DEFAULT_L3_BENCHMARK_UTTERANCES,
+    L3LocalSLMLayer,
+    L3PromptArtifact,
+    LocalSLMConfig,
+    benchmark_l3_layer,
+)
+from darjeeling.layers.l4_cloud_llm import TaskSchema
+
+
+def read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+parser = argparse.ArgumentParser(description="Benchmark the L3 prompt with the local SLM.")
+parser.add_argument("--out", default="runs/l3_benchmark.json")
+args = parser.parse_args()
+
+prompt = L3PromptArtifact.model_validate_json(
+    (root / "prompt" / "l3_prompt.json").read_text(encoding="utf-8")
+)
+task_schema_payload = read_json(root / "contexts" / "task_schema.json")
+task_schema = TaskSchema(
+    intent_names=task_schema_payload["intent_names"],
+    slot_names=task_schema_payload["slot_names"],
+)
+config = LocalSLMConfig.model_validate(read_json(root / "contexts" / "local_slm_config.json"))
+layer = L3LocalSLMLayer(config=config, task_schema=task_schema, prompt_artifact=prompt)
+payload = {
+    **benchmark_l3_layer(layer, DEFAULT_L3_BENCHMARK_UTTERANCES),
+    "prompt_sha256": l3_prompt_artifact_hash(prompt),
+    "workspace_tool": {
+        "name": "bench_prompt",
+        "visible_only": True,
+        "private_data_visible": False,
+    },
+}
+out = root / args.out
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+print(json.dumps(payload, sort_keys=True))
+"""
+    )
+
+
+def _l3_latency_cost_eval_tool_text() -> str:
+    return (
+        _l3_tool_prelude_text()
+        + """from darjeeling.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
+from darjeeling.layers.l4_cloud_llm import TaskSchema
+from darjeeling.schemas import TeacherTrace
+
+
+def read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_traces(path: Path) -> list[TeacherTrace]:
+    rows: list[TeacherTrace] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(TeacherTrace.model_validate_json(line))
+    return rows
+
+
+def percentile(values: list[float], pct: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, round((pct / 100.0) * (len(ordered) - 1))))
+    return float(ordered[idx])
+
+
+parser = argparse.ArgumentParser(
+    description="Estimate prompt size, latency, and local evaluation cost for visible rows."
+)
+parser.add_argument("--eval", default=None, help="Optional evaluate_prompt JSON output.")
+parser.add_argument("--out", default="runs/latency_cost_eval.json")
+args = parser.parse_args()
+
+prompt = L3PromptArtifact.model_validate_json(
+    (root / "prompt" / "l3_prompt.json").read_text(encoding="utf-8")
+)
+task_schema_payload = read_json(root / "contexts" / "task_schema.json")
+task_schema = TaskSchema(
+    intent_names=task_schema_payload["intent_names"],
+    slot_names=task_schema_payload["slot_names"],
+)
+config = LocalSLMConfig.model_validate(read_json(root / "contexts" / "local_slm_config.json"))
+traces = read_traces(root / "contexts" / "visible_validation.jsonl")
+rendered_chars = [len(prompt.render(trace.utterance, task_schema)) for trace in traces]
+eval_payload = None
+if args.eval is not None and (root / args.eval).exists():
+    eval_payload = read_json(root / args.eval)
+
+payload = {
+    "schema_version": "l3-workspace-latency-cost-eval-v1",
+    "status": "success",
+    "request_count": len(traces),
+    "prompt_rendered_chars_p50": percentile([float(v) for v in rendered_chars], 50),
+    "prompt_rendered_chars_p95": percentile([float(v) for v in rendered_chars], 95),
+    "model_name": config.model_name,
+    "max_new_tokens": config.max_new_tokens,
+    "estimated_local_eval_cost_usd": 0.0,
+    "eval_latency_p50_ms": eval_payload.get("latency_p50_ms") if eval_payload else None,
+    "eval_latency_p95_ms": eval_payload.get("latency_p95_ms") if eval_payload else None,
+    "workspace_tool": {
+        "name": "latency_cost_eval",
+        "visible_only": True,
+        "private_data_visible": False,
+    },
+}
+out = root / args.out
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+print(json.dumps(payload, sort_keys=True))
+"""
+    )
 
 
 def _run_l3_agent_session(

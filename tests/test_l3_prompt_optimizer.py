@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -198,6 +200,10 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
     assert summary["candidate"]["promotion_holdout"]["passes_gate"] is True
     assert (workspace / "prompt" / "l3_prompt.json").exists()
     assert (workspace / "runs" / "note.txt").exists()
+    assert (workspace / "contexts" / "local_slm_config.json").exists()
+    assert (workspace / "tools" / "evaluate_prompt.py").exists()
+    assert (workspace / "tools" / "bench_prompt.py").exists()
+    assert (workspace / "tools" / "latency_cost_eval.py").exists()
     assert not (workspace / "contexts" / "selection_holdout.jsonl").exists()
     assert not (workspace / "contexts" / "promotion_holdout.jsonl").exists()
     assert (tmp_path / "job" / "private" / "selection_holdout.jsonl").exists()
@@ -206,6 +212,38 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
     assert Path(commands[0]["command"][commands[0]["command"].index("--cd") + 1]) == (
         workspace.resolve()
     )
+    manifest = json.loads((workspace / "workspace_manifest.json").read_text(encoding="utf-8"))
+    assert "..." not in json.dumps(manifest["commands"])
+    assert "evaluate_visible_prompt" in manifest["commands"]
+    assert "bench_prompt" in manifest["commands"]
+    assert "latency_cost_eval" in manifest["commands"]
+
+    validation = subprocess.run(
+        [sys.executable, str(workspace / "tools" / "validate_prompt.py")],
+        cwd=workspace,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert validation.returncode == 0
+    latency_cost = subprocess.run(
+        [
+            sys.executable,
+            str(workspace / "tools" / "latency_cost_eval.py"),
+            "--out",
+            "runs/latency_cost_eval.json",
+        ],
+        cwd=workspace,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert latency_cost.returncode == 0
+    latency_payload = json.loads(
+        (workspace / "runs" / "latency_cost_eval.json").read_text(encoding="utf-8")
+    )
+    assert latency_payload["estimated_local_eval_cost_usd"] == 0.0
+    assert latency_payload["workspace_tool"]["private_data_visible"] is False
 
 
 def test_l3_prompt_evolution_agent_session_rejects_protected_context_edits(
