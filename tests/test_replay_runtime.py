@@ -35,6 +35,18 @@ def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> N
             template="play some jazz",
             gold_frame=Frame(intent="music_play"),
         ),
+        DataRecord(
+            request_id="r3",
+            locale="en-US",
+            split="train",
+            utterance="how old is Carrie Underwood",
+            annotated_utterance="how old is [person : Carrie Underwood]",
+            template="how old is [person]",
+            gold_frame=Frame(
+                intent="qa_factoid",
+                slots={"person": "carrie underwood"},
+            ),
+        ),
     ]
     (data_dir / "train.jsonl").write_text(
         "".join(record.model_dump_json() + "\n" for record in records),
@@ -56,21 +68,30 @@ def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> N
 
     summary = run_replay(
         stream="sequential",
-        max_requests=2,
+        max_requests=3,
         teacher_mode="cache",
         run_dir=run_dir,
         data_dir=data_dir,
         settings=settings,
     )
 
-    assert summary.requests == 2
+    assert summary.requests == 3
     traces = [
         json.loads(line)
         for line in (run_dir / "traces.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     chosen_layers = {trace["utterance"]: trace["chosen_layer"] for trace in traces}
     assert chosen_layers["set an alarm for seven"] == "L1"
+    assert chosen_layers["how old is Carrie Underwood"] == "L1"
     assert chosen_layers["play some jazz"] == "L4"
+    age_trace = next(
+        trace for trace in traces if trace["utterance"] == "how old is Carrie Underwood"
+    )
+    assert age_trace["final_frame"] == {
+        "intent": "qa_factoid",
+        "slots": {"person": "carrie underwood"},
+        "is_abstain": False,
+    }
     jazz_layers = [result["layer"] for result in traces[1]["layer_results"]]
     assert jazz_layers == ["L0", "L1", "L3", "L4"]
     assert traces[1]["layer_results"][2]["metadata"]["actual_mode"] == "disabled"

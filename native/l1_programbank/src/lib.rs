@@ -5,6 +5,7 @@ pub mod programs;
 use crate::frame::{L1Result, Request};
 use crate::normalize::normalize;
 use crate::programs::alarm::try_alarm_set;
+use crate::programs::qa::try_qa_person_age;
 use crate::programs::weather::try_weather_query;
 use crate::programs::Candidate;
 use std::time::Instant;
@@ -54,6 +55,9 @@ fn collect_candidates(q: &str) -> Vec<Candidate> {
     if let Some(candidate) = try_weather_query(q) {
         candidates.push(candidate);
     }
+    if let Some(candidate) = try_qa_person_age(q) {
+        candidates.push(candidate);
+    }
     candidates
 }
 
@@ -80,6 +84,22 @@ mod tests {
         assert!(result.accepted);
         assert_eq!(result.frame.unwrap().intent, "alarm_set");
         assert!(result.native_latency_us < 10_000);
+    }
+
+    #[test]
+    fn accepts_person_age_factoid_program() {
+        let result = try_answer(&Request {
+            request_id: "r3".to_string(),
+            utterance: "How old is Carrie Underwood?".to_string(),
+        });
+
+        assert!(result.accepted);
+        let frame = result.frame.unwrap();
+        assert_eq!(frame.intent, "qa_factoid");
+        assert_eq!(
+            frame.slots.get("person").map(String::as_str),
+            Some("carrie underwood")
+        );
     }
 
     #[test]

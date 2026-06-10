@@ -111,6 +111,7 @@ L1 native rule 的优先级是 precision，而不是 coverage。若一个 Rust p
 
 - weather 只接收无 slot 的泛化问法，例如 `tell me the weather`；包含地点、日期、时间范围或 forecast 细节的 weather utterance 必须 abstain。
 - alarm 只接收 time-only 的简单 `alarm_set`，例如 `set an alarm for seven`；包含 date、timeofday、query/remove/reminder 语义或复杂 time span 的 utterance 必须 abstain。
+- qa factoid 只接收 `how old is <person>` 这类 proper-name-like 人物年龄问法，输出 `qa_factoid/person`；若对象以 `the/my/your/...` 开头，或像 earth/world/pet/object 而非人名，必须 abstain。
 
 Coverage 扩张应由 L1 coding agent 在 teacher-visible hard cases 上演化 Rust 代码，并经过 replay gate；不能为了吸收更多请求牺牲 frame-level precision。
 

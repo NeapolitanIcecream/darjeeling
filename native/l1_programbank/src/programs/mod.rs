@@ -1,4 +1,5 @@
 pub mod alarm;
+pub mod qa;
 pub mod weather;
 
 use crate::frame::Frame;

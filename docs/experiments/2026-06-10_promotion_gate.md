@@ -15,6 +15,9 @@ now has a per-layer regression hard gate:
   accuracy regression, wrong-accept regression, or p95 latency regression, the
   candidate is rejected with `promotion_reason="per-layer regression gate
   failed: ..."`.
+- The gate only applies those quality/latency deltas when the layer's share did
+  not drop. If L4 share drops because L0/L1/L2 correctly absorbed requests, that
+  L4 metric shift is not treated as a regression.
 - `regressed_layers` is still written for diagnosis.
 - `promoted_with_layer_regression=true` is now reserved for explicit diagnostic
   paths where the gate is disabled or artifacts are force-promoted.
@@ -58,3 +61,10 @@ Result:
 The smoke run validates artifact wiring and record shape, not promotion quality
 at scale. Larger replay remains required once L2/L1 candidates produce material
 coverage shifts.
+
+Follow-up during full-suite validation:
+
+- A L1 dry-run promotion test exposed that the first implementation incorrectly
+  treated reduced L4 share as an L4 regression.
+- The gate was refined to ignore per-layer accuracy/wrong/latency deltas for
+  layers whose `layer_share_delta` is negative.

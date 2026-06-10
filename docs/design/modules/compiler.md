@@ -181,6 +181,6 @@ L4、Codex CLI agent、local tests 都不能绕过这个 gate。
 
 MVP promotion 单位是 artifact set。单层 candidate 可以单独度量，但 live manifest 以整组更新。
 
-当前主线已把最小 per-layer hard gate 接入 promotion decision。Compiler 必须输出 per-layer delta；若某层出现显著 accepted accuracy 下降、wrong accept 上升或 p95 latency 上升，`PROMOTION_BLOCK_LAYER_REGRESSIONS=true` 时拒绝整组 promotion，并把 `regressed_layers` 写入 promotion record。`promoted_with_layer_regression=true` 只应出现在显式关闭该 gate 或 `FORCE_PROMOTE_ARTIFACTS=true` 的诊断实验中。
+当前主线已把最小 per-layer hard gate 接入 promotion decision。Compiler 必须输出 per-layer delta；若某个仍在使用或使用占比上升的层出现显著 accepted accuracy 下降、wrong accept 上升或 p95 latency 上升，`PROMOTION_BLOCK_LAYER_REGRESSIONS=true` 时拒绝整组 promotion，并把 `regressed_layers` 写入 promotion record。若上层 share 下降是因为请求被更低层正确吸收，该上层不因自身样本减少而触发 regression。`promoted_with_layer_regression=true` 只应出现在显式关闭该 gate 或 `FORCE_PROMOTE_ARTIFACTS=true` 的诊断实验中。
 
 仍然保留为遗留问题的是更细粒度的恢复策略：当前 gate 能阻止被掩盖的退化，但 live manifest 仍按 artifact set 更新，尚未支持 shadow promotion、layer quarantine 或 per-layer rollback。

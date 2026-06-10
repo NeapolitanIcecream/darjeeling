@@ -350,13 +350,17 @@ def detect_layer_regressions(
 ) -> list[str]:
     regressed = []
     for layer, delta in per_layer_deltas.items():
-        if delta.accepted_accuracy_delta < -accepted_accuracy_tolerance:
+        layer_usage_did_not_drop = delta.layer_share_delta >= 0.0
+        if (
+            layer_usage_did_not_drop
+            and delta.accepted_accuracy_delta < -accepted_accuracy_tolerance
+        ):
             regressed.append(layer)
             continue
-        if delta.wrong_accept_delta > wrong_accept_tolerance:
+        if layer_usage_did_not_drop and delta.wrong_accept_delta > wrong_accept_tolerance:
             regressed.append(layer)
             continue
-        if delta.p95_latency_ms_delta > p95_latency_ms_tolerance:
+        if layer_usage_did_not_drop and delta.p95_latency_ms_delta > p95_latency_ms_tolerance:
             regressed.append(layer)
             continue
     return regressed

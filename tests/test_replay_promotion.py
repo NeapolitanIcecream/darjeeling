@@ -119,6 +119,33 @@ def test_artifact_set_promotion_can_record_layer_regression_without_blocking() -
     assert decision.regressed_layers == ["L1"]
 
 
+def test_layer_regression_gate_ignores_layers_replaced_by_lower_layers() -> None:
+    current = ObjectiveMetrics(
+        frame_exact_match=0.95,
+        wrong_accept_rate=0.02,
+        cost_usd_per_100_requests=1.0,
+        p95_latency_ms=900.0,
+    )
+    candidate = ObjectiveMetrics(
+        frame_exact_match=0.96,
+        wrong_accept_rate=0.01,
+        cost_usd_per_100_requests=0.25,
+        p95_latency_ms=500.0,
+    )
+
+    decision = decide_artifact_set_promotion(
+        current,
+        candidate,
+        per_layer_deltas={
+            "L1": LayerDelta(layer_share_delta=0.30, accepted_accuracy_delta=0.10),
+            "L4": LayerDelta(layer_share_delta=-0.30, accepted_accuracy_delta=-1.0),
+        },
+    )
+
+    assert decision.promoted
+    assert decision.regressed_layers == []
+
+
 def test_large_exact_l0_cache_can_promote_when_it_reduces_l4_without_regression() -> None:
     traces = [
         TeacherTrace(

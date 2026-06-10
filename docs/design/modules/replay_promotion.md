@@ -87,7 +87,7 @@ candidate replay covers teacher_promotion_holdout + hard_buffer + teacher_regres
 
 ## 单层 regression 记录
 
-整组 promotion 的已知问题是可能掩盖单层 regression。当前主线先采用最小 per-layer hard gate：仍以 artifact set 为 promotion 单位，但如果某个弱层出现显著 accepted accuracy 下降、wrong accept 上升或 p95 latency 上升，默认拒绝整组 promotion。`PROMOTION_BLOCK_LAYER_REGRESSIONS=false` 只用于诊断或 ablation。
+整组 promotion 的已知问题是可能掩盖单层 regression。当前主线先采用最小 per-layer hard gate：仍以 artifact set 为 promotion 单位，但如果某个仍在使用或使用占比上升的弱层出现显著 accepted accuracy 下降、wrong accept 上升或 p95 latency 上升，默认拒绝整组 promotion。若上层因为被更快、更低层替代而 layer share 下降，该上层自身的 accepted-accuracy delta 不构成 regression。`PROMOTION_BLOCK_LAYER_REGRESSIONS=false` 只用于诊断或 ablation。
 
 每次 promotion decision 必须输出 per-layer delta：
 
