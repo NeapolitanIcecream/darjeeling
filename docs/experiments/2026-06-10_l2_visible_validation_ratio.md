@@ -138,3 +138,43 @@ Interpretation:
   safety gate before private selection. This does not make train coverage an
   optimization target; it only prevents a candidate with known visible
   train-audit wrong accepts from being selected.
+
+## Post-fix smoke
+
+After adding the train-audit safety gate, I reran the short deterministic
+local-search probe:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-visible-ratio40-trainaudit-smoke-r1/job \
+  --max-traces 1000 \
+  --mode local-search \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+```
+
+Result:
+
+- Evidence class: `short_fixed_snapshot_probe`.
+- Split and effective visible ratio matched the earlier short probe: train
+  `435`, visible validation `377`, private selection `97`, private promotion
+  `90`, effective visible ratio `0.37737737737737737`.
+- Visible validation still failed: `14` accepted, `11` correct, `3` wrong.
+- Train-audit safety gate failed: `47` accepted, `35` correct, `12` wrong.
+- Summary recorded `passes_train_audit_safety_gate=false`.
+- `round_state.json` recorded the new candidate selection gate:
+  visible validation, visible train-audit safety, and private selection must all
+  pass.
+- Adoption remained `adopted=false`.
+
+This smoke verifies the new gate is wired through summary and agent-visible
+state. It is not a quality result.
