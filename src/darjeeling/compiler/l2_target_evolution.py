@@ -1042,8 +1042,9 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "id": "play_radio_missing_radio_name_cue",
                 "utterance": "put on radio mango",
                 "input_frame": {"intent": "play_radio", "slots": {}},
-                "expectation": "veto_or_add_radio_name",
+                "expectation": "add_radio_name",
                 "expected_slot_key": "radio_name",
+                "expected_slot_value": "radio mango",
                 "visible_support_slot_keys": ["radio_name"],
             }
         )
@@ -1064,8 +1065,9 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "id": "calendar_remove_today_date_cue",
                 "utterance": "delete all the events of today",
                 "input_frame": {"intent": "calendar_remove", "slots": {}},
-                "expectation": "veto_or_add_date",
+                "expectation": "add_date",
                 "expected_slot_key": "date",
+                "expected_slot_value": "today",
                 "visible_support_slot_keys": ["date"],
             }
         )
@@ -1109,8 +1111,9 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "id": "general_joke_tell_me_about_missing_joke_type",
                 "utterance": "tell me a joke about birds",
                 "input_frame": {"intent": "general_joke", "slots": {}},
-                "expectation": "veto_or_add_joke_type",
+                "expectation": "add_joke_type",
                 "expected_slot_key": "joke_type",
+                "expected_slot_value": "birds",
                 "visible_support_slot_keys": ["joke_type"],
             }
         )
@@ -1147,8 +1150,9 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "id": "audio_volume_spoken_amount_cue",
                 "utterance": "change the volume level to nineteen please",
                 "input_frame": {"intent": "audio_volume_up", "slots": {}},
-                "expectation": "veto_or_add_change_amount",
+                "expectation": "add_change_amount",
                 "expected_slot_key": "change_amount",
+                "expected_slot_value": "to nineteen",
                 "visible_support_slot_keys": ["change_amount"],
             }
         )
@@ -1245,16 +1249,24 @@ def _slot_cue_probe_passed(
         return frame.slots.get("house_place") == probe.get("expected_slot_value")
     if expectation == "veto_or_remove_radio_name":
         return "radio_name" not in frame.slots
+    if expectation == "add_radio_name":
+        return frame.slots.get("radio_name") == probe.get("expected_slot_value")
     if expectation == "veto_or_add_radio_name":
         return "radio_name" in frame.slots
     if expectation == "veto_or_add_media_type":
         return "media_type" in frame.slots
+    if expectation == "add_date":
+        return frame.slots.get("date") == probe.get("expected_slot_value")
     if expectation == "veto_or_add_date":
         return "date" in frame.slots
     if expectation == "veto_or_repair_away_from_recommendation_events":
         return frame.intent != "recommendation_events"
+    if expectation == "add_joke_type":
+        return frame.slots.get("joke_type") == probe.get("expected_slot_value")
     if expectation == "veto_or_add_joke_type":
         return "joke_type" in frame.slots
+    if expectation == "add_change_amount":
+        return frame.slots.get("change_amount") == probe.get("expected_slot_value")
     if expectation == "veto_or_add_change_amount":
         return "change_amount" in frame.slots
     return False
@@ -4103,6 +4115,9 @@ def _target_program_text() -> str:
             "  Run `tools/evaluate.py --split slot_cue_probes` after editing",
             "  target cue rules; this diagnostic is visible-only and not a private",
             "  selection/adoption gate.",
+            "  For parseable cue probes with an explicit slot value, repair the",
+            "  missing slot via precise `postprocess_frame`; do not rely on a veto",
+            "  when the probe expects exact slot repair.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -4158,6 +4173,9 @@ def _target_program_text() -> str:
             "name cues, radio music cues, calendar date cues, bare upcoming-events",
             "intent boundaries, and spoken volume amounts when the related visible",
             "slot keys are present.",
+            "When the cue value is directly parseable, prefer exact postprocess",
+            "slot repair over abstention so safe coverage can pay for the target",
+            "artifact complexity in outer replay.",
             "Use `uv run --project system/darjeeling python tools/evaluate.py",
             "--split slot_cue_probes --out runs/slot_cue_probes.json` or the",
             "documented fallback to verify those checks locally.",

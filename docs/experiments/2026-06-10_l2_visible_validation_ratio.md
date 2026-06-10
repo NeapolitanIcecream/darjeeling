@@ -1426,3 +1426,49 @@ Interpretation:
   pattern.
 - The next implementation adds
   `general_joke_tell_me_about_missing_joke_type` to the same diagnostic split.
+
+Joke-about-probe live result:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-joke-about-live-r1`.
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `21` accepted, `21` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `21` correct accepts, required `10`.
+- Final train audit: `66` accepted, `66` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `23` accepted, `23` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed: `12/12`.
+- Private selection: `5` accepted, `5` correct, `0` wrong; gate passed.
+- Private promotion: `4` accepted, `4` correct, `0` wrong; gate passed.
+- `selection_decision.selected=true`, `adoption_decision.adopted=true`.
+
+Joke-about-probe 3k outer replay:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-joke-about-outer-3k-r1`.
+- Baseline: `L0=2344`, `L1=4`, `L2=0`, `L4=652`, frame EM `1.0`, cost
+  per 100 requests `0.217333`.
+- Candidate: `L0=2344`, `L1=4`, `L2=18`, `L4=634`, frame EM `1.0`, cost
+  per 100 requests `0.211363`.
+- L2 accepted accuracy was `18/18 = 1.0`; wrong accept rate was `0.0`.
+- Decision: promoted, `objective improved within gates`.
+
+Joke-about-probe 10k outer replay:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-joke-about-outer-10k-r1`.
+- Baseline: `L0=9878`, `L1=1`, `L2=0`, `L4=121`, frame EM `1.0`, cost
+  per 100 requests `0.012100`.
+- Candidate: `L0=9878`, `L1=1`, `L2=4`, `L4=117`, frame EM `1.0`, cost
+  per 100 requests `0.011702`.
+- L2 accepted accuracy was `4/4 = 1.0`; wrong accept rate was `0.0`.
+- Decision: not promoted, `objective did not improve`.
+
+Interpretation:
+
+- The target is now safe on the 10k replay, but too conservative to pay for the
+  added target artifact complexity on that stronger parent run.
+- The next design step is not another safety-only probe. For directly
+  parseable cues, probes should require exact slot repair instead of allowing a
+  veto. This converts clear cases such as `put on radio mango`,
+  `tell me a joke about birds`, `delete ... today`, and `to nineteen` into safe
+  coverage, giving the target a chance to improve 10k objective while keeping
+  wrong accepts at zero.

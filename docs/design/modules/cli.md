@@ -90,6 +90,8 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 
 `slot_cue_probes` 当前覆盖 podcast/radio 边界、room slot、generic radio-name、missing radio-name cue、radio media-type、calendar date、bare upcoming-events、joke-type/joke-about 和 spoken volume amount 这些 visible-derived cue risks。它只用于让 agent 在本地看到具体失败，不改变 visible/private gate 定义。
 
+对直接可解析的 cue，`slot_cue_probes` 会要求 exact slot repair，而不接受单纯 veto；例如 radio-name、joke-about、calendar date 和 spoken amount probes。这个约束用于保留安全覆盖，让 target artifact 在 outer replay 中有机会抵消自身 complexity。
+
 `target/config.json` 可用于 bounded config override，但不是覆盖率目标。Visible support 已达标后，agent 不应仅为提高 raw accepts 降低 `accept_threshold`；这类变更必须保留 visible train-audit、cross-audit 和 cue-probe 安全，否则应移除。
 
 `--target-scope teacher_train|lower_miss` 控制进入 target split 的 teacher-visible traces。默认 `teacher_train` 保持完整 teacher-labeled snapshot；`lower_miss` 只保留 L0/L1 没有接收的 traces，用于把 L2 target-evolution 对齐到真实会到达 L2 的残差分布。Summary、`data/round_state.json` 和 `data/objective.json` 会写 `target_scope`，包括 input count、scoped count 和被 lower layer 接收而排除的数量。该 scope 只改变 visible target data，不让 private selection/promotion holdout 进入 agent workspace。

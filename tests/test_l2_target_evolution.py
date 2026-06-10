@@ -856,6 +856,17 @@ def config_overrides():
 
 
 def postprocess_frame(utterance, frame, metadata):
+    text = utterance.lower()
+    intent = frame.get("intent")
+    slots = frame.setdefault("slots", {})
+    if intent == "play_radio" and "radio mango" in text:
+        slots["radio_name"] = "radio mango"
+    if intent == "calendar_remove" and "today" in text:
+        slots["date"] = "today"
+    if intent == "general_joke" and "joke about birds" in text:
+        slots["joke_type"] = "birds"
+    if intent == "audio_volume_up" and "to nineteen" in text:
+        slots["change_amount"] = "to nineteen"
     return frame
 
 
