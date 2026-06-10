@@ -137,6 +137,8 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         },
         "visible_validation_splits": ["inner_validation"],
         "visible_validation_folds": 1,
+        "visible_validation_ratio_requested": None,
+        "visible_validation_ratio_effective": 2 / 12,
         "visible_validation_visibility": "agent_workspace_visible",
         "private_splits": ["selection_holdout", "promotion_holdout"],
         "private_split_visibility": "outer_harness_only",
@@ -429,6 +431,39 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
     )
 
 
+def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> None:
+    family_stats = {
+        "accepted_wrong_risk": {
+            "teacher_intent": "email_query",
+            "total": 2,
+            "accepted_correct": 0,
+            "accepted_wrong": 1,
+            "rejected_correct": 0,
+            "rejected_wrong": 1,
+            "vetoed_correct": 0,
+            "vetoed_wrong": 0,
+            "intent_correct_slot_wrong": 1,
+            "predicted_intents": {"email_query": 2},
+            "examples": {
+                "accepted_wrong": [],
+                "rejected_correct": [],
+                "vetoed_correct": [],
+                "intent_correct_slot_wrong": [],
+            },
+        },
+    }
+
+    payload = l2_target_evolution._family_diagnostics_payload(
+        split="promotion_holdout",
+        validation_size=10,
+        family_stats=family_stats,
+    )
+
+    assert payload["safety_backlog"]["visibility"] == (
+        "outer_summary_only_not_agent_workspace"
+    )
+
+
 def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
     traces = [
         _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
@@ -607,6 +642,28 @@ def test_l2_target_extra_visible_folds_do_not_keep_shrinking_train_split() -> No
         "inner_validation_shadow_3",
         "inner_validation_shadow_4",
     }
+
+
+def test_l2_target_visible_validation_ratio_expands_visible_pool() -> None:
+    traces = [
+        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        if index % 2 == 0
+        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        for index in range(100)
+    ]
+
+    split = split_l2_target_traces(
+        traces_to_teacher_view(traces),
+        visible_validation_folds=5,
+        visible_validation_ratio=0.40,
+    )
+
+    assert len(split["train"]) == 40
+    assert len(split["selection_holdout"]) == 10
+    assert len(split["promotion_holdout"]) == 10
+    assert sum(
+        len(value) for key, value in split.items() if key.startswith("inner_validation")
+    ) == 40
 
 
 def test_l2_target_evolution_applies_dry_run_patches_to_target_only(tmp_path: Path) -> None:
@@ -1564,6 +1621,8 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
             "2",
             "--budget-profile",
             "fixed-inner",
+            "--visible-validation-ratio",
+            "0.4",
         ],
     )
 
@@ -1575,8 +1634,10 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert summary["budget_policy"]["local_search_trials"] == 32
     assert summary["budget_policy"]["local_search_cross_audit_top_k"] == 4
     assert summary["budget_policy"]["visible_validation_folds"] == 5
+    assert summary["budget_policy"]["visible_validation_ratio"] == 0.4
     assert summary["budget_policy"]["visible_cross_audit_folds"] == 3
     assert summary["data_split_policy"]["visible_validation_folds"] == 5
+    assert summary["data_split_policy"]["visible_validation_ratio_requested"] == 0.4
     assert summary["budget_policy"]["stop_on_selection_gate"] is False
     assert summary["budget_policy"]["max_agent_rounds"] is None
     assert summary["evidence_policy"]["evidence_class"] == "short_fixed_snapshot_probe"

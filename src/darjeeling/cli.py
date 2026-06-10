@@ -785,6 +785,17 @@ def l2_target_evolve(
             ),
         ),
     ] = None,
+    visible_validation_ratio: Annotated[
+        float | None,
+        typer.Option(
+            min=0.01,
+            help=(
+                "Optional agent-visible validation pool ratio for target splits. "
+                "Defaults remain profile-specific; explicit values increase or "
+                "decrease visible pressure without exposing private holdouts."
+            ),
+        ),
+    ] = None,
     visible_cross_audit_folds: Annotated[
         int | None,
         typer.Option(
@@ -864,6 +875,10 @@ def l2_target_evolve(
         raise typer.BadParameter("target_scope must be teacher_train or lower_miss")
     if local_search_space not in {"compact", "wide"}:
         raise typer.BadParameter("local_search_space must be compact or wide")
+    if visible_validation_ratio is not None and not (0.0 < visible_validation_ratio < 0.80):
+        raise typer.BadParameter(
+            "visible_validation_ratio must be greater than 0 and less than 0.80",
+        )
     evolution_mode: L2TargetEvolutionMode = mode  # type: ignore[assignment]
     resolved_budget_profile: L2TargetBudgetProfile = budget_profile  # type: ignore[assignment]
     resolved_split_policy: L2TargetSplitPolicy = split_policy  # type: ignore[assignment]
@@ -918,6 +933,7 @@ def l2_target_evolve(
             split_policy=resolved_split_policy,
             target_scope=resolved_target_scope,
             visible_validation_folds=resolved_visible_validation_folds,
+            visible_validation_ratio=visible_validation_ratio,
             visible_cross_audit_folds=resolved_visible_cross_audit_folds,
             max_agent_rounds=resolved_max_agent_rounds,
             sandbox=settings.l2_agent_sandbox,

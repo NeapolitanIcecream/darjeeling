@@ -59,6 +59,7 @@ class L2TargetEvolutionConfig:
     split_policy: L2TargetSplitPolicy = "chronological"
     target_scope: L2TargetScope = "teacher_train"
     visible_validation_folds: int = 1
+    visible_validation_ratio: float | None = None
     visible_cross_audit_folds: int = 0
     max_agent_rounds: int | None = None
     sandbox: str = "workspace-write"
@@ -87,6 +88,10 @@ def run_l2_target_evolution(
         raise ValueError("local_search_cross_audit_top_k must be non-negative")
     if config.visible_validation_folds < 1:
         raise ValueError("visible_validation_folds must be at least 1")
+    if config.visible_validation_ratio is not None and not (
+        0.0 < config.visible_validation_ratio < 0.80
+    ):
+        raise ValueError("visible_validation_ratio must be greater than 0 and less than 0.80")
     if config.visible_cross_audit_folds == 1 or config.visible_cross_audit_folds < 0:
         raise ValueError("visible_cross_audit_folds must be 0 or at least 2")
     if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
@@ -119,6 +124,7 @@ def run_l2_target_evolution(
         target_traces,
         policy=config.split_policy,
         visible_validation_folds=config.visible_validation_folds,
+        visible_validation_ratio=config.visible_validation_ratio,
     )
     target_scope_payload = _target_scope_payload(
         scope=config.target_scope,
@@ -470,7 +476,11 @@ def run_l2_target_evolution(
         "workspace": str(workspace_root),
         "target_scope": target_scope_payload,
         "data_split": {key: len(value) for key, value in split.items()},
-        "data_split_policy": _target_split_policy_payload(config.split_policy, split),
+        "data_split_policy": _target_split_policy_payload(
+            config.split_policy,
+            split,
+            visible_validation_ratio=config.visible_validation_ratio,
+        ),
         "baseline": baseline,
         "rounds": round_results,
         "best_round": _best_round(round_results),
@@ -500,9 +510,14 @@ def split_l2_target_traces(
     *,
     policy: L2TargetSplitPolicy = "chronological",
     visible_validation_folds: int = 1,
+    visible_validation_ratio: float | None = None,
 ) -> dict[str, list[TeacherTrace]]:
     if visible_validation_folds < 1:
         raise ValueError("visible_validation_folds must be at least 1")
+    if visible_validation_ratio is not None and not (0.0 < visible_validation_ratio < 0.80):
+        raise ValueError(
+            "visible_validation_ratio must be greater than 0 and less than 0.80",
+        )
     labeled = [trace for trace in traces if trace.teacher_frame is not None]
     if len(labeled) < 10:
         raise ValueError("target evolution requires at least 10 teacher-labeled traces")
@@ -510,12 +525,14 @@ def split_l2_target_traces(
         return _split_l2_target_traces_by_intent(
             labeled,
             visible_validation_folds=visible_validation_folds,
+            visible_validation_ratio=visible_validation_ratio,
         )
     if policy != "chronological":
         raise ValueError(f"unsupported target split policy: {policy}")
     return _split_l2_target_traces_chronological(
         labeled,
         visible_validation_folds=visible_validation_folds,
+        visible_validation_ratio=visible_validation_ratio,
     )
 
 
@@ -570,8 +587,9 @@ def _split_l2_target_traces_chronological(
     labeled: list[TeacherTrace],
     *,
     visible_validation_folds: int = 1,
+    visible_validation_ratio: float | None = None,
 ) -> dict[str, list[TeacherTrace]]:
-    if visible_validation_folds == 1:
+    if visible_validation_folds == 1 and visible_validation_ratio is None:
         train_end = max(4, int(len(labeled) * 0.60))
         inner_end = max(train_end + 1, int(len(labeled) * 0.80))
         selection_end = max(inner_end + 1, int(len(labeled) * 0.90))
@@ -586,13 +604,17 @@ def _split_l2_target_traces_chronological(
 
     private_selection_count = max(1, int(len(labeled) * 0.10))
     private_promotion_count = max(1, int(len(labeled) * 0.10))
-    visible_ratio = 0.20 if visible_validation_folds == 1 else 0.30
+    visible_ratio = _resolve_visible_validation_ratio(
+        visible_validation_folds=visible_validation_folds,
+        visible_validation_ratio=visible_validation_ratio,
+    )
     visible_total = max(visible_validation_folds, int(len(labeled) * visible_ratio))
     max_visible_total = len(labeled) - private_selection_count - private_promotion_count - 4
     if max_visible_total < visible_validation_folds:
         return _split_l2_target_traces_chronological(
             labeled,
             visible_validation_folds=1,
+            visible_validation_ratio=visible_validation_ratio,
         )
     visible_total = min(visible_total, max_visible_total)
     train_end = len(labeled) - visible_total - private_selection_count - private_promotion_count
@@ -616,6 +638,7 @@ def _split_l2_target_traces_by_intent(
     labeled: list[TeacherTrace],
     *,
     visible_validation_folds: int = 1,
+    visible_validation_ratio: float | None = None,
 ) -> dict[str, list[TeacherTrace]]:
     split: dict[str, list[TeacherTrace]] = {
         "train": [],
@@ -632,6 +655,7 @@ def _split_l2_target_traces_by_intent(
         counts = _intent_stratified_group_counts(
             len(group),
             visible_validation_folds=visible_validation_folds,
+            visible_validation_ratio=visible_validation_ratio,
         )
         start = 0
         for split_name, count in zip(split, counts, strict=True):
@@ -647,11 +671,13 @@ def _split_l2_target_traces_by_intent(
         return _split_l2_target_traces_chronological(
             labeled,
             visible_validation_folds=visible_validation_folds,
+            visible_validation_ratio=visible_validation_ratio,
         )
     if len(split["train"]) < 4:
         return _split_l2_target_traces_chronological(
             labeled,
             visible_validation_folds=visible_validation_folds,
+            visible_validation_ratio=visible_validation_ratio,
         )
     return split
 
@@ -660,13 +686,17 @@ def _intent_stratified_group_counts(
     size: int,
     *,
     visible_validation_folds: int = 1,
+    visible_validation_ratio: float | None = None,
 ) -> tuple[int, ...]:
     split_count = 1 + visible_validation_folds + 2
     if size < split_count:
         return (size, *([0] * (split_count - 1)))
-    train_ratio = 0.60 if visible_validation_folds == 1 else 0.50
     private_ratio = 0.10
-    visible_ratio = 1.0 - train_ratio - (2 * private_ratio)
+    visible_ratio = _resolve_visible_validation_ratio(
+        visible_validation_folds=visible_validation_folds,
+        visible_validation_ratio=visible_validation_ratio,
+    )
+    train_ratio = 1.0 - visible_ratio - (2 * private_ratio)
     ratios = [
         train_ratio,
         *([visible_ratio / visible_validation_folds] * visible_validation_folds),
@@ -696,6 +726,16 @@ def _distribute_count(total: int, buckets: int) -> list[int]:
     return [base + (1 if index < remainder else 0) for index in range(buckets)]
 
 
+def _resolve_visible_validation_ratio(
+    *,
+    visible_validation_folds: int,
+    visible_validation_ratio: float | None,
+) -> float:
+    if visible_validation_ratio is not None:
+        return visible_validation_ratio
+    return 0.20 if visible_validation_folds == 1 else 0.30
+
+
 def _visible_validation_split_names(count: int) -> list[str]:
     if count < 1:
         raise ValueError("visible validation split count must be at least 1")
@@ -718,8 +758,12 @@ def _visible_validation_split_names_from_split(
 def _target_split_policy_payload(
     policy: L2TargetSplitPolicy,
     split: dict[str, list[TeacherTrace]],
+    *,
+    visible_validation_ratio: float | None = None,
 ) -> dict[str, Any]:
     visible_validation_splits = _visible_validation_split_names_from_split(split)
+    total = sum(len(value) for value in split.values())
+    visible_total = sum(len(split[name]) for name in visible_validation_splits)
     return {
         "schema_version": "l2-target-split-policy-v1",
         "policy": policy,
@@ -727,6 +771,8 @@ def _target_split_policy_payload(
         "split_counts": {key: len(value) for key, value in split.items()},
         "visible_validation_splits": visible_validation_splits,
         "visible_validation_folds": len(visible_validation_splits),
+        "visible_validation_ratio_requested": visible_validation_ratio,
+        "visible_validation_ratio_effective": visible_total / total if total else 0.0,
         "visible_validation_visibility": "agent_workspace_visible",
         "private_splits": ["selection_holdout", "promotion_holdout"],
         "private_split_visibility": "outer_harness_only",
@@ -1105,13 +1151,13 @@ def _aggregate_safety_backlogs(
         "schema_version": "l2-target-safety-backlog-v1",
         "split": split,
         "validation_size": validation_size,
-        "visibility": "visible_validation_only",
+        "visibility": _safety_backlog_visibility(split),
         "priority": "fix_visible_accepted_wrong_before_coverage_expansion",
         "item_limit": limit,
         "items": items[:limit],
         "empty_reason": None
         if items
-        else "no_visible_accepted_wrong_families",
+        else _safety_backlog_empty_reason(split),
     }
 
 
@@ -1519,14 +1565,26 @@ def _safety_backlog_payload(
         "schema_version": "l2-target-safety-backlog-v1",
         "split": split,
         "validation_size": validation_size,
-        "visibility": "visible_validation_only",
+        "visibility": _safety_backlog_visibility(split),
         "priority": "fix_visible_accepted_wrong_before_coverage_expansion",
         "item_limit": limit,
         "items": items[:limit],
         "empty_reason": None
         if items
-        else "no_visible_accepted_wrong_families",
+        else _safety_backlog_empty_reason(split),
     }
+
+
+def _safety_backlog_visibility(split: str) -> str:
+    if split in {"selection_holdout", "promotion_holdout"}:
+        return "outer_summary_only_not_agent_workspace"
+    return "visible_validation_only"
+
+
+def _safety_backlog_empty_reason(split: str) -> str:
+    if split in {"selection_holdout", "promotion_holdout"}:
+        return "no_private_accepted_wrong_families"
+    return "no_visible_accepted_wrong_families"
 
 
 def _safety_backlog_item(family: dict[str, Any]) -> dict[str, Any]:
@@ -1815,6 +1873,7 @@ def _target_budget_policy_payload(
             max_agent_rounds=resolved_max_agent_rounds,
         ),
         "visible_validation_folds": config.visible_validation_folds,
+        "visible_validation_ratio": config.visible_validation_ratio,
         "visible_cross_audit_folds": config.visible_cross_audit_folds,
     }
 
@@ -2036,6 +2095,7 @@ def _target_objective_payload(
                 "AND private promotion holdout gate"
             ),
             "visible_validation_folds": config.visible_validation_folds,
+            "visible_validation_ratio": config.visible_validation_ratio,
             "visible_cross_audit_folds": config.visible_cross_audit_folds,
             "visible_cross_audit_role": "diagnostic_only_not_selection_or_adoption_gate",
         },
