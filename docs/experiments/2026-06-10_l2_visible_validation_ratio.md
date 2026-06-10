@@ -703,3 +703,56 @@ Smoke result:
 - Both used `visibility=visible_validation_only`.
 - `target_diagnostics.json`, `round_state.json`, and `objective.json` did not
   contain `selection_holdout` or `promotion_holdout`.
+
+## Intent-confusion live result
+
+Run:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-intent-confusion-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `29` accepted, `29` correct, `0` wrong; gate passed.
+- Visible support passed: `29` correct accepts, required `10`.
+- Final train audit: `89` accepted, `89` correct, `0` wrong; train-audit safety
+  passed.
+- Final visible cross-audit: `35` accepted, `35` correct, `0` wrong; gate
+  passed.
+- Private selection: `6` accepted, `4` correct, `2` wrong; gate failed.
+- Private promotion: `9` accepted, `6` correct, `3` wrong; gate failed.
+- Adoption remained `adopted=false`.
+
+Interpretation:
+
+- Intent-confusion diagnostics were visible to the agent and it produced a
+  candidate with stronger visible metrics, but hidden wrong accepts did not
+  improve. Private selection still failed on the same podcast/radio and radio
+  room-place boundary patterns.
+- The stable `play_radio.house_place` private miss has no visible
+  `play_radio.house_place` support in this split. That makes it a visible-data
+  coverage gap, not a presentation gap in the current slot-risk queue.
+- Further diagnostics should avoid leaking private feedback or merely adding
+  more family queues. The next plausible design direction is a visible schema
+  cue summary across slots, not intents: for example, showing that room words
+  commonly map to `house_place` even when the specific `play_radio` +
+  `house_place` pair is absent. That would be a visible-only generalization aid,
+  not a new gate.
