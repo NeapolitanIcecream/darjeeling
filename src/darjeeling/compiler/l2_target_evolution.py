@@ -2120,7 +2120,7 @@ def _visible_slot_cue_summary_payload(
     *,
     traces: list[TeacherTrace],
     source_splits: list[str],
-    item_limit: int = 40,
+    item_limit: int = 64,
 ) -> dict[str, Any]:
     by_slot: dict[str, dict[str, Any]] = {}
     for trace in traces:
@@ -3750,6 +3750,11 @@ def _target_program_text() -> str:
             "  examples against any slotless or missing-slot accepted frames;",
             "  visible cues such as podcast, radio, room, or joke-about terms",
             "  support conservative target-local vetoes or exact postprocess.",
+            "  Mandatory cue checks when the corresponding visible slot keys are",
+            "  present: non-podcast accepted intents containing a podcast cue;",
+            "  slotless accepts containing visible room values such as kitchen,",
+            "  bedroom, living room, bathroom, room, or house; and `general_joke`",
+            "  accepts with `joke about ...` but no `joke_type` slot.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -3798,6 +3803,10 @@ def _target_program_text() -> str:
             "`visible_slot_cue_summary` for visible slot cues that the frame omits;",
             "prefer a veto over accepting a high-guard frame with an obvious",
             "missing visible slot cue.",
+            "Concretely, add conservative checks for podcast cues accepted as a",
+            "non-podcast intent, room values accepted without a location slot, and",
+            "`joke about` utterances accepted without `joke_type` when visible",
+            "data supports those slot keys.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
             "abstention or target-local vetoes over accepting predictions that",
             "contradict visible teacher labels.",

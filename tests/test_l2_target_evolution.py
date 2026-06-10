@@ -307,6 +307,8 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "latest_safety_backlog" in program_text
     assert "Do not add exact utterance exceptions" in program_text
     assert "multiple visible examples" in program_text
+    assert "Mandatory cue checks" in program_text
+    assert "non-podcast accepted intents containing a podcast cue" in program_text
     assert target_diagnostics["schema_version"] == "l2-target-diagnostics-v1"
     assert target_diagnostics["visibility"] == "visible_validation_only"
     assert target_diagnostics["visible_slot_cue_summary"]["schema_version"] == (
@@ -669,7 +671,7 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
 
 def test_l2_target_visible_slot_cue_summary_keeps_low_frequency_podcast_cues() -> None:
     trace_records: list[TraceRecord] = []
-    for index in range(1, 18):
+    for index in range(1, 46):
         trace_records.extend(
             [
                 _trace_with_utterance(

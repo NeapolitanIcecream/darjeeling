@@ -942,3 +942,80 @@ Slot-key-terms smoke result:
   accepted frames.
 - `target_diagnostics.json`, `round_state.json`, and `objective.json` still did
   not contain `selection_holdout` or `promotion_holdout`.
+
+Slot-key-terms live command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-slot-cue-terms-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Slot-key-terms live result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `25` accepted, `25` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `25` correct accepts, required `10`.
+- Final train audit: `74` accepted, `74` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `25` accepted, `25` correct, `0` wrong; gate
+  passed.
+- Private selection: `7` accepted, `5` correct, `2` wrong; gate failed.
+- Private promotion: `7` accepted, `6` correct, `1` wrong; gate failed.
+
+Interpretation:
+
+- The prompt-level usage hint was still not concrete enough. The agent added
+  some room and joke vetoes, but did not add a podcast-specific `play_radio`
+  veto and still missed the `play_radio.house_place` kitchen case.
+- In the full 2000-trace split, `joke_type` did not appear in the 40-item
+  visible slot-cue summary even though it appeared in the smaller smoke split.
+- The next implementation widens the default slot-cue budget to 64 and adds
+  explicit mandatory cue checks for non-podcast accepted intents with podcast
+  cues, slotless accepts with visible room values, and `general_joke` accepts
+  with `joke about ...` but no `joke_type`.
+
+Budget-64 smoke command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-visible-slot-cue-budget64-smoke-r1/job \
+  --max-traces 1000 \
+  --mode dry-run \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 4 \
+  --local-search-timeout-s 120 \
+  --local-search-cross-audit-top-k 1
+```
+
+Budget-64 smoke result:
+
+- `visible_slot_cue_summary.item_limit` was `64`.
+- The smoke split had `46` visible slot keys, all included in the summary.
+- `podcast_name`, `house_place`, and `joke_type` were present with
+  `slot_key_terms`.
+- `program.md` contained the mandatory cue checks for podcast, room, and
+  `joke about` omitted-slot cases.
+- `target_diagnostics.json`, `round_state.json`, and `objective.json` still did
+  not contain `selection_holdout` or `promotion_holdout`.
