@@ -1108,3 +1108,53 @@ Slot-cue-probes smoke result:
 - `target_diagnostics.json`, `round_state.json`, `objective.json`, and
   `runs/slot_cue_probes.json` still did not contain `selection_holdout` or
   `promotion_holdout`.
+
+Slot-cue-probes live command:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-real-agent-ratio40-slot-cue-probes-live-r1/job \
+  --max-traces 2000 \
+  --mode agent-session \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --split-policy intent-stratified \
+  --rounds 16 \
+  --max-agent-rounds 1 \
+  --visible-validation-folds 5 \
+  --visible-validation-ratio 0.4 \
+  --visible-cross-audit-folds 3 \
+  --local-search-trials 12 \
+  --local-search-timeout-s 180 \
+  --local-search-cross-audit-top-k 1 \
+  --timeout-s 1200
+```
+
+Slot-cue-probes live result:
+
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `29` accepted, `29` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `29` correct accepts, required `10`.
+- Final train audit: `105` accepted, `105` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `27` accepted, `27` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed in all candidate probe runs.
+- Private selection: `7` accepted, `7` correct, `0` wrong; gate passed.
+- Private promotion: `7` accepted, `7` correct, `0` wrong; gate passed.
+- `selection_decision.selected=true`, `adoption_decision.adopted=true`.
+
+Interpretation:
+
+- Making the slot cue checks executable changed agent behavior. It ran
+  `slot_cue_probes`, observed the baseline failures, and implemented target
+  postprocess/veto rules for podcast, room, and joke cues.
+- The remaining private wrong-accept pattern from earlier runs disappeared:
+  both selection and promotion safety backlogs were empty.
+- The final candidate kept enough visible support and did not rely on an
+  over-conservative config; the agent removed a searched config that collapsed
+  visible support.
+- This is the first run in the ratio-0.4 visible-pressure series where the
+  fixed-snapshot target passed visible validation, visible support, train audit,
+  visible cross-audit, private selection, and private promotion together.
