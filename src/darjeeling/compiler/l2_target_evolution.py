@@ -1023,6 +1023,17 @@ def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "visible_support_slot_keys": ["house_place"],
             }
         )
+        probes.append(
+            {
+                "id": "iot_lightchange_room_cue",
+                "utterance": f"please change the color of the light in the {room_value}",
+                "input_frame": {"intent": "iot_hue_lightchange", "slots": {}},
+                "expectation": "add_house_place",
+                "expected_slot_key": "house_place",
+                "expected_slot_value": room_value,
+                "visible_support_slot_keys": ["house_place"],
+            }
+        )
     if "radio_name" in items:
         probes.append(
             {
@@ -1246,6 +1257,8 @@ def _slot_cue_probe_passed(
     if expectation == "veto_or_repair_away_from_play_radio":
         return frame.intent != "play_radio"
     if expectation == "veto_or_add_house_place":
+        return frame.slots.get("house_place") == probe.get("expected_slot_value")
+    if expectation == "add_house_place":
         return frame.slots.get("house_place") == probe.get("expected_slot_value")
     if expectation == "veto_or_remove_radio_name":
         return "radio_name" not in frame.slots
@@ -4102,8 +4115,9 @@ def _target_program_text() -> str:
             "  Mandatory cue checks when the corresponding visible slot keys are",
             "  present: non-podcast accepted intents containing a podcast cue;",
             "  slotless accepts containing visible room values such as kitchen,",
-            "  bedroom, living room, bathroom, room, or house; generic radio",
-            "  station phrases accepted as concrete `radio_name`; radio-name",
+            "  bedroom, living room, bathroom, room, or house; light color",
+            "  changes with a room cue accepted without `house_place`; generic",
+            "  radio station phrases accepted as concrete `radio_name`; radio-name",
             "  cue patterns such as `put on radio <name>` accepted without",
             "  `radio_name`; radio/music utterances accepted without a visible",
             "  media slot; calendar removes with date cues accepted without `date`;",
@@ -4168,9 +4182,10 @@ def _target_program_text() -> str:
             "missing visible slot cue.",
             "Concretely, add conservative checks for podcast cues accepted as a",
             "non-podcast intent, room values accepted without a location slot, and",
-            "joke cues accepted without `joke_type` when visible data supports",
-            "those slot keys. Also handle generic radio-station names, radio",
-            "name cues, radio music cues, calendar date cues, bare upcoming-events",
+            "light color changes accepted without `house_place`, plus joke cues",
+            "accepted without `joke_type` when visible data supports those slot",
+            "keys. Also handle generic radio-station names, radio name cues, radio",
+            "music cues, calendar date cues, bare upcoming-events",
             "intent boundaries, and spoken volume amounts when the related visible",
             "slot keys are present.",
             "When the cue value is directly parseable, prefer exact postprocess",

@@ -834,6 +834,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
     assert [item["id"] for item in payload["failed_checks"]] == [
         "non_podcast_podcast_cue",
         "slotless_radio_room_cue",
+        "iot_lightchange_room_cue",
         "play_radio_generic_station_name",
         "play_radio_missing_radio_name_cue",
         "play_radio_music_media_type_cue",
@@ -861,6 +862,8 @@ def postprocess_frame(utterance, frame, metadata):
     slots = frame.setdefault("slots", {})
     if intent == "play_radio" and "radio mango" in text:
         slots["radio_name"] = "radio mango"
+    if intent == "iot_hue_lightchange" and "kitchen" in text:
+        slots["house_place"] = "kitchen"
     if intent == "calendar_remove" and "today" in text:
         slots["date"] = "today"
     if intent == "general_joke" and "joke about birds" in text:
@@ -877,6 +880,8 @@ def accept_prediction(utterance, frame, metadata, default_accept):
     if intent != "play_podcasts" and "podcast" in text:
         return False
     if intent == "play_radio" and not slots and "kitchen" in text:
+        return False
+    if intent == "iot_hue_lightchange" and "kitchen" in text and "house_place" not in slots:
         return False
     if intent == "play_radio" and "radio station" in text and "radio_name" in slots:
         return False
@@ -903,7 +908,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
 
     assert payload["passes_gate"] is True
     assert payload["failed_checks"] == []
-    assert payload["probe_count"] == 12
+    assert payload["probe_count"] == 13
 
 
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:

@@ -1472,3 +1472,33 @@ Interpretation:
   `tell me a joke about birds`, `delete ... today`, and `to nineteen` into safe
   coverage, giving the target a chance to improve 10k objective while keeping
   wrong accepts at zero.
+
+Exact-repair live result:
+
+- Run: `runs/l2-real-agent-ratio40-slot-cue-probes-exact-repair-live-r1`.
+- Evidence class: `fixed_snapshot_research`.
+- Final visible validation: `29` accepted, `29` correct, `0` wrong; gate
+  passed.
+- Visible support passed: `29` correct accepts, required `10`.
+- Final train audit: `101` accepted, `101` correct, `0` wrong; safety passed.
+- Final visible cross-audit: `25` accepted, `25` correct, `0` wrong; gate
+  passed.
+- Slot-cue probes passed: `12/12`.
+- Private selection: `5` accepted, `5` correct, `0` wrong; gate passed.
+- Private promotion: `7` accepted, `6` correct, `1` wrong; gate failed.
+- `selection_decision.selected=true`, `adoption_decision.adopted=false`.
+
+Private promotion wrong accept:
+
+- `please change the color of the light in the bathroom` was accepted as
+  `iot_hue_lightchange {}`, but teacher required `house_place=bathroom`.
+
+Interpretation:
+
+- Exact-repair probes successfully preserved local visible coverage without
+  visible/train/cross-audit wrong accepts, but private promotion exposed the
+  same `house_place` cue family in a different intent.
+- The next implementation keeps the single cue-probe diagnostic and adds
+  `iot_lightchange_room_cue`, requiring exact `house_place` repair for
+  parseable light color room phrases instead of adding another broad threshold
+  or config rule.
