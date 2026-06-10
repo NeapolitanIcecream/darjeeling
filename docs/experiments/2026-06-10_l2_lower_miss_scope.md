@@ -79,3 +79,42 @@ diagnostics. The more important finding is that visible validation alone is too
 weak for local-search config adoption: cross-audit caught wrong accepts before
 private selection was consulted. This supports using cross-audit as a cheap
 visible safety veto whenever it is enabled.
+
+## Local-search current-config fix
+
+The first smoke also exposed that `current_visible_cross_audit` could be
+evaluated after Optuna had left `target/config.json` at the last trial. That
+made the current/best comparison noisy. The harness now restores the original
+target config before evaluating current cross-audit, then writes candidate
+configs only for reranked trials.
+
+Follow-up smoke:
+
+```bash
+uv run edge-mvp l2 target-evolve \
+  --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
+  --out-dir runs/l2-target-lower-miss-scope-veto-smoke-r2 \
+  --max-traces 3000 \
+  --mode local-search \
+  --budget-profile fixed-inner \
+  --target-scope lower_miss \
+  --rounds 1 \
+  --local-search-trials 4 \
+  --visible-cross-audit-folds 2 \
+  --local-search-cross-audit-top-k 1
+```
+
+Result after the fix:
+
+- `search.current_visible_cross_audit` now matches baseline cross-audit:
+  accepted `77`, correct `55`, wrong `22`, accepted accuracy
+  `0.7142857142857143`, gate `false`.
+- Best local-search visible validation still passes: accepted `8`, correct `8`,
+  wrong `0`, gate `true`.
+- Best visible cross-audit still fails: accepted `26`, correct `22`, wrong `4`,
+  accepted accuracy `0.8461538461538461`, gate `false`.
+- The candidate is still vetoed and not applied.
+
+This does not change the quality conclusion because the run is still a
+one-round `short_fixed_snapshot_probe`. It does make the local-search report
+internally consistent.

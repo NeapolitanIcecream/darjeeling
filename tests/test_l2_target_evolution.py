@@ -895,6 +895,69 @@ def test_l2_target_local_search_vetoes_cross_audit_failure(
     assert calls.count("visible_cross_audit") >= 2
 
 
+def test_l2_target_local_search_current_cross_audit_uses_original_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    target_dir = workspace / "target"
+    target_dir.mkdir(parents=True)
+    original_config = l2_target_evolution.L2StudentConfig(
+        accept_threshold=0.42,
+    ).model_dump(mode="json")
+    (target_dir / "config.json").write_text(
+        json.dumps(original_config),
+        encoding="utf-8",
+    )
+    cross_audit_thresholds: list[float] = []
+
+    def metric(split: str, config: dict) -> dict:
+        return {
+            "split": split,
+            "train_size": 10,
+            "validation_size": 10,
+            "accepted": 2,
+            "correct_accepts": 2,
+            "wrong_accepts": 0,
+            "vetoed_accepts": 0,
+            "coverage": 0.2,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+            "passes_gate": True,
+            "config": config,
+            "wrong_examples": [],
+            "veto_examples": [],
+            "near_miss_examples": [],
+        }
+
+    def fake_evaluate_target_workspace(**kwargs) -> dict:
+        config_path = workspace / "target" / "config.json"
+        config = (
+            json.loads(config_path.read_text(encoding="utf-8"))
+            if config_path.exists()
+            else l2_target_evolution.L2StudentConfig().model_dump(mode="json")
+        )
+        if kwargs["split"] == "visible_cross_audit":
+            cross_audit_thresholds.append(float(config["accept_threshold"]))
+        return metric(kwargs["split"], config)
+
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "evaluate_target_workspace",
+        fake_evaluate_target_workspace,
+    )
+
+    l2_target_evolution.run_local_target_search(
+        workspace_root=workspace,
+        trials=1,
+        cross_audit_folds=2,
+        cross_audit_top_k=1,
+    )
+
+    assert cross_audit_thresholds
+    assert cross_audit_thresholds[0] == 0.42
+
+
 def test_l2_target_evolution_respects_zero_agent_round_budget(tmp_path: Path) -> None:
     summary = run_l2_target_evolution(
         config=L2TargetEvolutionConfig(

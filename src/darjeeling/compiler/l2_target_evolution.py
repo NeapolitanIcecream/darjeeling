@@ -2414,6 +2414,7 @@ def run_local_target_search(
         current_cross_audit = None
         cross_audit_rerank_enabled = cross_audit_folds >= 2 and cross_audit_top_k > 0
         if cross_audit_rerank_enabled:
+            _restore_target_config_json(config_path, original_config_text)
             current_cross_audit = evaluate_target_workspace(
                 workspace_root=workspace_root,
                 split="visible_cross_audit",
