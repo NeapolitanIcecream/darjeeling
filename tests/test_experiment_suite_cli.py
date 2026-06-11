@@ -187,10 +187,10 @@ def test_l2_tune_cli_writes_optuna_report(
         json.dumps(
             {
                 "request_id": "r1",
-                "utterance": "play music",
-                "teacher_frame": {"intent": "music_play", "slots": {}},
+                "utterance": "beta request",
+                "teacher_frame": {"intent": "intent_beta", "slots": {}},
                 "chosen_layer": "L4",
-                "final_frame": {"intent": "music_play", "slots": {}},
+                "final_frame": {"intent": "intent_beta", "slots": {}},
                 "layer_results": [],
             }
         )

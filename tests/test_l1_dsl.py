@@ -6,34 +6,34 @@ from darjeeling.layers.l1_program_bank import ProgramRule, render_rule
 def test_l1_dsl_rule_matches_and_extracts_slots() -> None:
     rule = ProgramRule.model_validate(
         {
-            "rule_id": "alarm_set_001",
-            "description": "alarm commands with explicit time",
-            "condition": {
-                "and": [
-                    {"contains_any": ["alarm", "wake me"]},
-                    {
-                        "regex_extract": {
-                            "pattern": "(?:for|at) (?P<time>.+)$",
-                            "slot_map": {"time": "time"},
-                        }
-                    },
+            "rule_id": "intent_alpha_001",
+                "description": "alpha requests with explicit slot value",
+                "condition": {
+                    "and": [
+                        {"contains_any": ["alpha request", "alpha wake"]},
+                        {
+                            "regex_extract": {
+                                "pattern": "(?:for|at) (?P<slot_alpha>.+)$",
+                                "slot_map": {"slot_alpha": "slot_alpha"},
+                            }
+                        },
                 ]
             },
             "action": {
                 "accept": {
-                    "intent": "alarm_set",
+                    "intent": "intent_alpha",
                     "slots_from_regex": True,
                 }
             },
         }
     )
 
-    frame = rule.try_frame("Set an alarm for seven tomorrow morning")
+    frame = rule.try_frame("Alpha request for seven tomorrow morning")
 
     assert frame is not None
-    assert frame.intent == "alarm_set"
-    assert frame.slots == {"time": "seven tomorrow morning"}
-    assert "alarm_set_001" in render_rule(rule)
+    assert frame.intent == "intent_alpha"
+    assert frame.slots == {"slot_alpha": "seven tomorrow morning"}
+    assert "intent_alpha_001" in render_rule(rule)
 
 
 def test_l1_dsl_rejects_unknown_operator() -> None:
@@ -42,6 +42,6 @@ def test_l1_dsl_rejects_unknown_operator() -> None:
             {
                 "rule_id": "bad_001",
                 "condition": {"decision_tree": {"depth": 3}},
-                "action": {"accept": {"intent": "alarm_set"}},
+                "action": {"accept": {"intent": "intent_alpha"}},
             }
         )

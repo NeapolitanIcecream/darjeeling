@@ -15,49 +15,49 @@ from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teache
 def test_hard_buffer_prioritizes_wrong_accepts_without_gold_leakage(tmp_path: Path) -> None:
     wrong_accept = TraceRecord(
         request_id="wrong",
-        utterance="set alarm for seven",
-        gold_frame=Frame(intent="alarm_set", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        utterance="alpha request for seven",
+        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         chosen_layer="L2",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L2",
                 accepted=True,
-                frame=Frame(intent="music_play"),
+                frame=Frame(intent="intent_beta"),
                 latency_ms=12.0,
             )
         ],
     )
     fallback = TraceRecord(
         request_id="fallback",
-        utterance="weather tomorrow",
-        gold_frame=Frame(intent="weather_query", slots={"date": "gold-tomorrow"}),
-        teacher_frame=Frame(intent="weather_query", slots={"date": "tomorrow"}),
+        utterance="gamma tomorrow",
+        gold_frame=Frame(intent="intent_gamma", slots={"date": "gold-tomorrow"}),
+        teacher_frame=Frame(intent="intent_gamma", slots={"date": "tomorrow"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="weather_query", slots={"date": "tomorrow"}),
+        final_frame=Frame(intent="intent_gamma", slots={"date": "tomorrow"}),
         layer_results=[
             LayerResult(layer="L1", accepted=False, latency_ms=3.0),
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="weather_query", slots={"date": "tomorrow"}),
+                frame=Frame(intent="intent_gamma", slots={"date": "tomorrow"}),
                 latency_ms=900.0,
             ),
         ],
     )
     easy = TraceRecord(
         request_id="easy",
-        utterance="play jazz",
-        gold_frame=Frame(intent="music_play"),
-        teacher_frame=Frame(intent="music_play"),
+        utterance="beta request",
+        gold_frame=Frame(intent="intent_beta"),
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L2",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L2",
                 accepted=True,
-                frame=Frame(intent="music_play"),
+                frame=Frame(intent="intent_beta"),
                 latency_ms=5.0,
             )
         ],
@@ -95,10 +95,10 @@ def test_hard_buffer_merge_dedupes_by_highest_severity() -> None:
             [
                 TraceRecord(
                     request_id="same",
-                    utterance="play music",
-                    teacher_frame=Frame(intent="music_play"),
+                    utterance="beta request",
+                    teacher_frame=Frame(intent="intent_beta"),
                     chosen_layer="L4",
-                    final_frame=Frame(intent="music_play"),
+                    final_frame=Frame(intent="intent_beta"),
                     layer_results=[
                         LayerResult(layer="L4", accepted=True, latency_ms=1.0),
                     ],
@@ -111,15 +111,15 @@ def test_hard_buffer_merge_dedupes_by_highest_severity() -> None:
             [
                 TraceRecord(
                     request_id="same",
-                    utterance="play music",
-                    teacher_frame=Frame(intent="music_play"),
+                    utterance="beta request",
+                    teacher_frame=Frame(intent="intent_beta"),
                     chosen_layer="L2",
-                    final_frame=Frame(intent="alarm_set"),
+                    final_frame=Frame(intent="intent_alpha"),
                     layer_results=[
                         LayerResult(
                             layer="L2",
                             accepted=True,
-                            frame=Frame(intent="alarm_set"),
+                            frame=Frame(intent="intent_alpha"),
                             latency_ms=5.0,
                         ),
                     ],
@@ -141,10 +141,10 @@ def test_hard_buffer_visibility_filters_replay_only_cases() -> None:
             [
                 TraceRecord(
                     request_id="train",
-                    utterance="play music",
-                    teacher_frame=Frame(intent="music_play"),
+                    utterance="beta request",
+                    teacher_frame=Frame(intent="intent_beta"),
                     chosen_layer="L4",
-                    final_frame=Frame(intent="music_play"),
+                    final_frame=Frame(intent="intent_beta"),
                     layer_results=[LayerResult(layer="L4", accepted=True, latency_ms=900.0)],
                 )
             ]
@@ -156,10 +156,10 @@ def test_hard_buffer_visibility_filters_replay_only_cases() -> None:
             [
                 TraceRecord(
                     request_id="holdout",
-                    utterance="set alarm",
-                    teacher_frame=Frame(intent="alarm_set"),
+                    utterance="alpha request",
+                    teacher_frame=Frame(intent="intent_alpha"),
                     chosen_layer="L4",
-                    final_frame=Frame(intent="alarm_set"),
+                    final_frame=Frame(intent="intent_alpha"),
                     layer_results=[LayerResult(layer="L4", accepted=True, latency_ms=900.0)],
                 )
             ]

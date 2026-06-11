@@ -145,8 +145,8 @@ def test_experiment_preflight_passes_with_data_cache_and_l1_crate(tmp_path: Path
     (run_dir / "teacher_cache.jsonl").write_text(
         json.dumps(
             {
-                "utterance": "play music",
-                "teacher_frame": {"intent": "music_play", "slots": {}},
+                "utterance": "beta request",
+                "teacher_frame": {"intent": "intent_beta", "slots": {}},
             }
         )
         + "\n",

@@ -12,18 +12,18 @@ from darjeeling.settings import load_settings
 
 
 def _task_schema() -> TaskSchema:
-    return TaskSchema(intent_names=["alarm_set", "music_play"], slot_names=["time"])
+    return TaskSchema(intent_names=["intent_alpha", "intent_beta"], slot_names=["time"])
 
 
 def test_teacher_context_keeps_stable_prefix_when_utterance_changes() -> None:
     settings = load_settings()
     first = build_teacher_context(
-        utterance="play music",
+        utterance="beta request",
         task_schema=_task_schema(),
         settings=settings,
     )
     second = build_teacher_context(
-        utterance="set alarm for seven",
+        utterance="alpha request for seven",
         task_schema=_task_schema(),
         settings=settings,
     )
@@ -38,16 +38,16 @@ def test_teacher_context_keeps_stable_prefix_when_utterance_changes() -> None:
 def test_proposal_context_uses_teacher_visible_traces_only() -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="set alarm for seven",
-        gold_frame=Frame(intent="alarm_set", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        utterance="alpha request for seven",
+        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
                 latency_ms=1.0,
             )
         ],
@@ -69,4 +69,4 @@ def test_proposal_context_uses_teacher_visible_traces_only() -> None:
 
 def test_context_guard_rejects_gold_payloads() -> None:
     with pytest.raises(L4ContextError):
-        assert_no_forbidden_context({"gold_frame": {"intent": "alarm_set"}})
+        assert_no_forbidden_context({"gold_frame": {"intent": "intent_alpha"}})

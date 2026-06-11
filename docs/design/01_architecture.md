@@ -38,7 +38,7 @@ flowchart TD
 ## 不变量
 
 - 主 demo 不 mock teacher label、L1 native program、L2 student、L3 local SLM 或 replay。
-- MASSIVE gold label 只服务 evaluation/reporting。
+- Hidden gold labels only serve evaluation/reporting.
 - Router、compiler、L1 evolution agent、L2 training、L3 prompt optimization、guard training 均不能读取 gold label。
 - L4 可以生成或修改候选 artifact，但不能认证 artifact。
 - Replay/evaluator 是唯一 promotion authority。

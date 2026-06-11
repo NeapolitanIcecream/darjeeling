@@ -131,12 +131,26 @@ benchmark fallback schema used concrete application names when no processed
 dataset was available. That fallback should use neutral synthetic names because
 real task schema must come from runtime data or an adapter.
 
-Remaining known cleanup after this pass:
+## Design Pass: Shared Test Boundary
 
-- Many existing shared tests still use familiar application-looking fixture
-  names such as alarm, music, and weather. These are mostly test input data, but
-  replacing them with neutral fixture names would further reduce boundary
-  ambiguity.
+`AGENTS.md` treats shared tests as core, so tests need the same target boundary
+as runtime and compiler code. The policy is intentionally small:
+
+- Core/shared tests use neutral fixture schema and utterances such as
+  `intent_alpha`, `intent_beta`, `slot_alpha`, `alpha request`, and
+  `beta request`.
+- Adapter tests may mention their concrete dataset because they are testing the
+  adapter boundary itself.
+- Demo target tests may mention their concrete demo schema, but they must be
+  confined to explicitly demo-owned files or test cases and must not define core
+  defaults.
+- Experiment docs and archived patches may keep dataset-specific evidence.
+  Design docs for current architecture should use generic terms such as hidden
+  gold labels unless they are documenting an adapter.
+
+This avoids a fixture registry or plugin abstraction. The enforcement mechanism
+is a source scan in `tests/test_target_boundary.py` plus ordinary focused tests
+for adapter/demo behavior.
 
 ## Second Pass: Runtime Defaults
 

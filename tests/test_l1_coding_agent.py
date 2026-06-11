@@ -16,16 +16,16 @@ from darjeeling.settings import load_settings
 def _teacher_trace():
     trace = TraceRecord(
         request_id="r1",
-        utterance="set alarm for seven",
-        gold_frame=Frame(intent="alarm_set", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        utterance="alpha request for seven",
+        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
                 latency_ms=1.0,
             )
         ],
@@ -55,7 +55,7 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
     result = run_l1_coding_agent_job(
         config=L1CodingAgentJobConfig(
             mode="dry-run",
-            source_crate_dir=Path("native/l1_programbank"),
+            source_crate_dir=Path("native/l1_empty_programbank"),
             job_dir=tmp_path / "job",
             dry_run_patch=patch_path,
             run_validation=False,
@@ -80,7 +80,7 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
         (result.context_dir / "context_families.json").read_text(encoding="utf-8")
     )
     assert context_families["schema_version"] == "l1-context-families-v1"
-    assert context_families["families"][0]["family_id"] == "alarm_set|time"
+    assert context_families["families"][0]["family_id"] == "intent_alpha|time"
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l1-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"
@@ -110,7 +110,7 @@ def test_l1_coding_agent_adapter_respects_disabled_mode(tmp_path: Path) -> None:
     with pytest.raises(L1CodingAgentError):
         adapter.run_l1_job(
             job_dir=tmp_path / "job",
-            source_crate_dir=Path("native/l1_programbank"),
+            source_crate_dir=Path("native/l1_empty_programbank"),
             teacher_train=[_teacher_trace()],
             run_validation=False,
         )
@@ -143,7 +143,7 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
     result = run_l1_coding_agent_job(
         config=L1CodingAgentJobConfig(
             mode="codex-cli",
-            source_crate_dir=repo_root / "native/l1_programbank",
+            source_crate_dir=repo_root / "native/l1_empty_programbank",
             job_dir=Path("job"),
             codex_command=str(fake_codex),
             codex_model="test-model",
@@ -217,7 +217,7 @@ def test_l1_agent_session_uses_workspace_root_and_records_policy(
     result = run_l1_coding_agent_job(
         config=L1CodingAgentJobConfig(
             mode="agent-session",
-            source_crate_dir=repo_root / "native/l1_programbank",
+            source_crate_dir=repo_root / "native/l1_empty_programbank",
             job_dir=Path("job"),
             codex_command=str(fake_codex),
             codex_model=None,
@@ -280,7 +280,7 @@ def test_l1_agent_session_rejects_protected_workspace_edits(
     result = run_l1_coding_agent_job(
         config=L1CodingAgentJobConfig(
             mode="agent-session",
-            source_crate_dir=repo_root / "native/l1_programbank",
+            source_crate_dir=repo_root / "native/l1_empty_programbank",
             job_dir=Path("job"),
             codex_command=str(fake_codex),
             codex_model=None,

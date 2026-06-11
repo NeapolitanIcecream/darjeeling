@@ -21,7 +21,7 @@ from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teache
 class FakeL3Backend:
     def generate(self, prompt: str, config: LocalSLMConfig) -> str:
         assert "strict JSON" in prompt
-        return '{"intent": "music_play", "slots": {}, "confidence": 0.93}'
+        return '{"intent": "intent_beta", "slots": {}, "confidence": 0.93}'
 
     def status(self) -> dict:
         return {"model_name": "fake", "actual_device": "fake-device", "loaded": True}
@@ -30,16 +30,16 @@ class FakeL3Backend:
 def test_l3_prompt_artifact_from_proposal_expands_teacher_visible_examples() -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="set alarm for seven",
-        gold_frame=Frame(intent="alarm_set", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        utterance="alpha request for seven",
+        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
                 latency_ms=1.0,
             )
         ],
@@ -60,9 +60,9 @@ def test_l3_prompt_artifact_from_proposal_expands_teacher_visible_examples() -> 
     assert artifact.few_shot_examples == [
         {
             "trace_id": "r1",
-            "utterance": "set alarm for seven",
+            "utterance": "alpha request for seven",
             "frame": {
-                "intent": "alarm_set",
+                "intent": "intent_alpha",
                 "slots": {"time": "seven"},
                 "is_abstain": False,
             },
@@ -85,9 +85,9 @@ def test_l3_prompt_artifact_rejects_unknown_few_shot_trace_id() -> None:
 
 def test_l3_guard_calibration_selects_safe_confidence_threshold() -> None:
     traces = [
-        _l3_shadow_trace("r1", confidence=0.9, predicted=Frame(intent="music_play")),
-        _l3_shadow_trace("r2", confidence=0.8, predicted=Frame(intent="alarm_set")),
-        _l3_shadow_trace("r3", confidence=0.4, predicted=Frame(intent="music_play")),
+        _l3_shadow_trace("r1", confidence=0.9, predicted=Frame(intent="intent_beta")),
+        _l3_shadow_trace("r2", confidence=0.8, predicted=Frame(intent="intent_alpha")),
+        _l3_shadow_trace("r3", confidence=0.4, predicted=Frame(intent="intent_beta")),
     ]
 
     result = calibrate_l3_confidence_threshold(traces, max_wrong_accept_rate=0.0)
@@ -102,10 +102,10 @@ def test_l3_guard_calibration_selects_safe_confidence_threshold() -> None:
 def test_l3_prompt_replay_scores_generated_shadow_outputs() -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="play jazz",
-        teacher_frame=Frame(intent="music_play"),
+        utterance="beta request",
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[],
     )
 
@@ -117,7 +117,7 @@ def test_l3_prompt_replay_scores_generated_shadow_outputs() -> None:
     payload = replay_l3_prompt_artifact(
         prompt_artifact=prompt_artifact,
         traces=[trace],
-        task_schema=TaskSchema(intent_names=["music_play"], slot_names=[]),
+        task_schema=TaskSchema(intent_names=["intent_beta"], slot_names=[]),
         config=LocalSLMConfig(mode="shadow", confidence_threshold=0.8),
         backend=FakeL3Backend(),
     )
@@ -131,7 +131,7 @@ def test_l3_prompt_replay_scores_generated_shadow_outputs() -> None:
     assert payload["correct_accept_count"] == 1
     assert payload["accepted_accuracy"] == 1.0
     assert payload["wrong_accept_rate"] == 0.0
-    assert payload["request_results"][0]["predicted_frame"]["intent"] == "music_play"
+    assert payload["request_results"][0]["predicted_frame"]["intent"] == "intent_beta"
 
 
 def test_l3_prompt_evolution_agent_session_replays_private_gates(
@@ -150,7 +150,7 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
                 "prompt = sys.stdin.read()",
                 "payload = {",
                 "  'prompt_version': 'candidate-v1',",
-                "  'system_prompt': 'Return strict JSON for music requests.',",
+                "  'system_prompt': 'Return strict JSON for beta requests.',",
                 "  'confidence_threshold': 0.8,",
                 "  'few_shot_examples': []",
                 "}",
@@ -173,8 +173,8 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
             codex_model=None,
             prompt_version="candidate-v1",
         ),
-        traces=_music_traces(10),
-        task_schema=TaskSchema(intent_names=["music_play"], slot_names=[]),
+        traces=_beta_traces(10),
+        task_schema=TaskSchema(intent_names=["intent_beta"], slot_names=[]),
         local_slm_config=LocalSLMConfig(mode="shadow", confidence_threshold=0.8),
         backend=FakeL3Backend(),
     )
@@ -275,8 +275,8 @@ def test_l3_prompt_evolution_agent_session_rejects_protected_context_edits(
             codex_model=None,
             skip_replay=True,
         ),
-        traces=_music_traces(10),
-        task_schema=TaskSchema(intent_names=["music_play"], slot_names=[]),
+        traces=_beta_traces(10),
+        task_schema=TaskSchema(intent_names=["intent_beta"], slot_names=[]),
         local_slm_config=LocalSLMConfig(mode="shadow"),
     )
     commands = [
@@ -301,9 +301,9 @@ def _l3_shadow_trace(
     return TraceRecord(
         request_id=request_id,
         utterance=f"{request_id} utterance",
-        teacher_frame=Frame(intent="music_play"),
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L3",
@@ -321,14 +321,14 @@ def _l3_shadow_trace(
     )
 
 
-def _music_traces(count: int) -> list[TraceRecord]:
+def _beta_traces(count: int) -> list[TraceRecord]:
     return [
         TraceRecord(
             request_id=f"m{index}",
-            utterance=f"play music {index}",
-            teacher_frame=Frame(intent="music_play"),
+            utterance=f"beta request {index}",
+            teacher_frame=Frame(intent="intent_beta"),
             chosen_layer="L4",
-            final_frame=Frame(intent="music_play"),
+            final_frame=Frame(intent="intent_beta"),
             layer_results=[],
         )
         for index in range(count)

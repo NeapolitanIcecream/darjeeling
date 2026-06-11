@@ -21,23 +21,23 @@ def test_l2_guard_accepts_at_threshold() -> None:
 def test_l2_guard_optimizer_prefers_highest_safe_coverage_threshold() -> None:
     predictions = {
         "correct-high": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.95,
         ),
         "correct-mid": SimpleNamespace(
-            frame=Frame(intent="alarm_set"),
+            frame=Frame(intent="intent_alpha"),
             guard_probability=0.82,
         ),
         "wrong-low": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.72,
         ),
     }
     bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
     traces = [
-        _teacher_trace("r1", "correct-high", "music_play"),
-        _teacher_trace("r2", "correct-mid", "alarm_set"),
-        _teacher_trace("r3", "wrong-low", "alarm_set"),
+        _teacher_trace("r1", "correct-high", "intent_beta"),
+        _teacher_trace("r2", "correct-mid", "intent_alpha"),
+        _teacher_trace("r3", "wrong-low", "intent_alpha"),
     ]
 
     selection = select_l2_accept_threshold(
@@ -56,18 +56,18 @@ def test_l2_guard_optimizer_prefers_highest_safe_coverage_threshold() -> None:
 def test_l2_guard_optimizer_uses_observed_probabilities_between_grid_points() -> None:
     predictions = {
         "correct": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.81,
         ),
         "wrong": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.80,
         ),
     }
     bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
     traces = [
-        _teacher_trace("r1", "correct", "music_play"),
-        _teacher_trace("r2", "wrong", "alarm_set"),
+        _teacher_trace("r1", "correct", "intent_beta"),
+        _teacher_trace("r2", "wrong", "intent_alpha"),
     ]
 
     selection = select_l2_accept_threshold(
@@ -86,23 +86,23 @@ def test_l2_guard_optimizer_uses_observed_probabilities_between_grid_points() ->
 def test_l2_guard_optimizer_enforces_minimum_accepted_accuracy() -> None:
     predictions = {
         "correct-high": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.90,
         ),
         "wrong-mid": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.80,
         ),
         "correct-low": SimpleNamespace(
-            frame=Frame(intent="alarm_set"),
+            frame=Frame(intent="intent_alpha"),
             guard_probability=0.10,
         ),
     }
     bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
     traces = [
-        _teacher_trace("r1", "correct-high", "music_play"),
-        _teacher_trace("r2", "wrong-mid", "alarm_set"),
-        _teacher_trace("r3", "correct-low", "alarm_set"),
+        _teacher_trace("r1", "correct-high", "intent_beta"),
+        _teacher_trace("r2", "wrong-mid", "intent_alpha"),
+        _teacher_trace("r3", "correct-low", "intent_alpha"),
     ]
 
     selection = select_l2_accept_threshold(
@@ -122,23 +122,23 @@ def test_l2_guard_optimizer_enforces_minimum_accepted_accuracy() -> None:
 def test_l2_guard_optimizer_prefers_zero_observed_wrong_accepts() -> None:
     predictions = {
         "correct-high": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.90,
         ),
         "wrong-mid": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.80,
         ),
         "correct-low": SimpleNamespace(
-            frame=Frame(intent="alarm_set"),
+            frame=Frame(intent="intent_alpha"),
             guard_probability=0.70,
         ),
     }
     bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
     traces = [
-        _teacher_trace("r1", "correct-high", "music_play"),
-        _teacher_trace("r2", "wrong-mid", "alarm_set"),
-        _teacher_trace("r3", "correct-low", "alarm_set"),
+        _teacher_trace("r1", "correct-high", "intent_beta"),
+        _teacher_trace("r2", "wrong-mid", "intent_alpha"),
+        _teacher_trace("r3", "correct-low", "intent_alpha"),
     ]
 
     selection = select_l2_accept_threshold(
@@ -157,7 +157,7 @@ def test_l2_guard_optimizer_prefers_zero_observed_wrong_accepts() -> None:
 def test_l2_guard_optimizer_predicts_once_per_labeled_trace() -> None:
     predictions = {
         f"utt-{index}": SimpleNamespace(
-            frame=Frame(intent="music_play" if index % 2 == 0 else "alarm_set"),
+            frame=Frame(intent="intent_beta" if index % 2 == 0 else "intent_alpha"),
             guard_probability=0.50 + index / 100,
         )
         for index in range(10)
@@ -173,7 +173,7 @@ def test_l2_guard_optimizer_predicts_once_per_labeled_trace() -> None:
         _teacher_trace(
             f"r{index}",
             f"utt-{index}",
-            "music_play" if index % 2 == 0 else "alarm_set",
+            "intent_beta" if index % 2 == 0 else "intent_alpha",
         )
         for index in range(10)
     ]
@@ -192,18 +192,18 @@ def test_l2_guard_optimizer_predicts_once_per_labeled_trace() -> None:
 def test_l2_unguarded_evaluation_reports_threshold_zero_accuracy() -> None:
     predictions = {
         "correct": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.10,
         ),
         "wrong": SimpleNamespace(
-            frame=Frame(intent="music_play"),
+            frame=Frame(intent="intent_beta"),
             guard_probability=0.05,
         ),
     }
     bundle = SimpleNamespace(predict=lambda utterance: predictions[utterance])
     traces = [
-        _teacher_trace("r1", "correct", "music_play"),
-        _teacher_trace("r2", "wrong", "alarm_set"),
+        _teacher_trace("r1", "correct", "intent_beta"),
+        _teacher_trace("r2", "wrong", "intent_alpha"),
     ]
 
     evaluation = evaluate_l2_unguarded(bundle, traces)

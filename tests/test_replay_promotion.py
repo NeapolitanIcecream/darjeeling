@@ -193,15 +193,15 @@ def test_offline_replay_counts_recorded_l3_accepts_and_wrong_accepts() -> None:
     traces = [
         TeacherTrace(
             request_id="r1",
-            utterance="play music",
-            teacher_frame=Frame(intent="music_play"),
+            utterance="beta request",
+            teacher_frame=Frame(intent="intent_beta"),
             chosen_layer="L3",
-            final_frame=Frame(intent="music_play"),
+            final_frame=Frame(intent="intent_beta"),
             layer_results=[
                 LayerResult(
                     layer="L3",
                     accepted=True,
-                    frame=Frame(intent="music_play"),
+                    frame=Frame(intent="intent_beta"),
                     latency_ms=120.0,
                 )
             ],
@@ -209,15 +209,15 @@ def test_offline_replay_counts_recorded_l3_accepts_and_wrong_accepts() -> None:
         ),
         TeacherTrace(
             request_id="r2",
-            utterance="set alarm",
-            teacher_frame=Frame(intent="alarm_set"),
+            utterance="alpha request",
+            teacher_frame=Frame(intent="intent_alpha"),
             chosen_layer="L3",
-            final_frame=Frame(intent="music_play"),
+            final_frame=Frame(intent="intent_beta"),
             layer_results=[
                 LayerResult(
                     layer="L3",
                     accepted=True,
-                    frame=Frame(intent="music_play"),
+                    frame=Frame(intent="intent_beta"),
                     latency_ms=120.0,
                 )
             ],
@@ -257,16 +257,16 @@ def test_offline_replay_uses_artifact_l1_worker_timeout(monkeypatch) -> None:
             TeacherTrace(
                 request_id="r1",
                 utterance="unknown request",
-                teacher_frame=Frame(intent="music_play"),
+                teacher_frame=Frame(intent="intent_beta"),
                 chosen_layer="L4",
-                final_frame=Frame(intent="music_play"),
+                final_frame=Frame(intent="intent_beta"),
                 layer_results=[],
                 timestamp="2026-06-08T00:00:00Z",
             )
         ],
         OfflineArtifactSet(
             l0_cache={},
-            l1_crate_dir=Path("native/l1_programbank"),
+            l1_crate_dir=Path("native/l1_empty_programbank"),
             l1_worker_timeout_s=12.5,
         ),
     )
@@ -281,9 +281,9 @@ def test_offline_replay_uses_trace_l4_usage_for_cost() -> None:
             TeacherTrace(
                 request_id="r1",
                 utterance="unknown request",
-                teacher_frame=Frame(intent="music_play"),
+                teacher_frame=Frame(intent="intent_beta"),
                 chosen_layer="L4",
-                final_frame=Frame(intent="music_play"),
+                final_frame=Frame(intent="intent_beta"),
                 layer_results=[],
                 l4_usage={"prompt_tokens": 1_000_000, "completion_tokens": 500_000},
                 timestamp="2026-06-08T00:00:00Z",

@@ -27,28 +27,28 @@ from darjeeling.schemas import Frame
 def _examples() -> list[L2TrainingExample]:
     return [
         L2TrainingExample(
-            utterance="set an alarm for seven",
-            teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+            utterance="alpha request for seven",
+            teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         ),
         L2TrainingExample(
-            utterance="wake me at eight",
-            teacher_frame=Frame(intent="alarm_set", slots={"time": "eight"}),
+            utterance="alpha at eight",
+            teacher_frame=Frame(intent="intent_alpha", slots={"time": "eight"}),
         ),
         L2TrainingExample(
-            utterance="alarm at nine tomorrow",
-            teacher_frame=Frame(intent="alarm_set", slots={"time": "nine tomorrow"}),
+            utterance="alpha at nine tomorrow",
+            teacher_frame=Frame(intent="intent_alpha", slots={"time": "nine tomorrow"}),
         ),
         L2TrainingExample(
-            utterance="play some jazz",
-            teacher_frame=Frame(intent="music_play"),
+            utterance="beta sample request",
+            teacher_frame=Frame(intent="intent_beta"),
         ),
         L2TrainingExample(
-            utterance="play music",
-            teacher_frame=Frame(intent="music_play"),
+            utterance="beta request",
+            teacher_frame=Frame(intent="intent_beta"),
         ),
         L2TrainingExample(
-            utterance="start my playlist",
-            teacher_frame=Frame(intent="music_play"),
+            utterance="beta alternate request",
+            teacher_frame=Frame(intent="intent_beta"),
         ),
     ]
 
@@ -59,9 +59,9 @@ def test_l2_student_trains_from_teacher_frames_and_predicts_intent() -> None:
         L2StudentConfig(accept_threshold=0.0, min_examples=4),
     )
 
-    prediction = bundle.predict("set alarm at six")
+    prediction = bundle.predict("alpha request at six")
 
-    assert prediction.frame.intent == "alarm_set"
+    assert prediction.frame.intent == "intent_alpha"
     assert 0.0 <= prediction.guard_probability <= 1.0
     feature_union = bundle.intent_pipeline.named_steps["features"]
     assert [name for name, _transformer in feature_union.transformer_list] == ["word", "char"]
@@ -78,10 +78,10 @@ def test_l2_retrieval_frame_source_returns_nearest_teacher_frame() -> None:
         ),
     )
 
-    prediction = bundle.predict("please alarm at nine tomorrow")
+    prediction = bundle.predict("please alpha at nine tomorrow")
 
     assert prediction.frame == Frame(
-        intent="alarm_set",
+        intent="intent_alpha",
         slots={"time": "nine tomorrow"},
     )
     assert prediction.frame_source == "retrieval"
@@ -91,7 +91,7 @@ def test_l2_retrieval_frame_source_returns_nearest_teacher_frame() -> None:
 
 def test_l2_retrieval_frame_source_requires_intent_agreement() -> None:
     class FakeIntentPipeline:
-        classes_ = ["music_play", "alarm_set"]
+        classes_ = ["intent_beta", "intent_alpha"]
 
         def predict_proba(self, utterances):
             return np.asarray([[0.95, 0.05] for _utterance in utterances])
@@ -99,7 +99,7 @@ def test_l2_retrieval_frame_source_requires_intent_agreement() -> None:
     class DisagreeingFramePrototypeIndex:
         def nearest(self, intent_pipeline, utterance):
             return FrameRetrievalResult(
-                frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
                 nearest_similarity=0.91,
                 margin=0.32,
             )
@@ -114,10 +114,10 @@ def test_l2_retrieval_frame_source_requires_intent_agreement() -> None:
 
     prediction = bundle.predict("play something")
 
-    assert prediction.frame == Frame(intent="music_play", slots={})
+    assert prediction.frame == Frame(intent="intent_beta", slots={})
     assert prediction.frame_source == "student"
     assert prediction.retrieval_frame == Frame(
-        intent="alarm_set",
+        intent="intent_alpha",
         slots={"time": "seven"},
     )
     assert prediction.retrieval_intent_matches_student == 0.0
@@ -134,10 +134,10 @@ def test_l2_retrieval_does_not_return_exact_self_neighbor() -> None:
         ),
     )
 
-    prediction = bundle.predict("alarm at nine tomorrow")
+    prediction = bundle.predict("alpha at nine tomorrow")
 
     assert prediction.frame != Frame(
-        intent="alarm_set",
+        intent="intent_alpha",
         slots={"time": "nine tomorrow"},
     )
     assert prediction.retrieval_frame == prediction.frame
@@ -156,11 +156,11 @@ def test_l2_student_trains_mlp_intent_family_and_reports_it() -> None:
     )
     layer = L2StudentLayer(bundle)
 
-    result = layer.try_answer("play music")
+    result = layer.try_answer("beta request")
 
     assert result.accepted
     assert result.metadata["intent_model"] == "mlp"
-    assert result.metadata["predicted_frame"]["intent"] == "music_play"
+    assert result.metadata["predicted_frame"]["intent"] == "intent_beta"
 
 
 def test_token_slot_tagger_learns_teacher_slot_spans() -> None:
@@ -170,7 +170,7 @@ def test_token_slot_tagger_learns_teacher_slot_spans() -> None:
     )
 
     assert tagger is not None
-    prediction = tagger.predict("alarm at nine tomorrow")
+    prediction = tagger.predict("alpha at nine tomorrow")
 
     assert prediction.model_name == "token_sgd"
     assert prediction.slots == {"time": "nine tomorrow"}
@@ -198,9 +198,9 @@ def test_slot_alignment_and_bio_reconstruction() -> None:
 def test_l2_filters_predicted_slots_by_intent_schema() -> None:
     slots_by_intent = slots_by_intent_from_examples(_examples())
 
-    assert slots_by_intent["alarm_set"] == ("time",)
+    assert slots_by_intent["intent_alpha"] == ("time",)
     assert filter_slots_for_intent(
-        "music_play",
+        "intent_beta",
         {"time": "seven", "playlist_name": "jazz"},
         slots_by_intent,
     ) == {}
@@ -283,7 +283,7 @@ def test_l2_slot_fallback_extracts_list_name_before_list_marker() -> None:
 
 def test_l2_bundle_drops_slots_not_seen_for_predicted_intent() -> None:
     class FakeIntentPipeline:
-        classes_ = ["music_play", "alarm_set"]
+        classes_ = ["intent_beta", "intent_alpha"]
 
         def predict_proba(self, utterances):
             return [[0.95, 0.05] for _utterance in utterances]
@@ -297,12 +297,12 @@ def test_l2_bundle_drops_slots_not_seen_for_predicted_intent() -> None:
         slot_tagger=FakeSlotTagger(),
         guard_model=ConstantGuard(1.0),
         config=L2StudentConfig(accept_threshold=0.0),
-        slots_by_intent={"music_play": (), "alarm_set": ("time",)},
+        slots_by_intent={"intent_beta": (), "intent_alpha": ("time",)},
     )
 
-    prediction = bundle.predict("play music at seven")
+    prediction = bundle.predict("beta request at seven")
 
-    assert prediction.frame == Frame(intent="music_play", slots={})
+    assert prediction.frame == Frame(intent="intent_beta", slots={})
 
 
 def test_l2_guard_training_labels_postprocessed_frames() -> None:
@@ -337,12 +337,12 @@ def test_l2_guard_training_labels_postprocessed_frames() -> None:
 
 def test_intent_calibration_index_scores_predicted_intent_reliability() -> None:
     class FakeIntentPipeline:
-        classes_ = ["calendar_query", "play_music"]
+        classes_ = ["intent_delta", "play_beta"]
 
         def predict_proba(self, utterances):
             rows = []
             for utterance in utterances:
-                if "calendar" in utterance:
+                if "delta" in utterance:
                     rows.append([0.9, 0.1])
                 else:
                     rows.append([0.1, 0.9])
@@ -350,20 +350,20 @@ def test_intent_calibration_index_scores_predicted_intent_reliability() -> None:
 
     examples = [
         L2TrainingExample(
-            utterance="calendar please",
-            teacher_frame=Frame(intent="calendar_query"),
+            utterance="delta please",
+            teacher_frame=Frame(intent="intent_delta"),
         ),
         L2TrainingExample(
-            utterance="calendar list",
-            teacher_frame=Frame(intent="calendar_query"),
+            utterance="delta list",
+            teacher_frame=Frame(intent="intent_delta"),
         ),
         L2TrainingExample(
-            utterance="play jazz",
-            teacher_frame=Frame(intent="play_music", slots={"music_descriptor": "jazz"}),
+            utterance="beta request",
+            teacher_frame=Frame(intent="play_beta", slots={"beta_descriptor": "jazz"}),
         ),
         L2TrainingExample(
             utterance="play queen",
-            teacher_frame=Frame(intent="play_music", slots={"artist_name": "queen"}),
+            teacher_frame=Frame(intent="play_beta", slots={"artist_name": "queen"}),
         ),
     ]
 
@@ -373,13 +373,13 @@ def test_intent_calibration_index_scores_predicted_intent_reliability() -> None:
         examples=examples,
         slots_by_intent=slots_by_intent_from_examples(examples),
     )
-    calendar_score = calibration.score("calendar_query", {})
-    music_score = calibration.score("play_music", {})
+    delta_score = calibration.score("intent_delta", {})
+    beta_score = calibration.score("play_beta", {})
 
-    assert calendar_score.predicted_intent_frame_accuracy == 1.0
-    assert music_score.predicted_intent_frame_accuracy == 0.0
-    assert music_score.predicted_intent_intent_accuracy == 1.0
-    assert music_score.predicted_signature_frame_accuracy == 0.0
+    assert delta_score.predicted_intent_frame_accuracy == 1.0
+    assert beta_score.predicted_intent_frame_accuracy == 0.0
+    assert beta_score.predicted_intent_intent_accuracy == 1.0
+    assert beta_score.predicted_signature_frame_accuracy == 0.0
 
 
 def test_l2_student_layer_uses_guard_threshold() -> None:
@@ -389,7 +389,7 @@ def test_l2_student_layer_uses_guard_threshold() -> None:
     )
     layer = L2StudentLayer(bundle)
 
-    result = layer.try_answer("play music")
+    result = layer.try_answer("beta request")
 
     assert result.layer == "L2"
     assert result.accepted
@@ -405,7 +405,7 @@ def test_l2_student_layer_reports_intent_support_metadata() -> None:
     )
     layer = L2StudentLayer(bundle)
 
-    result = layer.try_answer("wake me at eight")
+    result = layer.try_answer("alpha at eight")
 
     assert result.metadata["nearest_similarity"] > 0.0
     assert result.metadata["predicted_intent_similarity"] > 0.0
@@ -418,7 +418,7 @@ def test_l2_student_layer_reports_intent_support_metadata() -> None:
 
 def test_l2_bundle_keeps_legacy_five_feature_guard_compatible() -> None:
     class FakeIntentPipeline:
-        classes_ = ["music_play", "alarm_set"]
+        classes_ = ["intent_beta", "intent_alpha"]
 
         def predict_proba(self, utterances):
             return [[0.95, 0.05] for _utterance in utterances]
@@ -437,7 +437,7 @@ def test_l2_bundle_keeps_legacy_five_feature_guard_compatible() -> None:
         config=L2StudentConfig(accept_threshold=0.0),
     )
 
-    prediction = bundle.predict("play music")
+    prediction = bundle.predict("beta request")
 
     assert prediction.guard_probability == 1.0
 
@@ -449,14 +449,14 @@ def test_l2_student_layer_runtime_disabled_still_reports_prediction() -> None:
     )
     layer = L2StudentLayer(bundle)
 
-    result = layer.try_answer("play music")
+    result = layer.try_answer("beta request")
 
     assert result.layer == "L2"
     assert not result.accepted
     assert result.frame is None
     assert result.reason == "runtime disabled"
     assert result.metadata["runtime_enabled"] is False
-    assert result.metadata["predicted_frame"]["intent"] == "music_play"
+    assert result.metadata["predicted_frame"]["intent"] == "intent_beta"
 
 
 def test_l2_student_bundle_round_trips_with_joblib(tmp_path: Path) -> None:
@@ -469,7 +469,7 @@ def test_l2_student_bundle_round_trips_with_joblib(tmp_path: Path) -> None:
     bundle.save(path)
     loaded = L2StudentBundle.load(path)
 
-    assert loaded.predict("play jazz").frame.intent == "music_play"
-    assert loaded.predict("please alarm at nine tomorrow").frame.slots == {
+    assert loaded.predict("beta request").frame.intent == "intent_beta"
+    assert loaded.predict("please alpha at nine tomorrow").frame.slots == {
         "time": "nine tomorrow"
     }

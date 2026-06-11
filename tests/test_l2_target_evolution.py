@@ -121,9 +121,9 @@ def _slot_cue_probe_workspace(tmp_path: Path, target_code: str) -> Path:
 
 def _traces() -> list[TraceRecord]:
     return [
-        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
         if index % 2 == 0
-        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
         for index in range(12)
     ]
 
@@ -484,25 +484,25 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
         "request_id": "visible-risk-2",
         "utterance": "play the morning show in the kitchen",
         "teacher_frame": {
-            "intent": "play_radio",
-            "slots": {"house_place": "kitchen"},
+            "intent": "intent_eta",
+            "slots": {"slot_theta": "kitchen"},
         },
-        "predicted_frame": {"intent": "play_radio", "slots": {}},
+        "predicted_frame": {"intent": "intent_eta", "slots": {}},
         "guard_probability": 0.995,
     }
     intent_confusion_example = {
         "request_id": "visible-risk-3",
         "utterance": "play the newest science podcast",
         "teacher_frame": {
-            "intent": "play_podcasts",
-            "slots": {"podcast_name": "science"},
+            "intent": "intent_theta",
+            "slots": {"slot_iota": "science"},
         },
-        "predicted_frame": {"intent": "play_radio", "slots": {}},
+        "predicted_frame": {"intent": "intent_eta", "slots": {}},
         "guard_probability": 0.94,
     }
     family_stats = {
         "coverage_opportunity": {
-            "teacher_intent": "calendar_query",
+            "teacher_intent": "intent_delta",
             "total": 20,
             "accepted_correct": 0,
             "accepted_wrong": 0,
@@ -511,7 +511,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 5,
-            "predicted_intents": {"calendar_query": 20},
+            "predicted_intents": {"intent_delta": 20},
             "examples": {
                 "accepted_wrong": [],
                 "rejected_correct": [],
@@ -541,7 +541,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             },
         },
         "high_guard_slot_risk": {
-            "teacher_intent": "play_radio",
+            "teacher_intent": "intent_eta",
             "total": 2,
             "accepted_correct": 0,
             "accepted_wrong": 0,
@@ -550,10 +550,10 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 1,
-            "missing_slot_keys": {"house_place": 1},
+            "missing_slot_keys": {"slot_theta": 1},
             "extra_slot_keys": {},
             "changed_slot_keys": {},
-            "predicted_intents": {"play_radio": 2},
+            "predicted_intents": {"intent_eta": 2},
             "examples": {
                 "accepted_wrong": [],
                 "rejected_correct": [],
@@ -562,7 +562,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             },
         },
         "intent_confusion_risk": {
-            "teacher_intent": "play_podcasts",
+            "teacher_intent": "intent_theta",
             "total": 3,
             "accepted_correct": 0,
             "accepted_wrong": 0,
@@ -571,11 +571,11 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 0,
-            "predicted_intents": {"play_radio": 3},
+            "predicted_intents": {"intent_eta": 3},
             "intent_confusions": {
-                "play_radio": {
-                    "teacher_intent": "play_podcasts",
-                    "predicted_intent": "play_radio",
+                "intent_eta": {
+                    "teacher_intent": "intent_theta",
+                    "predicted_intent": "intent_eta",
                     "total": 3,
                     "default_accepts": 1,
                     "accepted_wrong": 0,
@@ -608,7 +608,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
     assert safety_backlog["items"][0]["wrong_examples"] == [risky_example]
     assert "postprocess" in safety_backlog["items"][0]["recommended_action"]
     assert all(
-        item["teacher_intent"] != "calendar_query"
+        item["teacher_intent"] != "intent_delta"
         for item in safety_backlog["items"]
     )
     slot_risk_backlog = payload["slot_risk_backlog"]
@@ -617,19 +617,19 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
         "review_visible_slot_mismatches_after_accepted_wrong_backlog"
     )
     assert [item["teacher_intent"] for item in slot_risk_backlog["items"]] == [
-        "calendar_query",
+        "intent_delta",
         "general_quirky",
-        "play_radio",
+        "intent_eta",
     ]
     assert slot_risk_backlog["items"][0]["intent_correct_slot_wrong"] == 5
     assert slot_risk_backlog["items"][1]["slot_mismatch_examples"] == [risky_example]
     assert slot_risk_backlog["high_guard_item_limit"] == 8
-    assert slot_risk_backlog["high_guard_items"][0]["teacher_intent"] == "play_radio"
+    assert slot_risk_backlog["high_guard_items"][0]["teacher_intent"] == "intent_eta"
     assert slot_risk_backlog["high_guard_items"][0]["slot_mismatch_examples"] == [
         high_guard_slot_example,
     ]
     assert slot_risk_backlog["high_guard_items"][0]["missing_slot_keys"] == [
-        {"slot_key": "house_place", "count": 1},
+        {"slot_key": "slot_theta", "count": 1},
     ]
     assert slot_risk_backlog["items"][1]["extra_slot_keys"] == [
         {"slot_key": "date", "count": 1},
@@ -639,8 +639,8 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
     assert intent_confusion_backlog["schema_version"] == (
         "l2-target-intent-confusion-backlog-v1"
     )
-    assert intent_confusion_backlog["items"][0]["teacher_intent"] == "play_podcasts"
-    assert intent_confusion_backlog["items"][0]["predicted_intent"] == "play_radio"
+    assert intent_confusion_backlog["items"][0]["teacher_intent"] == "intent_theta"
+    assert intent_confusion_backlog["items"][0]["predicted_intent"] == "intent_eta"
     assert intent_confusion_backlog["items"][0]["examples"] == [
         intent_confusion_example,
     ]
@@ -649,7 +649,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
 def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> None:
     family_stats = {
         "accepted_wrong_risk": {
-            "teacher_intent": "email_query",
+            "teacher_intent": "intent_iota",
             "total": 2,
             "accepted_correct": 0,
             "accepted_wrong": 1,
@@ -658,7 +658,7 @@ def test_l2_target_private_holdout_safety_backlog_marks_outer_visibility() -> No
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 1,
-            "predicted_intents": {"email_query": 2},
+            "predicted_intents": {"intent_iota": 2},
             "examples": {
                 "accepted_wrong": [],
                 "rejected_correct": [],
@@ -692,18 +692,18 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
                 1,
                 utterance="turn off the kitchen lights",
                 intent="iot_hue_lightoff",
-                slots={"house_place": "kitchen"},
+                slots={"slot_theta": "kitchen"},
             ),
             _trace_with_utterance(
                 2,
                 utterance="start vacuuming the bathroom",
                 intent="iot_cleaning",
-                slots={"house_place": "bathroom"},
+                slots={"slot_theta": "bathroom"},
             ),
             _trace_with_utterance(
                 3,
-                utterance="what is the weather in paris",
-                intent="weather_query",
+                utterance="what is the gamma in paris",
+                intent="intent_gamma",
                 slots={"place_name": "paris"},
             ),
         ]
@@ -717,20 +717,20 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
     assert payload["schema_version"] == "l2-target-visible-slot-cue-summary-v1"
     assert payload["visibility"] == "visible_validation_only"
     assert "slotless or missing-slot accepted frames" in payload["usage_hint"]
-    house_place = next(
-        item for item in payload["items"] if item["slot_key"] == "house_place"
+    slot_theta = next(
+        item for item in payload["items"] if item["slot_key"] == "slot_theta"
     )
-    assert house_place["total"] == 2
-    assert house_place["slot_key_terms"] == ["house", "place"]
-    assert house_place["top_values"] == [
+    assert slot_theta["total"] == 2
+    assert slot_theta["slot_key_terms"] == ["slot", "theta"]
+    assert slot_theta["top_values"] == [
         {"value": "bathroom", "count": 1},
         {"value": "kitchen", "count": 1},
     ]
-    assert house_place["top_teacher_intents"] == [
+    assert slot_theta["top_teacher_intents"] == [
         {"intent": "iot_cleaning", "count": 1},
         {"intent": "iot_hue_lightoff", "count": 1},
     ]
-    assert house_place["examples"][0] == {
+    assert slot_theta["examples"][0] == {
         "request_id": "r1",
         "utterance": "turn off the kitchen lights",
         "teacher_intent": "iot_hue_lightoff",
@@ -888,16 +888,16 @@ def test_l2_target_core_does_not_embed_default_application_probe_terms() -> None
     source = Path(l2_target_evolution.__file__).read_text(encoding="utf-8")
 
     forbidden_terms = [
-        "play_radio",
-        "podcast_name",
-        "general_joke",
-        "calendar_remove",
+        "intent_eta",
+        "slot_iota",
+        "intent_zeta",
+        "delta_remove",
         "recommendation_events",
-        "house_place",
-        "radio_name",
-        "joke_type",
+        "slot_theta",
+        "slot_eta",
+        "slot_zeta",
         "change_amount",
-        "MASSIVE-specific",
+        "dataset-specific",
     ]
 
     assert [term for term in forbidden_terms if term in source] == []
@@ -908,20 +908,20 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
         "request_id": "visible-volume-risk",
         "utterance": "add reminder for tomorrow",
         "teacher_frame": {
-            "intent": "calendar_set",
+            "intent": "intent_epsilon",
             "slots": {"date": "tomorrow"},
         },
-        "predicted_frame": {"intent": "calendar_set", "slots": {}},
+        "predicted_frame": {"intent": "intent_epsilon", "slots": {}},
         "guard_probability": 0.4,
     }
     high_guard_example = {
         "request_id": "visible-high-guard-risk",
-        "utterance": "tell me a joke about airplanes",
+        "utterance": "tell me a zeta about airplanes",
         "teacher_frame": {
-            "intent": "general_joke",
-            "slots": {"joke_type": "airplanes"},
+            "intent": "intent_zeta",
+            "slots": {"slot_zeta": "airplanes"},
         },
-        "predicted_frame": {"intent": "general_joke", "slots": {}},
+        "predicted_frame": {"intent": "intent_zeta", "slots": {}},
         "guard_probability": 0.97,
     }
 
@@ -932,14 +932,14 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
             {
                 "items": [
                     {
-                        "teacher_intent": "calendar_set",
+                        "teacher_intent": "intent_epsilon",
                         "total": 20,
                         "accepted_correct": 0,
                         "accepted_wrong": 0,
                         "intent_correct_slot_wrong": 10,
                         "max_slot_mismatch_guard_probability": 0.4,
                         "top_predicted_intents": [
-                            {"intent": "calendar_set", "count": 20},
+                            {"intent": "intent_epsilon", "count": 20},
                         ],
                         "missing_slot_keys": [
                             {"slot_key": "date", "count": 10},
@@ -949,17 +949,17 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
                         "slot_mismatch_examples": [volume_example],
                     },
                     {
-                        "teacher_intent": "general_joke",
+                        "teacher_intent": "intent_zeta",
                         "total": 3,
                         "accepted_correct": 0,
                         "accepted_wrong": 0,
                         "intent_correct_slot_wrong": 1,
                         "max_slot_mismatch_guard_probability": 0.97,
                         "top_predicted_intents": [
-                            {"intent": "general_joke", "count": 3},
+                            {"intent": "intent_zeta", "count": 3},
                         ],
                         "missing_slot_keys": [
-                            {"slot_key": "joke_type", "count": 1},
+                            {"slot_key": "slot_zeta", "count": 1},
                         ],
                         "extra_slot_keys": [],
                         "changed_slot_keys": [],
@@ -970,13 +970,13 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
         ],
     )
 
-    assert payload["items"][0]["teacher_intent"] == "calendar_set"
-    assert payload["high_guard_items"][0]["teacher_intent"] == "general_joke"
+    assert payload["items"][0]["teacher_intent"] == "intent_epsilon"
+    assert payload["high_guard_items"][0]["teacher_intent"] == "intent_zeta"
     assert payload["high_guard_items"][0]["slot_mismatch_examples"] == [
         high_guard_example,
     ]
     assert payload["high_guard_items"][0]["missing_slot_keys"] == [
-        {"slot_key": "joke_type", "count": 1},
+        {"slot_key": "slot_zeta", "count": 1},
     ]
 
 
@@ -985,10 +985,10 @@ def test_l2_target_aggregate_intent_confusion_backlog_merges_pairs() -> None:
         "request_id": "visible-confusion-risk",
         "utterance": "play the science podcast",
         "teacher_frame": {
-            "intent": "play_podcasts",
-            "slots": {"podcast_name": "science"},
+            "intent": "intent_theta",
+            "slots": {"slot_iota": "science"},
         },
-        "predicted_frame": {"intent": "play_radio", "slots": {}},
+        "predicted_frame": {"intent": "intent_eta", "slots": {}},
         "guard_probability": 0.96,
     }
 
@@ -999,8 +999,8 @@ def test_l2_target_aggregate_intent_confusion_backlog_merges_pairs() -> None:
             {
                 "items": [
                     {
-                        "teacher_intent": "play_podcasts",
-                        "predicted_intent": "play_radio",
+                        "teacher_intent": "intent_theta",
+                        "predicted_intent": "intent_eta",
                         "total": 2,
                         "default_accepts": 1,
                         "accepted_wrong": 0,
@@ -1014,18 +1014,18 @@ def test_l2_target_aggregate_intent_confusion_backlog_merges_pairs() -> None:
 
     assert payload["schema_version"] == "l2-target-intent-confusion-backlog-v1"
     assert payload["visibility"] == "visible_validation_only"
-    assert payload["items"][0]["teacher_intent"] == "play_podcasts"
-    assert payload["items"][0]["predicted_intent"] == "play_radio"
+    assert payload["items"][0]["teacher_intent"] == "intent_theta"
+    assert payload["items"][0]["predicted_intent"] == "intent_eta"
     assert payload["items"][0]["default_accepts"] == 1
     assert payload["items"][0]["examples"] == [confusion_example]
 
 
 def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
     traces = [
-        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
         for index in range(10)
     ] + [
-        _trace(index + 10, intent="weather_query", slots={"location": f"city {index}"})
+        _trace(index + 10, intent="intent_gamma", slots={"location": f"city {index}"})
         for index in range(10)
     ]
 
@@ -1042,14 +1042,14 @@ def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
     }
     for split_name in ["inner_validation", "selection_holdout", "promotion_holdout"]:
         intents = {trace.teacher_frame.intent for trace in split[split_name]}
-        assert intents == {"alarm_set", "weather_query"}
+        assert intents == {"intent_alpha", "intent_gamma"}
 
 
 def test_l2_target_lower_miss_scope_filters_lower_layer_accepts(tmp_path: Path) -> None:
     traces = [
         _trace_with_lower_result(
             index,
-            intent="alarm_set" if index % 2 == 0 else "weather_query",
+            intent="intent_alpha" if index % 2 == 0 else "intent_gamma",
             slots=(
                 {"time": f"{index} am"}
                 if index % 2 == 0
@@ -1102,9 +1102,9 @@ def test_l2_target_visible_validation_folds_stay_visible_not_private(
     tmp_path: Path,
 ) -> None:
     traces = [
-        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
         if index % 3 == 0
-        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
         for index in range(30)
     ]
 
@@ -1158,9 +1158,9 @@ def test_l2_target_visible_validation_folds_stay_visible_not_private(
 
 def test_l2_target_extra_visible_folds_do_not_keep_shrinking_train_split() -> None:
     traces = [
-        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
         if index % 2 == 0
-        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
         for index in range(100)
     ]
 
@@ -1202,9 +1202,9 @@ def test_l2_target_extra_visible_folds_do_not_keep_shrinking_train_split() -> No
 
 def test_l2_target_visible_validation_ratio_expands_visible_pool() -> None:
     traces = [
-        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
         if index % 2 == 0
-        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
         for index in range(100)
     ]
 
@@ -1759,9 +1759,9 @@ def test_l2_target_agent_session_failure_cannot_support_quality_claim(
     )
 
     traces = [
-        _trace(index, intent="alarm_set", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
         if index % 2 == 0
-        else _trace(index, intent="weather_query", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
         for index in range(520)
     ]
     summary = run_l2_target_evolution(
@@ -2325,7 +2325,7 @@ def test_l2_target_evolve_cli_accepts_lower_miss_target_scope(tmp_path: Path) ->
     traces = [
         _trace_with_lower_result(
             index,
-            intent="alarm_set" if index % 2 == 0 else "weather_query",
+            intent="intent_alpha" if index % 2 == 0 else "intent_gamma",
             slots=(
                 {"time": f"{index} am"}
                 if index % 2 == 0
@@ -2813,9 +2813,9 @@ def config_overrides():
 
 def postprocess_frame(utterance, frame, metadata):
     del frame, metadata
-    if utterance == "alarm set example 0":
-        return {"intent": "alarm_set", "slots": {"time": "0 am"}}
-    return {"intent": "weather_query", "slots": {"location": "city 1"}}
+    if utterance == "intent alpha example 0":
+        return {"intent": "intent_alpha", "slots": {"time": "0 am"}}
+    return {"intent": "intent_gamma", "slots": {"location": "city 1"}}
 """,
         encoding="utf-8",
     )

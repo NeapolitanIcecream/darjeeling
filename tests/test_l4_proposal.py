@@ -92,16 +92,16 @@ class AlwaysFailingProposalClient:
 def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="set alarm for seven",
-        gold_frame=Frame(intent="alarm_set", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        utterance="alpha request for seven",
+        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
                 latency_ms=1.0,
             )
         ],
@@ -120,7 +120,7 @@ def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> 
 
     result = adapter.propose(
         role="l2",
-        task_schema=TaskSchema(intent_names=["alarm_set"], slot_names=["time"]),
+        task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=["time"]),
         traces=traces_to_teacher_view([trace]),
         output_schema=output_schema,
         metrics={"frame_exact_match": 0.9},
@@ -181,7 +181,7 @@ def test_l4_proposal_adapter_retries_empty_completion_content() -> None:
 
     result = adapter.propose(
         role="l2",
-        task_schema=TaskSchema(intent_names=["alarm_set"], slot_names=[]),
+        task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=[]),
         traces=[],
         output_schema=output_schema,
     )
@@ -214,7 +214,7 @@ def test_l4_proposal_adapter_retries_schema_invalid_completion_content() -> None
 
     result = adapter.propose(
         role="l2",
-        task_schema=TaskSchema(intent_names=["alarm_set"], slot_names=[]),
+        task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=[]),
         traces=[],
         output_schema=output_schema,
     )
@@ -237,7 +237,7 @@ def test_l4_proposal_adapter_reports_retry_exhaustion_as_proposal_error() -> Non
     with pytest.raises(ProposalParseError, match="L4 proposal call failed"):
         adapter.propose(
             role="l2",
-            task_schema=TaskSchema(intent_names=["alarm_set"], slot_names=[]),
+            task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=[]),
             traces=[],
             output_schema=schema,
         )

@@ -44,8 +44,8 @@ def test_core_source_does_not_embed_bundled_dataset_or_demo_defaults() -> None:
     forbidden_terms = (
         "MASSIVE",
         "massive_en_us",
-        "set an alarm for seven tomorrow morning",
-        "what is the weather in san francisco",
+        "alpha request for seven tomorrow morning",
+        "what is the gamma in san francisco",
         'Path("native/l1_programbank")',
     )
 
@@ -55,6 +55,45 @@ def test_core_source_does_not_embed_bundled_dataset_or_demo_defaults() -> None:
         source = path.read_text(encoding="utf-8")
         for term in forbidden_terms:
             assert term not in source, f"{path} contains target-specific default {term!r}"
+
+
+def test_shared_core_tests_use_neutral_fixtures() -> None:
+    adapter_or_demo_tests = {
+        Path("tests/test_massive_prepare.py"),
+        Path("tests/test_l1_rust_worker.py"),
+        Path("tests/test_target_boundary.py"),
+    }
+    forbidden_terms = (
+        "MASSIVE",
+        "massive_en_us",
+        "AmazonScience/massive",
+        "native/l1_programbank",
+        "alarm_set",
+        "music_play",
+        "weather_query",
+        "set an alarm",
+        "set alarm",
+        "play jazz",
+        "play music",
+        "play smooth jazz",
+        "start smooth jazz",
+        "calendar",
+        "joke",
+        "radio",
+    )
+
+    for path in Path("tests").glob("test_*.py"):
+        if path in adapter_or_demo_tests:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for term in forbidden_terms:
+            assert term not in source, f"{path} contains shared-test target fixture {term!r}"
+
+
+def test_current_architecture_doc_uses_dataset_independent_gold_label_terms() -> None:
+    source = Path("docs/design/01_architecture.md").read_text(encoding="utf-8")
+
+    assert "MASSIVE gold" not in source
 
 
 def test_massive_adapter_has_separate_cli_entrypoint() -> None:

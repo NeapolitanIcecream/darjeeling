@@ -76,8 +76,8 @@ def test_l2_tune_split_keeps_each_intent_in_train_and_validation() -> None:
         trace.teacher_frame.intent for trace in validation if trace.teacher_frame
     }
 
-    assert train_intents == {"alarm_set", "music_play"}
-    assert validation_intents == {"alarm_set", "music_play"}
+    assert train_intents == {"intent_alpha", "intent_beta"}
+    assert validation_intents == {"intent_alpha", "intent_beta"}
     assert {trace.request_id for trace in train}.isdisjoint(
         {trace.request_id for trace in validation}
     )
@@ -106,14 +106,14 @@ def test_l2_tune_split_defaults_to_chronological_holdout() -> None:
 
 def test_l2_residual_validation_filters_lower_layer_hits_and_l0_repeats() -> None:
     train = [
-        _trace("t1", "play jazz", "music_play"),
-        _trace("t2", "set alarm", "alarm_set"),
+        _trace("t1", "beta request", "intent_beta"),
+        _trace("t2", "alpha request", "intent_alpha"),
     ]
     validation = [
-        _trace("v1", "play jazz", "music_play"),
-        _trace("v2", "play rock", "music_play", lower_layer="L0"),
-        _trace("v3", "wake me up", "alarm_set", lower_layer="L1"),
-        _trace("v4", "play something new", "music_play"),
+        _trace("v1", "beta request", "intent_beta"),
+        _trace("v2", "beta variant request", "intent_beta", lower_layer="L0"),
+        _trace("v3", "alpha wake", "intent_alpha", lower_layer="L1"),
+        _trace("v4", "beta novel request", "intent_beta"),
     ]
 
     residual = residual_l2_validation_traces(train, validation)
@@ -123,18 +123,18 @@ def test_l2_residual_validation_filters_lower_layer_hits_and_l0_repeats() -> Non
 
 def _teacher_traces() -> list[TeacherTrace]:
     rows = [
-        ("m1", "play jazz", "music_play", {}),
-        ("m2", "play music", "music_play", {}),
-        ("m3", "start my playlist", "music_play", {}),
-        ("m4", "play songs", "music_play", {}),
-        ("m5", "play rock", "music_play", {}),
-        ("m6", "start smooth jazz", "music_play", {}),
-        ("a1", "set alarm for seven", "alarm_set", {"time": "seven"}),
-        ("a2", "wake me at eight", "alarm_set", {"time": "eight"}),
-        ("a3", "alarm at nine", "alarm_set", {"time": "nine"}),
-        ("a4", "set morning alarm", "alarm_set", {}),
-        ("a5", "wake me tomorrow", "alarm_set", {"date": "tomorrow"}),
-        ("a6", "set evening alarm", "alarm_set", {}),
+        ("m1", "beta request", "intent_beta", {}),
+        ("m2", "beta request", "intent_beta", {}),
+        ("m3", "beta alternate request", "intent_beta", {}),
+        ("m4", "beta collection request", "intent_beta", {}),
+        ("m5", "beta variant request", "intent_beta", {}),
+        ("m6", "beta alternate request", "intent_beta", {}),
+        ("a1", "alpha request for seven", "intent_alpha", {"time": "seven"}),
+        ("a2", "alpha at eight", "intent_alpha", {"time": "eight"}),
+        ("a3", "alpha at nine", "intent_alpha", {"time": "nine"}),
+        ("a4", "set morning alpha", "intent_alpha", {}),
+        ("a5", "alpha tomorrow", "intent_alpha", {"date": "tomorrow"}),
+        ("a6", "set evening alpha", "intent_alpha", {}),
     ]
     return [
         _trace(request_id, utterance, intent, slots=slots)

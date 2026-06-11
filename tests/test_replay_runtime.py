@@ -21,31 +21,28 @@ def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> N
             request_id="r1",
             locale="en-US",
             split="train",
-            utterance="set an alarm for seven",
-            annotated_utterance="set an alarm for [time : seven]",
-            template="set an alarm for [time]",
-            gold_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+            utterance="alpha request",
+            annotated_utterance="alpha request",
+            template="alpha request",
+            gold_frame=Frame(intent="intent_alpha"),
         ),
         DataRecord(
             request_id="r2",
             locale="en-US",
             split="train",
-            utterance="play some jazz",
-            annotated_utterance="play some jazz",
-            template="play some jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="beta sample request",
+            annotated_utterance="beta sample request",
+            template="beta sample request",
+            gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r3",
             locale="en-US",
             split="train",
-            utterance="how old is Carrie Underwood",
-            annotated_utterance="how old is [person : Carrie Underwood]",
-            template="how old is [person]",
-            gold_frame=Frame(
-                intent="qa_factoid",
-                slots={"person": "carrie underwood"},
-            ),
+            utterance="gamma request",
+            annotated_utterance="gamma request",
+            template="gamma request",
+            gold_frame=Frame(intent="intent_gamma"),
         ),
     ]
     (data_dir / "train.jsonl").write_text(
@@ -53,18 +50,33 @@ def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> N
         encoding="utf-8",
     )
     (run_dir / "teacher_cache.jsonl").write_text(
-        json.dumps(
-            {
-                "utterance": "play some jazz",
-                "teacher_frame": {"intent": "music_play", "slots": {}},
-            }
-        )
-        + "\n",
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "utterance": "alpha request",
+                        "teacher_frame": {"intent": "intent_alpha", "slots": {}},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "utterance": "beta sample request",
+                        "teacher_frame": {"intent": "intent_beta", "slots": {}},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "utterance": "gamma request",
+                        "teacher_frame": {"intent": "intent_gamma", "slots": {}},
+                    }
+                ),
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
 
     settings = load_settings()
-    settings.l1_rust_crate_dir = Path("native/l1_programbank")
 
     summary = run_replay(
         stream="sequential",
@@ -81,19 +93,11 @@ def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> N
         for line in (run_dir / "traces.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     chosen_layers = {trace["utterance"]: trace["chosen_layer"] for trace in traces}
-    assert chosen_layers["set an alarm for seven"] == "L1"
-    assert chosen_layers["how old is Carrie Underwood"] == "L1"
-    assert chosen_layers["play some jazz"] == "L4"
-    age_trace = next(
-        trace for trace in traces if trace["utterance"] == "how old is Carrie Underwood"
-    )
-    assert age_trace["final_frame"] == {
-        "intent": "qa_factoid",
-        "slots": {"person": "carrie underwood"},
-        "is_abstain": False,
-    }
-    jazz_layers = [result["layer"] for result in traces[1]["layer_results"]]
-    assert jazz_layers == ["L0", "L1", "L3", "L4"]
+    assert chosen_layers["alpha request"] == "L4"
+    assert chosen_layers["gamma request"] == "L4"
+    assert chosen_layers["beta sample request"] == "L4"
+    beta_layers = [result["layer"] for result in traces[1]["layer_results"]]
+    assert beta_layers == ["L0", "L1", "L3", "L4"]
     assert traces[1]["layer_results"][2]["metadata"]["actual_mode"] == "disabled"
     assert traces[0]["gold_frame"] is not None
 
@@ -110,10 +114,10 @@ def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:
             request_id="r1",
             locale="en-US",
             split="train",
-            utterance="play some jazz",
-            annotated_utterance="play some jazz",
-            template="play some jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="beta sample request",
+            annotated_utterance="beta sample request",
+            template="beta sample request",
+            gold_frame=Frame(intent="intent_beta"),
         )
     ]
     (data_dir / "train.jsonl").write_text(
@@ -121,12 +125,21 @@ def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     examples = [
-        L2TrainingExample(utterance="play some jazz", teacher_frame=Frame(intent="music_play")),
-        L2TrainingExample(utterance="play music", teacher_frame=Frame(intent="music_play")),
-        L2TrainingExample(utterance="start playlist", teacher_frame=Frame(intent="music_play")),
-        L2TrainingExample(utterance="set alarm for seven", teacher_frame=Frame(intent="alarm_set")),
-        L2TrainingExample(utterance="wake me at eight", teacher_frame=Frame(intent="alarm_set")),
-        L2TrainingExample(utterance="alarm at nine", teacher_frame=Frame(intent="alarm_set")),
+        L2TrainingExample(
+            utterance="beta sample request",
+            teacher_frame=Frame(intent="intent_beta"),
+        ),
+        L2TrainingExample(utterance="beta request", teacher_frame=Frame(intent="intent_beta")),
+        L2TrainingExample(
+            utterance="beta alternate request",
+            teacher_frame=Frame(intent="intent_beta"),
+        ),
+        L2TrainingExample(
+            utterance="alpha request for seven",
+            teacher_frame=Frame(intent="intent_alpha"),
+        ),
+        L2TrainingExample(utterance="alpha at eight", teacher_frame=Frame(intent="intent_alpha")),
+        L2TrainingExample(utterance="alpha at nine", teacher_frame=Frame(intent="intent_alpha")),
     ]
     bundle = train_l2_student(
         examples,
@@ -154,7 +167,7 @@ def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:
     assert summary.layer_counts["L2"] == 1
     trace = json.loads((run_dir / "traces.jsonl").read_text(encoding="utf-8"))
     assert trace["chosen_layer"] == "L2"
-    assert trace["final_frame"]["intent"] == "music_play"
+    assert trace["final_frame"]["intent"] == "intent_beta"
 
 
 def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
@@ -169,10 +182,10 @@ def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
             request_id="r1",
             locale="en-US",
             split="train",
-            utterance="play some jazz",
-            annotated_utterance="play some jazz",
-            template="play some jazz",
-            gold_frame=Frame(intent="music_play", slots={"genre": "jazz"}),
+            utterance="beta sample request",
+            annotated_utterance="beta sample request",
+            template="beta sample request",
+            gold_frame=Frame(intent="intent_beta", slots={"genre": "jazz"}),
         ).model_dump_json()
         + "\n",
         encoding="utf-8",
@@ -180,9 +193,9 @@ def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
     (run_dir / "teacher_cache.jsonl").write_text(
         json.dumps(
             {
-                "utterance": "play some jazz",
+                "utterance": "beta sample request",
                 "teacher_frame": {
-                    "intent": "music_play",
+                    "intent": "intent_beta",
                     "slots": {"genre": "jazz"},
                 },
             }
@@ -191,12 +204,21 @@ def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     examples = [
-        L2TrainingExample(utterance="play some jazz", teacher_frame=Frame(intent="music_play")),
-        L2TrainingExample(utterance="play music", teacher_frame=Frame(intent="music_play")),
-        L2TrainingExample(utterance="start playlist", teacher_frame=Frame(intent="music_play")),
-        L2TrainingExample(utterance="set alarm for seven", teacher_frame=Frame(intent="alarm_set")),
-        L2TrainingExample(utterance="wake me at eight", teacher_frame=Frame(intent="alarm_set")),
-        L2TrainingExample(utterance="alarm at nine", teacher_frame=Frame(intent="alarm_set")),
+        L2TrainingExample(
+            utterance="beta sample request",
+            teacher_frame=Frame(intent="intent_beta"),
+        ),
+        L2TrainingExample(utterance="beta request", teacher_frame=Frame(intent="intent_beta")),
+        L2TrainingExample(
+            utterance="beta alternate request",
+            teacher_frame=Frame(intent="intent_beta"),
+        ),
+        L2TrainingExample(
+            utterance="alpha request for seven",
+            teacher_frame=Frame(intent="intent_alpha"),
+        ),
+        L2TrainingExample(utterance="alpha at eight", teacher_frame=Frame(intent="intent_alpha")),
+        L2TrainingExample(utterance="alpha at nine", teacher_frame=Frame(intent="intent_alpha")),
     ]
     bundle = train_l2_student(
         examples,
@@ -207,7 +229,7 @@ def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
         """
 def postprocess_frame(utterance, frame, metadata):
     del metadata
-    if utterance == "play some jazz":
+    if utterance == "beta sample request":
         updated = dict(frame)
         updated["slots"] = {"genre": "jazz"}
         return updated
@@ -240,7 +262,7 @@ def postprocess_frame(utterance, frame, metadata):
     trace = json.loads((run_dir / "traces.jsonl").read_text(encoding="utf-8"))
     assert trace["chosen_layer"] == "L2"
     assert trace["final_frame"] == {
-        "intent": "music_play",
+        "intent": "intent_beta",
         "slots": {"genre": "jazz"},
         "is_abstain": False,
     }
@@ -258,10 +280,10 @@ def test_run_replay_loads_promoted_l3_prompt_artifact(tmp_path: Path) -> None:
             request_id="r1",
             locale="en-US",
             split="train",
-            utterance="play some jazz",
-            annotated_utterance="play some jazz",
-            template="play some jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="beta sample request",
+            annotated_utterance="beta sample request",
+            template="beta sample request",
+            gold_frame=Frame(intent="intent_beta"),
         ).model_dump_json()
         + "\n",
         encoding="utf-8",
@@ -269,8 +291,8 @@ def test_run_replay_loads_promoted_l3_prompt_artifact(tmp_path: Path) -> None:
     (run_dir / "teacher_cache.jsonl").write_text(
         json.dumps(
             {
-                "utterance": "play some jazz",
-                "teacher_frame": {"intent": "music_play", "slots": {}},
+                "utterance": "beta sample request",
+                "teacher_frame": {"intent": "intent_beta", "slots": {}},
             }
         )
         + "\n",

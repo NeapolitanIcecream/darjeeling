@@ -6,7 +6,7 @@ from darjeeling.schemas import Frame
 
 
 class _Prediction:
-    frame = Frame(intent="email_query")
+    frame = Frame(intent="intent_iota")
     guard_probability = 0.99
     top1_probability = 0.99
     margin = 0.9
@@ -25,7 +25,7 @@ class _Prediction:
     predicted_signature_frame_accuracy = 1.0
     predicted_signature_support = 4.0
     frame_source = "student"
-    student_frame = Frame(intent="email_query")
+    student_frame = Frame(intent="intent_iota")
     retrieval_frame = None
     retrieval_similarity = 0.0
     retrieval_margin = 0.0
@@ -91,9 +91,9 @@ def postprocess_frame(utterance, frame, metadata):
     )
 
     assert result.accepted is True
-    assert result.frame == Frame(intent="email_query", slots={"person": "robert"})
+    assert result.frame == Frame(intent="intent_iota", slots={"person": "robert"})
     assert result.metadata["raw_predicted_frame"] == {
-        "intent": "email_query",
+        "intent": "intent_iota",
         "slots": {},
         "is_abstain": False,
     }

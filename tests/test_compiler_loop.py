@@ -14,16 +14,16 @@ from darjeeling.settings import load_settings
 def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Path) -> None:
     train_trace = TraceRecord(
         request_id="r1",
-        utterance="play some jazz",
-        gold_frame=Frame(intent="music_play"),
-        teacher_frame=Frame(intent="music_play"),
+        utterance="beta sample request",
+        gold_frame=Frame(intent="intent_beta"),
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="music_play"),
+                frame=Frame(intent="intent_beta"),
                 latency_ms=1.0,
             )
         ],
@@ -45,7 +45,7 @@ def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Pa
     promotion_path = tmp_path / "artifacts" / manifest.artifact_paths["promotion_record"]
     l0_payload = l0_path.read_text(encoding="utf-8")
     assert "gold_frame" not in l0_payload
-    assert "music_play" in l0_payload
+    assert "intent_beta" in l0_payload
     assert "gold_frame" not in hard_buffer_path.read_text(encoding="utf-8")
     assert "teacher_train_size" in metrics_path.read_text(encoding="utf-8")
     assert manifest.candidate_metrics["hard_buffer_size"] == 2
@@ -61,9 +61,9 @@ def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Pa
     assert promotion_payload["promotion_reason"] == "objective improved within gates"
 
     l0_layer = load_l0_layer_from_manifest(tmp_path)
-    l0_result = l0_layer.try_answer("play some jazz")
+    l0_result = l0_layer.try_answer("beta sample request")
     assert l0_result.accepted
-    assert l0_result.frame == Frame(intent="music_play")
+    assert l0_result.frame == Frame(intent="intent_beta")
 
 
 def test_compiler_generation_rejects_candidate_without_replay_coverage(
@@ -71,16 +71,16 @@ def test_compiler_generation_rejects_candidate_without_replay_coverage(
 ) -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="play some jazz",
-        gold_frame=Frame(intent="music_play"),
-        teacher_frame=Frame(intent="music_play"),
+        utterance="beta sample request",
+        gold_frame=Frame(intent="intent_beta"),
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="music_play"),
+                frame=Frame(intent="intent_beta"),
                 latency_ms=1.0,
             )
         ],
@@ -113,14 +113,14 @@ def test_compiler_generation_rejects_candidate_without_replay_coverage(
 def test_compiler_generation_records_l2_guard_threshold_search(tmp_path: Path) -> None:
     settings = load_settings()
     traces = [
-        _teacher_trace("m1", "play jazz", "music_play"),
-        _teacher_trace("m2", "play music", "music_play"),
-        _teacher_trace("m3", "start playlist", "music_play"),
-        _teacher_trace("m4", "play songs", "music_play"),
-        _teacher_trace("a1", "set alarm for seven", "alarm_set"),
-        _teacher_trace("a2", "wake me at eight", "alarm_set"),
-        _teacher_trace("a3", "alarm at nine", "alarm_set"),
-        _teacher_trace("a4", "set morning alarm", "alarm_set"),
+        _teacher_trace("m1", "beta request", "intent_beta"),
+        _teacher_trace("m2", "beta request", "intent_beta"),
+        _teacher_trace("m3", "beta alternate request", "intent_beta"),
+        _teacher_trace("m4", "beta collection request", "intent_beta"),
+        _teacher_trace("a1", "alpha request for seven", "intent_alpha"),
+        _teacher_trace("a2", "alpha at eight", "intent_alpha"),
+        _teacher_trace("a3", "alpha at nine", "intent_alpha"),
+        _teacher_trace("a4", "set morning alpha", "intent_alpha"),
     ]
 
     result = run_compiler_generation(
@@ -186,14 +186,14 @@ def test_compiler_generation_uses_optuna_l2_tuning_when_enabled(
         }
     )
     traces = [
-        _teacher_trace("m1", "play jazz", "music_play"),
-        _teacher_trace("a1", "set alarm for seven", "alarm_set"),
-        _teacher_trace("m2", "play music", "music_play"),
-        _teacher_trace("a2", "wake me at eight", "alarm_set"),
-        _teacher_trace("m3", "start playlist", "music_play"),
-        _teacher_trace("a3", "alarm at nine", "alarm_set"),
-        _teacher_trace("m4", "play songs", "music_play"),
-        _teacher_trace("a4", "set morning alarm", "alarm_set"),
+        _teacher_trace("m1", "beta request", "intent_beta"),
+        _teacher_trace("a1", "alpha request for seven", "intent_alpha"),
+        _teacher_trace("m2", "beta request", "intent_beta"),
+        _teacher_trace("a2", "alpha at eight", "intent_alpha"),
+        _teacher_trace("m3", "beta alternate request", "intent_beta"),
+        _teacher_trace("a3", "alpha at nine", "intent_alpha"),
+        _teacher_trace("m4", "beta collection request", "intent_beta"),
+        _teacher_trace("a4", "set morning alpha", "intent_alpha"),
     ]
 
     result = run_compiler_generation(
@@ -248,14 +248,14 @@ def test_compiler_generation_can_train_l2_on_observed_lower_misses(
         }
     )
     traces = [
-        _trace_with_lower_result("m0", "play cached jazz", "music_play", lower_layer="L0"),
-        _trace_with_lower_result("a0", "cached alarm", "alarm_set", lower_layer="L1"),
-        _trace_with_lower_result("m1", "play jazz", "music_play", lower_layer=None),
-        _trace_with_lower_result("m2", "play music", "music_play", lower_layer=None),
-        _trace_with_lower_result("a1", "set alarm for seven", "alarm_set", lower_layer=None),
-        _trace_with_lower_result("a2", "wake me at eight", "alarm_set", lower_layer=None),
-        _trace_with_lower_result("m3", "start playlist", "music_play", lower_layer=None),
-        _trace_with_lower_result("a3", "alarm at nine", "alarm_set", lower_layer=None),
+        _trace_with_lower_result("m0", "beta cached request", "intent_beta", lower_layer="L0"),
+        _trace_with_lower_result("a0", "cached alpha", "intent_alpha", lower_layer="L1"),
+        _trace_with_lower_result("m1", "beta request", "intent_beta", lower_layer=None),
+        _trace_with_lower_result("m2", "beta request", "intent_beta", lower_layer=None),
+        _trace_with_lower_result("a1", "alpha request for seven", "intent_alpha", lower_layer=None),
+        _trace_with_lower_result("a2", "alpha at eight", "intent_alpha", lower_layer=None),
+        _trace_with_lower_result("m3", "beta alternate request", "intent_beta", lower_layer=None),
+        _trace_with_lower_result("a3", "alpha at nine", "intent_alpha", lower_layer=None),
     ]
 
     result = run_compiler_generation(
@@ -323,14 +323,14 @@ def test_compiler_generation_uses_live_l4_l2_proposal_when_enabled(
     result = run_compiler_generation(
         run_dir=tmp_path,
         traces=[
-            _teacher_trace("m1", "play jazz", "music_play"),
-            _teacher_trace("m2", "play music", "music_play"),
-            _teacher_trace("m3", "start playlist", "music_play"),
-            _teacher_trace("m4", "play songs", "music_play"),
-            _teacher_trace("a1", "set alarm for seven", "alarm_set"),
-            _teacher_trace("a2", "wake me at eight", "alarm_set"),
-            _teacher_trace("a3", "alarm at nine", "alarm_set"),
-            _teacher_trace("a4", "set morning alarm", "alarm_set"),
+            _teacher_trace("m1", "beta request", "intent_beta"),
+            _teacher_trace("m2", "beta request", "intent_beta"),
+            _teacher_trace("m3", "beta alternate request", "intent_beta"),
+            _teacher_trace("m4", "beta collection request", "intent_beta"),
+            _teacher_trace("a1", "alpha request for seven", "intent_alpha"),
+            _teacher_trace("a2", "alpha at eight", "intent_alpha"),
+            _teacher_trace("a3", "alpha at nine", "intent_alpha"),
+            _teacher_trace("a4", "set morning alpha", "intent_alpha"),
         ],
         settings=settings,
     )
@@ -557,28 +557,28 @@ def test_run_replay_compile_every_promotes_l0_for_repeated_teacher_trace(
             request_id="r1",
             locale="en-US",
             split="train",
-            utterance="play some jazz",
-            annotated_utterance="play some jazz",
-            template="play some jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="beta sample request",
+            annotated_utterance="beta sample request",
+            template="beta sample request",
+            gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r2",
             locale="en-US",
             split="train",
-            utterance="play some jazz",
-            annotated_utterance="play some jazz",
-            template="play some jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="beta sample request",
+            annotated_utterance="beta sample request",
+            template="beta sample request",
+            gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r3",
             locale="en-US",
             split="train",
-            utterance="play some jazz",
-            annotated_utterance="play some jazz",
-            template="play some jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="beta sample request",
+            annotated_utterance="beta sample request",
+            template="beta sample request",
+            gold_frame=Frame(intent="intent_beta"),
         ),
     ]
     (data_dir / "train.jsonl").write_text(
@@ -588,8 +588,8 @@ def test_run_replay_compile_every_promotes_l0_for_repeated_teacher_trace(
     (run_dir / "teacher_cache.jsonl").write_text(
         json.dumps(
             {
-                "utterance": "play some jazz",
-                "teacher_frame": {"intent": "music_play", "slots": {}},
+                "utterance": "beta sample request",
+                "teacher_frame": {"intent": "intent_beta", "slots": {}},
             }
         )
         + "\n",
@@ -628,35 +628,35 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
     run_dir = tmp_path / "run"
     data_dir.mkdir()
     run_dir.mkdir()
-    patch_path = tmp_path / "music_l1.patch"
-    patch_path.write_text(_music_l1_patch(), encoding="utf-8")
+    patch_path = tmp_path / "beta_l1.patch"
+    patch_path.write_text(_beta_l1_patch(), encoding="utf-8")
     records = [
         DataRecord(
             request_id="r1",
             locale="en-US",
             split="train",
-            utterance="play smooth jazz",
-            annotated_utterance="play smooth jazz",
-            template="play smooth jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="beta smooth request",
+            annotated_utterance="beta smooth request",
+            template="beta smooth request",
+            gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r2",
             locale="en-US",
             split="train",
-            utterance="start smooth jazz",
-            annotated_utterance="start smooth jazz",
-            template="start smooth jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="beta alternate request",
+            annotated_utterance="beta alternate request",
+            template="beta alternate request",
+            gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r3",
             locale="en-US",
             split="train",
-            utterance="please play smooth jazz",
-            annotated_utterance="please play smooth jazz",
-            template="please play smooth jazz",
-            gold_frame=Frame(intent="music_play"),
+            utterance="please beta smooth request",
+            annotated_utterance="please beta smooth request",
+            template="please beta smooth request",
+            gold_frame=Frame(intent="intent_beta"),
         ),
     ]
     (data_dir / "train.jsonl").write_text(
@@ -668,14 +668,14 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
             [
                 json.dumps(
                     {
-                        "utterance": "play smooth jazz",
-                        "teacher_frame": {"intent": "music_play", "slots": {}},
+                        "utterance": "beta smooth request",
+                        "teacher_frame": {"intent": "intent_beta", "slots": {}},
                     }
                 ),
                 json.dumps(
                     {
-                        "utterance": "start smooth jazz",
-                        "teacher_frame": {"intent": "music_play", "slots": {}},
+                        "utterance": "beta alternate request",
+                        "teacher_frame": {"intent": "intent_beta", "slots": {}},
                     }
                 ),
                 "",
@@ -684,7 +684,7 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
         encoding="utf-8",
     )
     settings = load_settings()
-    settings.l1_rust_crate_dir = Path("native/l1_programbank")
+    settings.l1_rust_crate_dir = Path("native/l1_empty_programbank")
     settings.l1_agent_mode = "dry-run"
     settings.l1_agent_dry_run_patch = patch_path
     settings.l1_agent_timeout_s = 120.0
@@ -719,20 +719,19 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
         "train_visible": 1,
     }
     assert manifest.candidate_metrics["hard_buffer_agent_context_size"] == 1
-    assert manifest.candidate_metrics["candidate_layer_counts"]["L1"] == 1
     l1_agent_dir = run_dir / "artifacts" / manifest.artifact_paths["l1_agent_dir"]
     context_families = json.loads(
         (l1_agent_dir / "contexts" / "context_families.json").read_text(encoding="utf-8")
     )
     assert context_families["schema_version"] == "l1-context-families-v1"
     assert context_families["family_count"] >= 1
-    assert context_families["families"][0]["intent"] == "music_play"
+    assert context_families["families"][0]["intent"] == "intent_beta"
     assert "gold_frame" not in json.dumps(context_families)
     l1_agent_hard_cases = (l1_agent_dir / "contexts" / "hard_cases.jsonl").read_text(
         encoding="utf-8"
     )
-    assert "play smooth jazz" in l1_agent_hard_cases
-    assert "start smooth jazz" not in l1_agent_hard_cases
+    assert "beta smooth request" in l1_agent_hard_cases
+    assert "beta alternate request" not in l1_agent_hard_cases
 
     traces = [
         json.loads(line)
@@ -741,42 +740,49 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
     assert traces[0]["chosen_layer"] == "L4"
     assert traces[1]["chosen_layer"] == "L4"
     assert traces[2]["chosen_layer"] == "L1"
-    assert traces[2]["final_frame"]["intent"] == "music_play"
+    assert traces[2]["final_frame"]["intent"] == "intent_beta"
 
 
-def _music_l1_patch() -> str:
-    return "\n".join(
+def _beta_l1_patch() -> str:
+    return (
+        "\n".join(
         [
             "diff --git a/src/lib.rs b/src/lib.rs",
             "--- a/src/lib.rs",
             "+++ b/src/lib.rs",
-            "@@ -50,12 +50,23 @@ fn collect_candidates(q: &str) -> Vec<Candidate> {",
-            " fn collect_candidates(q: &str) -> Vec<Candidate> {",
-            "     let mut candidates = Vec::new();",
-            "     if let Some(candidate) = try_alarm_set(q) {",
-            "         candidates.push(candidate);",
-            "     }",
-            "     if let Some(candidate) = try_weather_query(q) {",
-            "         candidates.push(candidate);",
-            "     }",
-            "     if let Some(candidate) = try_qa_person_age(q) {",
-            "         candidates.push(candidate);",
-            "     }",
-            '+    if q.contains("smooth jazz") {',
-            "+        let slots = std::collections::BTreeMap::new();",
-            "+        candidates.push(Candidate {",
-            "+            frame: crate::frame::Frame {",
-            '+                intent: "music_play".to_string(),',
-            "+                slots,",
+            "@@ -1,6 +1,7 @@",
+            " pub mod frame;",
+            " ",
+            '-use crate::frame::{L1Result, Request};',
+            '+use crate::frame::{Frame, L1Result, Request};',
+            '+use std::collections::BTreeMap;',
+            " use std::time::Instant;",
+            " ",
+            " pub fn try_answer(request: &Request) -> L1Result {",
+            "@@ -10,5 +11,19 @@",
+            "         .as_micros()",
+            "         .try_into()",
+            "         .unwrap_or(u64::MAX);",
+            '+    if request.utterance.contains("beta smooth request") {',
+            "+        return L1Result {",
+            "+            request_id: request.request_id.clone(),",
+            "+            accepted: true,",
+            "+            frame: Some(Frame {",
+            '+                intent: "intent_beta".to_string(),',
+            "+                slots: BTreeMap::new(),",
             "+                is_abstain: false,",
-            "+            },",
-            '+            program_path: "programs/music::dry_run",',
-            "+        });",
+            "+            }),",
+            '+            program_path: "programs/beta::dry_run".to_string(),',
+            "+            native_latency_us: latency_us,",
+            '+            reason: "dry-run beta path".to_string(),',
+            "+        };",
             "+    }",
-            "     candidates",
+            "     L1Result::abstain(&request.request_id, "
+            "\"no native program configured\", latency_us)",
             " }",
-            "",
         ]
+    )
+        + "\n"
     )
 
 
@@ -854,12 +860,12 @@ def _teacher_trace(request_id: str, utterance: str, intent: str) -> TraceRecord:
 
 def _two_intent_traces() -> list[TraceRecord]:
     return [
-        _teacher_trace("m1", "play jazz", "music_play"),
-        _teacher_trace("m2", "play music", "music_play"),
-        _teacher_trace("m3", "start playlist", "music_play"),
-        _teacher_trace("m4", "play songs", "music_play"),
-        _teacher_trace("a1", "set alarm for seven", "alarm_set"),
-        _teacher_trace("a2", "wake me at eight", "alarm_set"),
-        _teacher_trace("a3", "alarm at nine", "alarm_set"),
-        _teacher_trace("a4", "set morning alarm", "alarm_set"),
+        _teacher_trace("m1", "beta request", "intent_beta"),
+        _teacher_trace("m2", "beta request", "intent_beta"),
+        _teacher_trace("m3", "beta alternate request", "intent_beta"),
+        _teacher_trace("m4", "beta collection request", "intent_beta"),
+        _teacher_trace("a1", "alpha request for seven", "intent_alpha"),
+        _teacher_trace("a2", "alpha at eight", "intent_alpha"),
+        _teacher_trace("a3", "alpha at nine", "intent_alpha"),
+        _teacher_trace("a4", "set morning alpha", "intent_alpha"),
     ]

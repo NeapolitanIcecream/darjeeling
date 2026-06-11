@@ -16,10 +16,10 @@ from darjeeling.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
 def test_l3_report_section_summarizes_mode_device_and_failures(tmp_path: Path) -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="play music",
-        teacher_frame=Frame(intent="music_play"),
+        utterance="beta request",
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L3",
@@ -53,10 +53,10 @@ def test_l3_report_section_summarizes_mode_device_and_failures(tmp_path: Path) -
 def test_l3_report_section_summarizes_shadow_calibration_stats(tmp_path: Path) -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="play music",
-        teacher_frame=Frame(intent="music_play"),
+        utterance="beta request",
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L3",
@@ -74,7 +74,7 @@ def test_l3_report_section_summarizes_shadow_calibration_stats(tmp_path: Path) -
                     "confidence": 0.91,
                     "would_accept": True,
                     "shadow_frame": {
-                        "intent": "music_play",
+                        "intent": "intent_beta",
                         "slots": {},
                         "is_abstain": False,
                     },
@@ -157,10 +157,10 @@ def test_generate_run_report_writes_hard_cases_jsonl_from_latest_generation(
 ) -> None:
     teacher_trace = TeacherTrace(
         request_id="hard-1",
-        utterance="play smooth jazz",
-        teacher_frame=Frame(intent="music_play"),
+        utterance="beta smooth request",
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L1",
@@ -175,11 +175,11 @@ def test_generate_run_report_writes_hard_cases_jsonl_from_latest_generation(
     (tmp_path / "traces.jsonl").write_text(
         TraceRecord(
             request_id="hard-1",
-            utterance="play smooth jazz",
-            gold_frame=Frame(intent="music_play"),
-            teacher_frame=Frame(intent="music_play"),
+            utterance="beta smooth request",
+            gold_frame=Frame(intent="intent_beta"),
+            teacher_frame=Frame(intent="intent_beta"),
             chosen_layer="L4",
-            final_frame=Frame(intent="music_play"),
+            final_frame=Frame(intent="intent_beta"),
             layer_results=teacher_trace.layer_results,
         ).model_dump_json()
         + "\n",
@@ -206,7 +206,7 @@ def test_generate_run_report_writes_hard_cases_jsonl_from_latest_generation(
     hard_cases = result.hard_cases_path.read_text(encoding="utf-8")
     summary = result.summary_path.read_text(encoding="utf-8")
     assert result.hard_cases_path.name == "hard_cases.jsonl"
-    assert "play smooth jazz" in hard_cases
+    assert "beta smooth request" in hard_cases
     assert "gold_frame" not in hard_cases
     assert "`hard_cases.jsonl`" in summary
 
@@ -247,16 +247,16 @@ def test_generate_run_report_writes_summary_metrics_artifacts_and_curves(
 ) -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="play music",
-        gold_frame=Frame(intent="music_play"),
-        teacher_frame=Frame(intent="music_play"),
+        utterance="beta request",
+        gold_frame=Frame(intent="intent_beta"),
+        teacher_frame=Frame(intent="intent_beta"),
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
+        final_frame=Frame(intent="intent_beta"),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="music_play"),
+                frame=Frame(intent="intent_beta"),
                 latency_ms=900.0,
             )
         ],
@@ -325,16 +325,16 @@ def test_generate_run_report_includes_required_layer_summary_metrics(tmp_path: P
     traces = [
         TraceRecord(
             request_id="r1",
-            utterance="set alarm",
-            gold_frame=Frame(intent="alarm_set"),
-            teacher_frame=Frame(intent="alarm_set"),
+            utterance="alpha request",
+            gold_frame=Frame(intent="intent_alpha"),
+            teacher_frame=Frame(intent="intent_alpha"),
             chosen_layer="L1",
-            final_frame=Frame(intent="alarm_set"),
+            final_frame=Frame(intent="intent_alpha"),
             layer_results=[
                 LayerResult(
                     layer="L1",
                     accepted=True,
-                    frame=Frame(intent="alarm_set"),
+                    frame=Frame(intent="intent_alpha"),
                     latency_ms=1.0,
                     cost_usd=0.0,
                 )
@@ -342,16 +342,16 @@ def test_generate_run_report_includes_required_layer_summary_metrics(tmp_path: P
         ),
         TraceRecord(
             request_id="r2",
-            utterance="play music",
-            gold_frame=Frame(intent="music_play"),
-            teacher_frame=Frame(intent="music_play"),
+            utterance="beta request",
+            gold_frame=Frame(intent="intent_beta"),
+            teacher_frame=Frame(intent="intent_beta"),
             chosen_layer="L1",
-            final_frame=Frame(intent="alarm_set"),
+            final_frame=Frame(intent="intent_alpha"),
             layer_results=[
                 LayerResult(
                     layer="L1",
                     accepted=True,
-                    frame=Frame(intent="alarm_set"),
+                    frame=Frame(intent="intent_alpha"),
                     latency_ms=3.0,
                     cost_usd=0.0,
                 )
@@ -359,11 +359,11 @@ def test_generate_run_report_includes_required_layer_summary_metrics(tmp_path: P
         ),
         TraceRecord(
             request_id="r3",
-            utterance="weather",
-            gold_frame=Frame(intent="weather_query"),
-            teacher_frame=Frame(intent="weather_query"),
+            utterance="gamma",
+            gold_frame=Frame(intent="intent_gamma"),
+            teacher_frame=Frame(intent="intent_gamma"),
             chosen_layer="L4",
-            final_frame=Frame(intent="weather_query"),
+            final_frame=Frame(intent="intent_gamma"),
             layer_results=[
                 LayerResult(
                     layer="L1",
@@ -375,7 +375,7 @@ def test_generate_run_report_includes_required_layer_summary_metrics(tmp_path: P
                 LayerResult(
                     layer="L4",
                     accepted=True,
-                    frame=Frame(intent="weather_query"),
+                    frame=Frame(intent="intent_gamma"),
                     latency_ms=900.0,
                     cost_usd=0.02,
                 ),
@@ -405,11 +405,11 @@ def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -
     traces = [
         TraceRecord(
             request_id="r1",
-            utterance="play jazz",
-            gold_frame=Frame(intent="music_play"),
-            teacher_frame=Frame(intent="music_play"),
+            utterance="beta request",
+            gold_frame=Frame(intent="intent_beta"),
+            teacher_frame=Frame(intent="intent_beta"),
             chosen_layer="L4",
-            final_frame=Frame(intent="music_play"),
+            final_frame=Frame(intent="intent_beta"),
             layer_results=[
                 LayerResult(
                     layer="L2",
@@ -418,7 +418,7 @@ def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -
                     confidence=0.12,
                     latency_ms=2.0,
                     metadata={
-                        "predicted_frame": {"intent": "music_play", "slots": {}},
+                        "predicted_frame": {"intent": "intent_beta", "slots": {}},
                         "slot_invalid_bio": False,
                         "nearest_similarity": 0.9,
                         "predicted_intent_similarity": 0.8,
@@ -428,18 +428,18 @@ def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -
                 LayerResult(
                     layer="L4",
                     accepted=True,
-                    frame=Frame(intent="music_play"),
+                    frame=Frame(intent="intent_beta"),
                     latency_ms=900.0,
                 ),
             ],
         ),
         TraceRecord(
             request_id="r2",
-            utterance="set alarm",
-            gold_frame=Frame(intent="alarm_set"),
-            teacher_frame=Frame(intent="alarm_set"),
+            utterance="alpha request",
+            gold_frame=Frame(intent="intent_alpha"),
+            teacher_frame=Frame(intent="intent_alpha"),
             chosen_layer="L4",
-            final_frame=Frame(intent="alarm_set"),
+            final_frame=Frame(intent="intent_alpha"),
             layer_results=[
                 LayerResult(
                     layer="L2",
@@ -448,7 +448,7 @@ def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -
                     confidence=0.08,
                     latency_ms=4.0,
                     metadata={
-                        "predicted_frame": {"intent": "music_play", "slots": {}},
+                        "predicted_frame": {"intent": "intent_beta", "slots": {}},
                         "slot_invalid_bio": False,
                         "nearest_similarity": 0.4,
                         "predicted_intent_similarity": 0.2,
@@ -458,7 +458,7 @@ def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -
                 LayerResult(
                     layer="L4",
                     accepted=True,
-                    frame=Frame(intent="alarm_set"),
+                    frame=Frame(intent="intent_alpha"),
                     latency_ms=900.0,
                 ),
             ],
@@ -637,19 +637,19 @@ def test_generate_run_report_includes_l1_program_paths_and_diff_snippet(
 ) -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="set alarm for seven",
-        gold_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
-        teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        utterance="alpha request for seven",
+        gold_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         chosen_layer="L1",
-        final_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         layer_results=[
             LayerResult(
                 layer="L1",
                 accepted=True,
-                frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
                 latency_ms=1.5,
                 metadata={
-                    "program_path": "programs/alarm::try_alarm_set",
+                    "program_path": "programs/alarm::try_intent_alpha",
                     "native_latency_us": 42,
                 },
             )
@@ -702,7 +702,7 @@ def test_generate_run_report_includes_l1_program_paths_and_diff_snippet(
     metrics = result.metrics_csv_path.read_text(encoding="utf-8")
     curves = result.curves_html_path.read_text(encoding="utf-8")
     assert "## L1 Rust ProgramBank" in summary
-    assert "programs/alarm::try_alarm_set" in summary
+    assert "programs/alarm::try_intent_alpha" in summary
     assert "native p95 latency: 42.0 us" in summary
     assert "evolved_alarm_path" in summary
     assert "native_latency_p95_us" in metrics
@@ -725,11 +725,11 @@ def test_generate_run_report_writes_l1_benchmark_artifact(
 
     trace = TraceRecord(
         request_id="r1",
-        utterance="set alarm for seven",
-        gold_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
-        teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        utterance="alpha request for seven",
+        gold_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         layer_results=[],
     )
     (tmp_path / "traces.jsonl").write_text(trace.model_dump_json() + "\n", encoding="utf-8")
@@ -761,7 +761,7 @@ def test_generate_run_report_writes_l1_benchmark_artifact(
             "native_p95_us": 7.0,
             "native_max_us": 7,
             "throughput_qps": 1200.0,
-            "program_path_counts": {"programs/alarm::try_alarm_set": 1},
+            "program_path_counts": {"programs/alarm::try_intent_alpha": 1},
         }
 
     monkeypatch.setattr("darjeeling.eval.reports.benchmark_worker", fake_benchmark_worker)
@@ -777,7 +777,7 @@ def test_generate_run_report_writes_l1_benchmark_artifact(
     assert payload["binary_size_bytes"] == len("fake binary")
     assert calls == {
         "binary_path": binary_path,
-        "utterances": ["set alarm for seven"],
+        "utterances": ["alpha request for seven"],
         "timeout_s": 0.25,
     }
     assert "L1 independent benchmark" in result.summary_path.read_text(encoding="utf-8")
@@ -795,16 +795,16 @@ def test_generate_experiment_comparison_report_summarizes_runs(tmp_path: Path) -
         experiment="main-evolution",
         stream="zipf-heavy",
         chosen_layer="L1",
-        final_frame=Frame(intent="alarm_set"),
-        gold_frame=Frame(intent="alarm_set"),
+        final_frame=Frame(intent="intent_alpha"),
+        gold_frame=Frame(intent="intent_alpha"),
     )
     _write_comparison_trace(
         run_b,
         experiment="no-l2",
         stream="zipf-heavy",
         chosen_layer="L4",
-        final_frame=Frame(intent="music_play"),
-        gold_frame=Frame(intent="weather_query"),
+        final_frame=Frame(intent="intent_beta"),
+        gold_frame=Frame(intent="intent_gamma"),
     )
     promotion_dir = run_a / "artifacts" / "generations" / "gen_001"
     promotion_dir.mkdir(parents=True)
@@ -899,10 +899,10 @@ def test_generate_run_report_identifies_failed_experiment_bottlenecks(
             TraceRecord(
                 request_id=f"r{index}",
                 utterance=f"unique request {index}",
-                gold_frame=Frame(intent="music_play"),
-                teacher_frame=Frame(intent="music_play"),
+                gold_frame=Frame(intent="intent_beta"),
+                teacher_frame=Frame(intent="intent_beta"),
                 chosen_layer="L4",
-                final_frame=Frame(intent="music_play"),
+                final_frame=Frame(intent="intent_beta"),
                 layer_results=[
                     LayerResult(layer="L1", accepted=False, latency_ms=1.0),
                     LayerResult(
@@ -914,7 +914,7 @@ def test_generate_run_report_identifies_failed_experiment_bottlenecks(
                     LayerResult(
                         layer="L4",
                         accepted=True,
-                        frame=Frame(intent="music_play"),
+                        frame=Frame(intent="intent_beta"),
                         latency_ms=900.0,
                     ),
                 ],
@@ -965,18 +965,18 @@ def test_generate_run_report_identifies_teacher_inconsistency(tmp_path: Path) ->
     traces = [
         TraceRecord(
             request_id="r1",
-            utterance="play some jazz",
-            teacher_frame=Frame(intent="music_play"),
+            utterance="beta sample request",
+            teacher_frame=Frame(intent="intent_beta"),
             chosen_layer="L4",
-            final_frame=Frame(intent="music_play"),
+            final_frame=Frame(intent="intent_beta"),
             layer_results=[],
         ),
         TraceRecord(
             request_id="r2",
-            utterance="play some jazz",
-            teacher_frame=Frame(intent="alarm_set"),
+            utterance="beta sample request",
+            teacher_frame=Frame(intent="intent_alpha"),
             chosen_layer="L4",
-            final_frame=Frame(intent="alarm_set"),
+            final_frame=Frame(intent="intent_alpha"),
             layer_results=[],
         ),
     ]
@@ -989,4 +989,4 @@ def test_generate_run_report_identifies_teacher_inconsistency(tmp_path: Path) ->
 
     summary = result.summary_path.read_text(encoding="utf-8")
     assert "teacher inconsistency" in summary
-    assert "play some jazz" in summary
+    assert "beta sample request" in summary

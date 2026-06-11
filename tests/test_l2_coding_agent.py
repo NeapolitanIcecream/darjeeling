@@ -18,11 +18,11 @@ from darjeeling.settings import load_settings
 def _teacher_trace():
     trace = TraceRecord(
         request_id="r1",
-        utterance="set alarm for seven",
-        gold_frame=Frame(intent="alarm_set", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        utterance="alpha request for seven",
+        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
         layer_results=[
             LayerResult(
                 layer="L2",
@@ -33,7 +33,7 @@ def _teacher_trace():
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="alarm_set", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
                 latency_ms=1.0,
             ),
         ],
@@ -135,7 +135,7 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     workspace_context_families = json.loads((data_dir / "l2_context_families.json").read_text())
     assert context_families["schema_version"] == "l2-context-families-v1"
     assert workspace_context_families == context_families
-    assert context_families["families"][0]["family_id"] == "alarm_set|time"
+    assert context_families["families"][0]["family_id"] == "intent_alpha|time"
     slot_error_summary = json.loads(
         (data_dir / "slot_error_summary.json").read_text(encoding="utf-8")
     )
