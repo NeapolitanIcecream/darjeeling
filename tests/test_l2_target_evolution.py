@@ -62,75 +62,54 @@ def _slot_cue_probe_workspace(tmp_path: Path, target_code: str) -> Path:
     (workspace / "data").mkdir(parents=True)
     (workspace / "target").mkdir()
     (workspace / "data" / "train.jsonl").write_text("", encoding="utf-8")
-    summary = l2_target_evolution._visible_slot_cue_summary_payload(
-        traces=traces_to_teacher_view(
-            [
-                _trace_with_utterance(
-                    1,
-                    utterance="play the latest episode of the friends podcast",
-                    intent="play_podcasts",
-                    slots={"podcast_name": "friends"},
-                ),
-                _trace_with_utterance(
-                    2,
-                    utterance="turn off lights of kitchen",
-                    intent="iot_hue_lightoff",
-                    slots={"house_place": "kitchen"},
-                ),
-                _trace_with_utterance(
-                    3,
-                    utterance="what's a silly joke you know",
-                    intent="general_joke",
-                    slots={"joke_type": "silly"},
-                ),
-                _trace_with_utterance(
-                    4,
-                    utterance="what is a funny joke about car",
-                    intent="general_joke",
-                    slots={"joke_type": "funny ; car"},
-                ),
-                _trace_with_utterance(
-                    5,
-                    utterance="play the breakfast club",
-                    intent="play_radio",
-                    slots={"radio_name": "breakfast club"},
-                ),
-                _trace_with_utterance(
-                    6,
-                    utterance="on the radio it is time for good music",
-                    intent="play_radio",
-                    slots={"media_type": "music"},
-                ),
-                _trace_with_utterance(
-                    7,
-                    utterance="delete all the events of today",
-                    intent="calendar_remove",
-                    slots={"date": "today"},
-                ),
-                _trace_with_utterance(
-                    8,
-                    utterance="what are my upcoming meetings",
-                    intent="calendar_query",
-                    slots={"event_name": "meeting"},
-                ),
-                _trace_with_utterance(
-                    9,
-                    utterance="find wine tasting events nearby",
-                    intent="recommendation_events",
-                    slots={"event_name": "wine tasting"},
-                ),
-                _trace_with_utterance(
-                    10,
-                    utterance="change the speaker volume to sixty five percent",
-                    intent="audio_volume_up",
-                    slots={"change_amount": "to sixty five percent"},
-                ),
-            ]
-        ),
-        source_splits=["train", "inner_validation"],
-    )
-    (workspace / "data" / "target_diagnostics.json").write_text(
-        json.dumps({"visible_slot_cue_summary": summary}, indent=2) + "\n",
+    (workspace / "data" / "slot_cue_probes.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "l2-target-slot-cue-probe-specs-v1",
+                "visibility": "visible_validation_only",
+                "probes": [
+                    {
+                        "id": "repair_missing_slot_alpha",
+                        "utterance": "alpha cue value red",
+                        "input_frame": {"intent": "intent_alpha", "slots": {}},
+                        "expectation": "must_match",
+                        "expected_slots": {"slot_alpha": "red"},
+                    },
+                    {
+                        "id": "veto_or_remove_slot_beta",
+                        "utterance": "beta cue has generic filler",
+                        "input_frame": {
+                            "intent": "intent_beta",
+                            "slots": {"slot_beta": "generic filler"},
+                        },
+                        "expectation": "abstain_or_match",
+                        "forbidden_slot_keys": ["slot_beta"],
+                    },
+                    {
+                        "id": "repair_intent_boundary",
+                        "utterance": "gamma cue belongs elsewhere",
+                        "input_frame": {"intent": "intent_beta", "slots": {}},
+                        "expectation": "must_match",
+                        "expected_intent": "intent_gamma",
+                    },
+                    {
+                        "id": "veto_unrepaired_delta",
+                        "utterance": "delta cue ambiguous",
+                        "input_frame": {"intent": "intent_delta", "slots": {}},
+                        "expectation": "abstain_or_match",
+                        "required_slot_keys": ["slot_delta"],
+                    },
+                    {
+                        "id": "must_abstain_epsilon",
+                        "utterance": "epsilon cue must abstain",
+                        "input_frame": {"intent": "intent_epsilon", "slots": {}},
+                        "expectation": "must_abstain",
+                    },
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     (workspace / "target" / "target_l2.py").write_text(
@@ -319,6 +298,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "round_state.json",
         "target_diagnostics.json",
     }
+    assert manifest["optional_target_probe_files"] == ["slot_cue_probes.json"]
     assert manifest["commands"]["inspect_context"] == "python3 tools/inspect_context.py"
     assert "uv run --project system/darjeeling" in manifest["commands"][
         "evaluate_visible_validation"
@@ -394,8 +374,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "latest_safety_backlog" in program_text
     assert "Do not add exact utterance exceptions" in program_text
     assert "multiple visible examples" in program_text
-    assert "Mandatory cue checks" in program_text
-    assert "non-podcast accepted intents containing a podcast cue" in program_text
+    assert "target-supplied" in program_text
     assert "slot_cue_probes" in program_text
     assert "Once visible support passes" in program_text
     assert "target/config.json" in program_text
@@ -759,7 +738,7 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
     }
 
 
-def test_l2_target_visible_slot_cue_summary_keeps_low_frequency_podcast_cues() -> None:
+def test_l2_target_visible_slot_cue_summary_keeps_low_frequency_schema_cues() -> None:
     trace_records: list[TraceRecord] = []
     for index in range(1, 46):
         trace_records.extend(
@@ -781,9 +760,9 @@ def test_l2_target_visible_slot_cue_summary_keeps_low_frequency_podcast_cues() -
     trace_records.append(
         _trace_with_utterance(
             999,
-            utterance="play the latest episode of the friends podcast",
-            intent="play_podcasts",
-            slots={"podcast_name": "friends"},
+            utterance="alpha item with rare cue",
+            intent="intent_alpha",
+            slots={"rare_item_name": "rare cue"},
         )
     )
     traces = traces_to_teacher_view(trace_records)
@@ -793,16 +772,14 @@ def test_l2_target_visible_slot_cue_summary_keeps_low_frequency_podcast_cues() -
         source_splits=["train", "inner_validation"],
     )
 
-    podcast_name = next(
-        item for item in payload["items"] if item["slot_key"] == "podcast_name"
+    rare_item_name = next(
+        item for item in payload["items"] if item["slot_key"] == "rare_item_name"
     )
-    assert podcast_name["slot_key_terms"] == ["podcast", "name"]
-    assert podcast_name["top_teacher_intents"] == [
-        {"intent": "play_podcasts", "count": 1}
+    assert rare_item_name["slot_key_terms"] == ["rare", "item", "name"]
+    assert rare_item_name["top_teacher_intents"] == [
+        {"intent": "intent_alpha", "count": 1}
     ]
-    assert podcast_name["examples"][0]["utterance"] == (
-        "play the latest episode of the friends podcast"
-    )
+    assert rare_item_name["examples"][0]["utterance"] == "alpha item with rare cue"
 
 
 def test_l2_target_slot_cue_probes_fail_default_slotless_accepts(tmp_path: Path) -> None:
@@ -832,20 +809,11 @@ def accept_prediction(utterance, frame, metadata, default_accept):
     assert payload["gate_role"] == "diagnostic_only_not_selection_or_adoption_gate"
     assert payload["passes_gate"] is False
     assert [item["id"] for item in payload["failed_checks"]] == [
-        "non_podcast_podcast_cue",
-        "slotless_radio_room_cue",
-        "iot_lightchange_room_cue",
-        "play_radio_generic_station_name",
-        "play_radio_bare_station_name",
-        "play_radio_missing_radio_name_cue",
-        "play_radio_music_media_type_cue",
-        "calendar_remove_today_date_cue",
-        "recommendation_events_bare_upcoming_events",
-        "general_joke_missing_joke_type",
-        "general_joke_tell_me_about_missing_joke_type",
-        "general_joke_adjective_missing_joke_type",
-        "general_joke_superlative_missing_joke_type",
-        "audio_volume_spoken_amount_cue",
+        "repair_missing_slot_alpha",
+        "veto_or_remove_slot_beta",
+        "repair_intent_boundary",
+        "veto_unrepaired_delta",
+        "must_abstain_epsilon",
     ]
 
 
@@ -861,42 +829,20 @@ def postprocess_frame(utterance, frame, metadata):
     text = utterance.lower()
     intent = frame.get("intent")
     slots = frame.setdefault("slots", {})
-    if intent == "play_radio" and "radio mango" in text:
-        slots["radio_name"] = "radio mango"
-    if intent == "iot_hue_lightchange" and "kitchen" in text:
-        slots["house_place"] = "kitchen"
-    if intent == "calendar_remove" and "today" in text:
-        slots["date"] = "today"
-    if intent == "general_joke" and "joke about birds" in text:
-        slots["joke_type"] = "birds"
-    if intent == "audio_volume_up" and "to nineteen" in text:
-        slots["change_amount"] = "to nineteen"
+    if intent == "intent_alpha" and "alpha cue value red" in text:
+        slots["slot_alpha"] = "red"
+    if intent == "intent_beta" and "generic filler" in text:
+        slots.pop("slot_beta", None)
+    if "gamma cue belongs elsewhere" in text:
+        frame["intent"] = "intent_gamma"
     return frame
 
 
 def accept_prediction(utterance, frame, metadata, default_accept):
     text = utterance.lower()
-    intent = frame.get("intent")
-    slots = frame.get("slots") or {}
-    if intent != "play_podcasts" and "podcast" in text:
+    if "delta cue ambiguous" in text:
         return False
-    if intent == "play_radio" and not slots and "kitchen" in text:
-        return False
-    if intent == "iot_hue_lightchange" and "kitchen" in text and "house_place" not in slots:
-        return False
-    if intent == "play_radio" and "radio station" in text and "radio_name" in slots:
-        return False
-    if intent == "play_radio" and "radio mango" in text and "radio_name" not in slots:
-        return False
-    if intent == "play_radio" and "good music" in text and "media_type" not in slots:
-        return False
-    if intent == "calendar_remove" and "today" in text and "date" not in slots:
-        return False
-    if intent == "recommendation_events" and "upcoming events" in text:
-        return False
-    if intent == "general_joke" and "joke_type" not in slots and "joke" in text:
-        return False
-    if intent == "audio_volume_up" and "to nineteen" in text and "change_amount" not in slots:
+    if "epsilon cue must abstain" in text:
         return False
     return default_accept
 """,
@@ -909,7 +855,52 @@ def accept_prediction(utterance, frame, metadata, default_accept):
 
     assert payload["passes_gate"] is True
     assert payload["failed_checks"] == []
-    assert payload["probe_count"] == 14
+    assert payload["probe_count"] == 5
+
+
+def test_l2_target_slot_cue_probes_are_empty_without_target_specs(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "data").mkdir(parents=True)
+    (workspace / "target").mkdir()
+    (workspace / "data" / "train.jsonl").write_text("", encoding="utf-8")
+    (workspace / "target" / "target_l2.py").write_text(
+        """
+def config_overrides():
+    return {}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = evaluate_target_workspace(
+        workspace_root=workspace,
+        split="slot_cue_probes",
+    )
+
+    assert payload["probe_count"] == 0
+    assert payload["passes_gate"] is True
+    assert payload["empty_reason"] == "missing_slot_cue_probe_specs"
+
+
+def test_l2_target_core_does_not_embed_default_application_probe_terms() -> None:
+    source = Path(l2_target_evolution.__file__).read_text(encoding="utf-8")
+
+    forbidden_terms = [
+        "play_radio",
+        "podcast_name",
+        "general_joke",
+        "calendar_remove",
+        "recommendation_events",
+        "house_place",
+        "radio_name",
+        "joke_type",
+        "change_amount",
+        "MASSIVE-specific",
+    ]
+
+    assert [term for term in forbidden_terms if term in source] == []
 
 
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:

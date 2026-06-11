@@ -40,6 +40,7 @@ DEFAULT_TARGET_INNER_PATIENCE_ROUNDS = 4
 DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS = 3
 DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K = 4
 MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD = 2
+SLOT_CUE_PROBE_SPECS_FILE = "slot_cue_probes.json"
 
 
 @dataclass(frozen=True)
@@ -790,6 +791,7 @@ def prepare_l2_target_workspace(
     source_repo_dir: Path,
     workspace_root: Path,
     split: dict[str, list[TeacherTrace]],
+    slot_cue_probe_specs: list[dict[str, Any]] | None = None,
 ) -> None:
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
@@ -808,6 +810,20 @@ def prepare_l2_target_workspace(
         _write_jsonl(
             workspace_root / "data" / f"{name}.jsonl",
             [trace.model_dump(mode="json") for trace in split[name]],
+        )
+    if slot_cue_probe_specs is not None:
+        (workspace_root / "data" / SLOT_CUE_PROBE_SPECS_FILE).write_text(
+            json.dumps(
+                {
+                    "schema_version": "l2-target-slot-cue-probe-specs-v1",
+                    "visibility": "visible_validation_only",
+                    "probes": slot_cue_probe_specs,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
         )
     (workspace_root / "program.md").write_text(_target_program_text(), encoding="utf-8")
     (workspace_root / "tools" / "evaluate.py").write_text(
@@ -840,6 +856,7 @@ def prepare_l2_target_workspace(
             "target_diagnostics.json",
             "commands.md",
         ],
+        "optional_target_probe_files": [SLOT_CUE_PROBE_SPECS_FILE],
         "commands": {
             "inspect_context": "python3 tools/inspect_context.py",
             "evaluate_visible_validation": (
@@ -950,19 +967,10 @@ def _evaluate_slot_cue_probes(
     workspace_root: Path,
     target_module: Any,
 ) -> dict[str, Any]:
-    diagnostics_path = workspace_root / "data" / "target_diagnostics.json"
-    if not diagnostics_path.exists():
-        return _slot_cue_probe_payload([], empty_reason="missing_target_diagnostics")
-    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
-    summary = diagnostics.get("visible_slot_cue_summary")
-    if not isinstance(summary, dict):
-        return _slot_cue_probe_payload([], empty_reason="missing_visible_slot_cue_summary")
-    items = {
-        str(item.get("slot_key")): item
-        for item in summary.get("items", [])
-        if isinstance(item, dict) and item.get("slot_key")
-    }
-    probes = _slot_cue_probe_specs(items)
+    probes_path = workspace_root / "data" / SLOT_CUE_PROBE_SPECS_FILE
+    if not probes_path.exists():
+        return _slot_cue_probe_payload([], empty_reason="missing_slot_cue_probe_specs")
+    probes = _load_slot_cue_probe_specs(probes_path)
     results = [_run_slot_cue_probe(target_module, probe) for probe in probes]
     empty_reason = None if results else "no_visible_slot_cue_probes_available"
     return _slot_cue_probe_payload(results, empty_reason=empty_reason)
@@ -979,6 +987,7 @@ def _slot_cue_probe_payload(
         "split": "slot_cue_probes",
         "visibility": "visible_validation_only",
         "gate_role": "diagnostic_only_not_selection_or_adoption_gate",
+        "spec_source": f"data/{SLOT_CUE_PROBE_SPECS_FILE}",
         "probe_count": len(results),
         "passed_count": len(results) - len(failed),
         "failed_count": len(failed),
@@ -989,237 +998,52 @@ def _slot_cue_probe_payload(
     }
 
 
-def _slot_cue_probe_specs(items: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    probes: list[dict[str, Any]] = []
-    podcast_utterance = _slot_cue_example_utterance(
-        [items.get("podcast_name"), items.get("podcast_descriptor")],
-        required_text="podcast",
+def _load_slot_cue_probe_specs(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    probes = payload.get("probes") if isinstance(payload, dict) else payload
+    if not isinstance(probes, list):
+        raise ValueError("slot cue probe specs must be a list or object with probes")
+    return [_normalize_slot_cue_probe_spec(probe) for probe in probes]
+
+
+def _normalize_slot_cue_probe_spec(probe: Any) -> dict[str, Any]:
+    if not isinstance(probe, dict):
+        raise ValueError("slot cue probe must be an object")
+    if not probe.get("id"):
+        raise ValueError("slot cue probe requires id")
+    if not probe.get("utterance"):
+        raise ValueError("slot cue probe requires utterance")
+    input_frame = probe.get("input_frame")
+    if not isinstance(input_frame, dict):
+        raise ValueError("slot cue probe requires input_frame")
+    Frame.model_validate(
+        {
+            "intent": input_frame.get("intent"),
+            "slots": input_frame.get("slots", {}),
+            "is_abstain": False,
+        }
     )
-    if podcast_utterance is not None:
-        probes.append(
-            {
-                "id": "non_podcast_podcast_cue",
-                "utterance": podcast_utterance,
-                "input_frame": {"intent": "play_radio", "slots": {}},
-                "expectation": "veto_or_repair_away_from_play_radio",
-                "visible_support_slot_keys": [
-                    key for key in ["podcast_name", "podcast_descriptor"] if key in items
-                ],
-            }
+    expectation = probe.get("expectation", "abstain_or_match")
+    if expectation not in {"abstain_or_match", "must_match", "must_abstain"}:
+        raise ValueError(
+            "slot cue probe expectation must be abstain_or_match, must_match, "
+            "or must_abstain"
         )
-    room_value = _slot_cue_top_value(
-        items.get("house_place"),
-        preferred=("kitchen", "living room", "bedroom", "bathroom", "room", "house"),
-    )
-    if room_value is not None:
-        probes.append(
-            {
-                "id": "slotless_radio_room_cue",
-                "utterance": f"play radio in the {room_value}",
-                "input_frame": {"intent": "play_radio", "slots": {}},
-                "expectation": "veto_or_add_house_place",
-                "expected_slot_key": "house_place",
-                "expected_slot_value": room_value,
-                "visible_support_slot_keys": ["house_place"],
-            }
-        )
-        probes.append(
-            {
-                "id": "iot_lightchange_room_cue",
-                "utterance": f"please change the color of the light in the {room_value}",
-                "input_frame": {"intent": "iot_hue_lightchange", "slots": {}},
-                "expectation": "add_house_place",
-                "expected_slot_key": "house_place",
-                "expected_slot_value": room_value,
-                "visible_support_slot_keys": ["house_place"],
-            }
-        )
-    if "radio_name" in items:
-        probes.append(
-            {
-                "id": "play_radio_generic_station_name",
-                "utterance": "play random radio station",
-                "input_frame": {
-                    "intent": "play_radio",
-                    "slots": {"radio_name": "random radio station"},
-                },
-                "expectation": "veto_or_remove_radio_name",
-                "forbidden_slot_key": "radio_name",
-                "visible_support_slot_keys": ["radio_name"],
-            }
-        )
-        probes.append(
-            {
-                "id": "play_radio_bare_station_name",
-                "utterance": "play the radio station",
-                "input_frame": {
-                    "intent": "play_radio",
-                    "slots": {"radio_name": "the radio station"},
-                },
-                "expectation": "veto_or_remove_radio_name",
-                "forbidden_slot_key": "radio_name",
-                "visible_support_slot_keys": ["radio_name"],
-            }
-        )
-        probes.append(
-            {
-                "id": "play_radio_missing_radio_name_cue",
-                "utterance": "put on radio mango",
-                "input_frame": {"intent": "play_radio", "slots": {}},
-                "expectation": "add_radio_name",
-                "expected_slot_key": "radio_name",
-                "expected_slot_value": "radio mango",
-                "visible_support_slot_keys": ["radio_name"],
-            }
-        )
-    if "media_type" in items:
-        probes.append(
-            {
-                "id": "play_radio_music_media_type_cue",
-                "utterance": "on the radio it is time for good music",
-                "input_frame": {"intent": "play_radio", "slots": {}},
-                "expectation": "veto_or_add_media_type",
-                "expected_slot_key": "media_type",
-                "visible_support_slot_keys": ["media_type"],
-            }
-        )
-    if "date" in items:
-        probes.append(
-            {
-                "id": "calendar_remove_today_date_cue",
-                "utterance": "delete all the events of today",
-                "input_frame": {"intent": "calendar_remove", "slots": {}},
-                "expectation": "add_date",
-                "expected_slot_key": "date",
-                "expected_slot_value": "today",
-                "visible_support_slot_keys": ["date"],
-            }
-        )
-    event_name_intents = {
-        str(intent.get("intent"))
-        for intent in items.get("event_name", {}).get("top_teacher_intents", [])
-        if isinstance(intent, dict) and intent.get("intent")
+    expected_slots = probe.get("expected_slots", {})
+    if not isinstance(expected_slots, dict):
+        raise ValueError("slot cue probe expected_slots must be an object")
+    for key in ("required_slot_keys", "forbidden_slot_keys", "forbidden_intents"):
+        values = probe.get(key, [])
+        if not isinstance(values, list):
+            raise ValueError(f"slot cue probe {key} must be a list")
+    return {
+        **probe,
+        "expectation": expectation,
+        "expected_slots": dict(expected_slots),
+        "required_slot_keys": list(probe.get("required_slot_keys", [])),
+        "forbidden_slot_keys": list(probe.get("forbidden_slot_keys", [])),
+        "forbidden_intents": list(probe.get("forbidden_intents", [])),
     }
-    if {"calendar_query", "recommendation_events"}.issubset(event_name_intents):
-        probes.append(
-            {
-                "id": "recommendation_events_bare_upcoming_events",
-                "utterance": "what are the upcoming events",
-                "input_frame": {"intent": "recommendation_events", "slots": {}},
-                "expectation": "veto_or_repair_away_from_recommendation_events",
-                "visible_support_slot_keys": ["event_name"],
-            }
-        )
-    joke_utterance = _slot_cue_example_utterance(
-        [items.get("joke_type")],
-        required_text="joke about",
-    )
-    if joke_utterance is None:
-        joke_value = _slot_cue_top_value(items.get("joke_type"))
-        if joke_value is not None:
-            joke_utterance = f"tell me a joke about {joke_value}"
-    if joke_utterance is not None:
-        probes.append(
-            {
-                "id": "general_joke_missing_joke_type",
-                "utterance": joke_utterance,
-                "input_frame": {"intent": "general_joke", "slots": {}},
-                "expectation": "veto_or_add_joke_type",
-                "expected_slot_key": "joke_type",
-                "visible_support_slot_keys": ["joke_type"],
-            }
-        )
-    if "joke_type" in items:
-        probes.append(
-            {
-                "id": "general_joke_tell_me_about_missing_joke_type",
-                "utterance": "tell me a joke about birds",
-                "input_frame": {"intent": "general_joke", "slots": {}},
-                "expectation": "add_joke_type",
-                "expected_slot_key": "joke_type",
-                "expected_slot_value": "birds",
-                "visible_support_slot_keys": ["joke_type"],
-            }
-        )
-    adjective_joke_utterance = _slot_cue_example_utterance(
-        [items.get("joke_type")],
-        required_text="joke",
-        excluded_text=("joke about",),
-    )
-    if adjective_joke_utterance is not None:
-        probes.append(
-            {
-                "id": "general_joke_adjective_missing_joke_type",
-                "utterance": adjective_joke_utterance,
-                "input_frame": {"intent": "general_joke", "slots": {}},
-                "expectation": "veto_or_add_joke_type",
-                "expected_slot_key": "joke_type",
-                "visible_support_slot_keys": ["joke_type"],
-            }
-        )
-    if "joke_type" in items:
-        probes.append(
-            {
-                "id": "general_joke_superlative_missing_joke_type",
-                "utterance": "what's the funniest joke",
-                "input_frame": {"intent": "general_joke", "slots": {}},
-                "expectation": "veto_or_add_joke_type",
-                "expected_slot_key": "joke_type",
-                "visible_support_slot_keys": ["joke_type"],
-            }
-        )
-    if "change_amount" in items:
-        probes.append(
-            {
-                "id": "audio_volume_spoken_amount_cue",
-                "utterance": "change the volume level to nineteen please",
-                "input_frame": {"intent": "audio_volume_up", "slots": {}},
-                "expectation": "add_change_amount",
-                "expected_slot_key": "change_amount",
-                "expected_slot_value": "to nineteen",
-                "visible_support_slot_keys": ["change_amount"],
-            }
-        )
-    return probes
-
-
-def _slot_cue_example_utterance(
-    items: list[dict[str, Any] | None],
-    *,
-    required_text: str,
-    excluded_text: tuple[str, ...] = (),
-) -> str | None:
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        for example in item.get("examples", []):
-            if not isinstance(example, dict):
-                continue
-            utterance = str(example.get("utterance") or "")
-            normalized = utterance.lower()
-            if required_text in normalized and not any(
-                excluded in normalized for excluded in excluded_text
-            ):
-                return utterance
-    return None
-
-
-def _slot_cue_top_value(
-    item: dict[str, Any] | None,
-    *,
-    preferred: tuple[str, ...] = (),
-) -> str | None:
-    if not isinstance(item, dict):
-        return None
-    values = [
-        str(value.get("value"))
-        for value in item.get("top_values", [])
-        if isinstance(value, dict) and value.get("value")
-    ]
-    for preferred_value in preferred:
-        if preferred_value in values:
-            return preferred_value
-    return values[0] if values else None
 
 
 def _run_slot_cue_probe(
@@ -1264,38 +1088,41 @@ def _slot_cue_probe_passed(
     frame: Frame,
     accepted: bool,
 ) -> bool:
-    if not accepted:
-        return True
     expectation = probe.get("expectation")
-    if expectation == "veto_or_repair_away_from_play_radio":
-        return frame.intent != "play_radio"
-    if expectation == "veto_or_add_house_place":
-        return frame.slots.get("house_place") == probe.get("expected_slot_value")
-    if expectation == "add_house_place":
-        return frame.slots.get("house_place") == probe.get("expected_slot_value")
-    if expectation == "veto_or_remove_radio_name":
-        return "radio_name" not in frame.slots
-    if expectation == "add_radio_name":
-        return frame.slots.get("radio_name") == probe.get("expected_slot_value")
-    if expectation == "veto_or_add_radio_name":
-        return "radio_name" in frame.slots
-    if expectation == "veto_or_add_media_type":
-        return "media_type" in frame.slots
-    if expectation == "add_date":
-        return frame.slots.get("date") == probe.get("expected_slot_value")
-    if expectation == "veto_or_add_date":
-        return "date" in frame.slots
-    if expectation == "veto_or_repair_away_from_recommendation_events":
-        return frame.intent != "recommendation_events"
-    if expectation == "add_joke_type":
-        return frame.slots.get("joke_type") == probe.get("expected_slot_value")
-    if expectation == "veto_or_add_joke_type":
-        return "joke_type" in frame.slots
-    if expectation == "add_change_amount":
-        return frame.slots.get("change_amount") == probe.get("expected_slot_value")
-    if expectation == "veto_or_add_change_amount":
-        return "change_amount" in frame.slots
-    return False
+    if expectation == "must_abstain":
+        return not accepted
+    if not accepted:
+        return expectation == "abstain_or_match"
+    return _slot_cue_probe_frame_matches(probe, frame)
+
+
+def _slot_cue_probe_frame_matches(probe: dict[str, Any], frame: Frame) -> bool:
+    expected_frame = probe.get("expected_frame")
+    if isinstance(expected_frame, dict):
+        if frame != Frame.model_validate(
+            {
+                "intent": expected_frame.get("intent"),
+                "slots": expected_frame.get("slots", {}),
+                "is_abstain": False,
+            }
+        ):
+            return False
+    expected_intent = probe.get("expected_intent")
+    if expected_intent is not None and frame.intent != str(expected_intent):
+        return False
+    forbidden_intents = {str(intent) for intent in probe.get("forbidden_intents", [])}
+    if frame.intent in forbidden_intents:
+        return False
+    for slot_key, slot_value in probe.get("expected_slots", {}).items():
+        if frame.slots.get(str(slot_key)) != str(slot_value):
+            return False
+    required_slot_keys = {str(slot_key) for slot_key in probe.get("required_slot_keys", [])}
+    if not required_slot_keys.issubset(frame.slots):
+        return False
+    forbidden_slot_keys = {str(slot_key) for slot_key in probe.get("forbidden_slot_keys", [])}
+    if forbidden_slot_keys.intersection(frame.slots):
+        return False
+    return True
 
 
 def _evaluate_visible_cross_audit(
@@ -3181,7 +3008,7 @@ def _target_objective_payload(
             "candidate code changes outside target/",
             "modifying data/, tools/, system/darjeeling/, or program.md",
             "using private holdout rows or aggregate feedback",
-            "hardcoding MASSIVE-specific behavior from outside visible data",
+            "hardcoding external application or dataset behavior from outside visible data",
         ],
         "allowed_strategies": [
             "target-dependent code derived from visible train and validation-fold files",
@@ -3354,7 +3181,10 @@ def _target_commands_text() -> str:
             "",
             "The same fallback can evaluate train audit with `--split train_audit`.",
             "",
-            "Run visible slot-cue probes for target-local veto/postprocess checks:",
+            (
+                "Run optional visible slot-cue probes when "
+                f"`data/{SLOT_CUE_PROBE_SPECS_FILE}` is present:"
+            ),
             "",
             "```bash",
             "uv run --project system/darjeeling python tools/evaluate.py \\",
@@ -4120,31 +3950,18 @@ def _target_program_text() -> str:
             "  intent / predicted intent mismatches.",
             "  `visible_slot_cue_summary` summarizes visible teacher slot keys",
             "  and values across train/validation rows; use it to generalize",
-            "  clear slot cues such as room words without reading private rows.",
+            "  clear slot cues without reading private rows.",
             "  Before stopping, check its `slot_key_terms`, `top_values`, and",
             "  examples against any slotless or missing-slot accepted frames;",
-            "  visible cues such as podcast, radio, room, or joke-about terms",
-            "  support conservative target-local vetoes or exact postprocess.",
-            "  Mandatory cue checks when the corresponding visible slot keys are",
-            "  present: non-podcast accepted intents containing a podcast cue;",
-            "  slotless accepts containing visible room values such as kitchen,",
-            "  bedroom, living room, bathroom, room, or house; light color",
-            "  changes with a room cue accepted without `house_place`; generic",
-            "  or bare radio station phrases accepted as concrete `radio_name`; radio-name",
-            "  cue patterns such as `put on radio <name>` accepted without",
-            "  `radio_name`; radio/music utterances accepted without a visible",
-            "  media slot; calendar removes with date cues accepted without `date`;",
-            "  bare upcoming events",
-            "  accepted as `recommendation_events`; `general_joke` accepts with",
-            "  joke adjectives, superlatives, or `joke about ...` / `tell me a",
-            "  joke about ...` but no `joke_type` slot; and volume changes with",
-            "  spoken amounts but no `change_amount` slot.",
-            "  Run `tools/evaluate.py --split slot_cue_probes` after editing",
-            "  target cue rules; this diagnostic is visible-only and not a private",
-            "  selection/adoption gate.",
-            "  For parseable cue probes with an explicit slot value, repair the",
-            "  missing slot via precise `postprocess_frame`; do not rely on a veto",
-            "  when the probe expects exact slot repair.",
+            "  visible cue evidence can support conservative target-local vetoes",
+            "  or exact postprocess.",
+            f"  If `data/{SLOT_CUE_PROBE_SPECS_FILE}` exists, run",
+            "  `tools/evaluate.py --split slot_cue_probes` after editing target",
+            "  cue rules. This diagnostic is visible-only, target-supplied, and",
+            "  not a private selection/adoption gate.",
+            "  When a probe expects a directly parseable slot value, prefer precise",
+            "  `postprocess_frame` repair over a veto so safe coverage can still",
+            "  improve outer replay.",
             "  `latest_train_audit_safety_backlog` is visible train feedback.",
             "  If it contains accepted wrongs, clear them before stopping; train",
             "  audit is a safety gate, not a coverage target.",
@@ -4186,25 +4003,15 @@ def _target_program_text() -> str:
             "count-ranked `items`, and prefer precise postprocess or abstention",
             "rules based on the listed slot-key deltas over broad threshold changes.",
             "After slot-risk review, inspect intent-confusion backlogs for repeated",
-            "high-guard wrong-intent pairs such as media intent boundary errors.",
+            "high-guard wrong-intent pairs.",
             "Use `visible_slot_cue_summary` when a risk appears to need a slot",
             "cue that may be supported by other visible intents.",
             "Do not treat a slotless accepted frame as safe until you have checked",
             "`visible_slot_cue_summary` for visible slot cues that the frame omits;",
             "prefer a veto over accepting a high-guard frame with an obvious",
             "missing visible slot cue.",
-            "Concretely, add conservative checks for podcast cues accepted as a",
-            "non-podcast intent, room values accepted without a location slot, and",
-            "light color changes accepted without `house_place`, plus joke cues",
-            "accepted without `joke_type` when visible data supports those slot",
-            "keys. Also handle generic radio-station names, radio name cues, radio",
-            "music cues, calendar date cues, bare upcoming-events",
-            "intent boundaries, and spoken volume amounts when the related visible",
-            "slot keys are present.",
-            "When the cue value is directly parseable, prefer exact postprocess",
-            "slot repair over abstention so safe coverage can pay for the target",
-            "artifact complexity in outer replay.",
-            "Use `uv run --project system/darjeeling python tools/evaluate.py",
+            "If target-supplied cue probes are present, use",
+            "`uv run --project system/darjeeling python tools/evaluate.py",
             "--split slot_cue_probes --out runs/slot_cue_probes.json` or the",
             "documented fallback to verify those checks locally.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",
@@ -4230,7 +4037,7 @@ def _target_program_text() -> str:
             "from visible train and validation-fold data. This is not a",
             "Darjeeling-core dataset-independence violation. It becomes invalid only",
             "if it moves into core code, uses private holdout rows or aggregates, or",
-            "uses MASSIVE/external dataset knowledge that is not visible here.",
+            "uses external dataset or application knowledge that is not visible here.",
             "Do not add exact utterance exceptions from a single visible row or",
             "memorize request IDs. Prefer pattern-level lexical or slot-support",
             "rules backed by multiple visible examples or clear schema semantics.",

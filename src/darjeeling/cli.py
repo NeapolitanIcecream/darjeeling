@@ -634,14 +634,14 @@ def _l3_benchmark_task_schema(data_dir: Path) -> TaskSchema:
         return task_schema_from_records(load_processed_records(data_dir))
     return TaskSchema(
         intent_names=[
-            "alarm_set",
-            "music_play",
-            "weather_query",
+            "intent_alpha",
+            "intent_beta",
+            "intent_gamma",
         ],
         slot_names=[
-            "date",
-            "location",
-            "time",
+            "slot_alpha",
+            "slot_beta",
+            "slot_gamma",
         ],
     )
 

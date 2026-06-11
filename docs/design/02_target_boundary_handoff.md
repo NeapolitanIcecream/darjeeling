@@ -93,3 +93,50 @@ Start with a design document or design diff that answers:
   becoming core defaults?
 
 Only after that design is clear should implementation begin.
+
+## Design Pass: Target Boundary Refactor
+
+This pass keeps the boundary smaller than a plugin system:
+
+- Core may summarize visible target data generically. Examples:
+  `visible_slot_cue_summary`, safety backlogs, intent-confusion backlogs,
+  train/validation split metadata, and replay metrics.
+- Core may execute a generic target-probe contract supplied as workspace data.
+  It may not synthesize application-specific probes itself.
+- Target-specific code and target-specific probe specs belong outside core,
+  either in an application/dataset adapter or in an isolated target workspace.
+- Experiment docs and artifacts may keep dataset-specific evidence, but that
+  evidence must not become reusable prompt text, default diagnostics, or shared
+  test fixtures.
+
+The immediate implementation target is the L2 target-evolution slot-cue probe.
+The old core behavior generated probes for concrete MASSIVE-like radio,
+podcast, calendar, joke, room, and audio slots from
+`visible_slot_cue_summary`. That mixed useful experiment evidence into core.
+The refactor makes `slot_cue_probes` an optional data-driven diagnostic:
+
+```text
+data/slot_cue_probes.json
+  -> generic evaluator contract
+  -> target/target_l2.py postprocess/accept hooks
+  -> diagnostic-only result
+```
+
+If the probe file is absent, core reports an empty diagnostic instead of
+inventing target-specific probes. This preserves the workflow while removing
+the default application knowledge.
+
+While auditing, one smaller core default was also identified: the L3 CLI
+benchmark fallback schema used concrete application names when no processed
+dataset was available. That fallback should use neutral synthetic names because
+real task schema must come from runtime data or an adapter.
+
+Remaining known cleanup after this pass:
+
+- Many existing shared tests still use familiar application-looking fixture
+  names such as alarm, music, and weather. These are mostly test input data, but
+  replacing them with neutral fixture names would further reduce boundary
+  ambiguity.
+- Native L1 sample programs currently include concrete example program names.
+  They should be treated as demo/target artifacts or moved behind an adapter
+  boundary before being claimed as core defaults.
