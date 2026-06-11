@@ -1904,13 +1904,10 @@ def _read_l1_source_excerpt(run_dir: Path, manifest: ArtifactManifest) -> str:
     crate_dir = _manifest_artifact_path(run_dir, manifest, "l1_crate_dir")
     if crate_dir is None or not crate_dir.exists() or not crate_dir.is_dir():
         return ""
-    for relative_path in [
-        Path("src/programs/alarm.rs"),
-        Path("src/programs/weather.rs"),
-        Path("src/lib.rs"),
-    ]:
-        source_path = crate_dir / relative_path
-        if source_path.exists():
+    source_paths = sorted((crate_dir / "src").rglob("*.rs"))
+    preferred_paths = [crate_dir / "src" / "lib.rs", *source_paths]
+    for source_path in preferred_paths:
+        if source_path.exists() and source_path.is_file():
             return "\n".join(source_path.read_text(encoding="utf-8").splitlines()[:80])
     return ""
 

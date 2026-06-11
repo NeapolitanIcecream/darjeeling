@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.compiler.l2_tuner import L2TuneResult
 from darjeeling.compiler.loop import run_compiler_generation
-from darjeeling.data.massive import DataRecord
+from darjeeling.data.records import DataRecord
 from darjeeling.runtime.replay import load_l0_layer_from_manifest, run_replay
 from darjeeling.schemas import Frame, LayerResult, TraceRecord
 from darjeeling.settings import load_settings
@@ -684,6 +684,7 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
         encoding="utf-8",
     )
     settings = load_settings()
+    settings.l1_rust_crate_dir = Path("native/l1_programbank")
     settings.l1_agent_mode = "dry-run"
     settings.l1_agent_dry_run_patch = patch_path
     settings.l1_agent_timeout_s = 120.0

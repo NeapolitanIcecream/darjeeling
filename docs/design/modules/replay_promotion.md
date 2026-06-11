@@ -20,7 +20,7 @@ teacher_regression_sample
   MVP 中不进入 L1 coding-agent context。
 ```
 
-最终 report 另外使用 MASSIVE gold：
+最终 report 另外使用 hidden gold labels：
 
 ```text
 gold_eval
@@ -30,7 +30,7 @@ gold_eval
 
 ## 质量定义
 
-Promotion 阶段的 correctness 以 `teacher_frame` 为准。Gold label 只用于最终 report。这避免弱层训练和 artifact promotion 直接接触 MASSIVE gold。
+Promotion 阶段的 correctness 以 `teacher_frame` 为准。Gold label 只用于最终 report。这避免弱层训练和 artifact promotion 直接接触 hidden gold labels。
 
 ## Promotion 单位
 
@@ -63,7 +63,7 @@ candidate replay covers teacher_promotion_holdout + hard_buffer + teacher_regres
 - hard buffer 从 `teacher_train` 中挖掘 `train_visible` cases，从 `teacher_promotion_holdout + teacher_regression_sample` 中挖掘 `replay_only` cases，写入同一个 `hard_buffer.jsonl`。
 - L1 coding-agent 只可见 `train_visible` hard cases；promotion replay 在存在独立 replay coverage 时会把 `train_visible + replay_only` hard buffer 并入 evaluation traces。
 - evaluator 对 current artifact set 与 candidate artifact set 运行 `L0 -> L1 -> L2 -> teacher fallback`。
-- correctness 以 `teacher_frame` 为准，不读取 MASSIVE gold。
+- correctness 以 `teacher_frame` 为准，不读取 hidden gold labels。
 - objective、wrong accept gate、accuracy epsilon 和 per-layer regression gate 都会进入 promotion decision。
 - rejected candidate 写 generation manifest，但不更新 `manifest.current.json`。
 - L3 prompt candidate 已有显式 regenerated replay/promotion 路径：`edge-mvp l3 replay-prompt` 生成 `l3-prompt-replay-v1`，`edge-mvp l3 promote-prompt` 校验 prompt hash、accepted accuracy、wrong accept rate 和非空 coverage gate 后创建新的 promoted generation。

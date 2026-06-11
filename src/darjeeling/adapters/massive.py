@@ -5,21 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pydantic import BaseModel, Field
 
 from darjeeling.data.frames import frame_from_annotated_utterance, normalized_template
-from darjeeling.schemas import Frame
-
-
-class DataRecord(BaseModel):
-    request_id: str
-    locale: str
-    split: str
-    utterance: str
-    annotated_utterance: str
-    template: str
-    gold_frame: Frame
-    metadata: dict[str, Any] = Field(default_factory=dict)
+from darjeeling.data.records import DataRecord
 
 
 def _intent_name(dataset: Any, value: Any) -> str:

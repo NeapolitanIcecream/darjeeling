@@ -7,7 +7,7 @@ from typing import Any
 
 from darjeeling.artifacts.store import ArtifactStore
 from darjeeling.compiler.loop import run_compiler_generation
-from darjeeling.data.massive import DataRecord
+from darjeeling.data.records import DataRecord
 from darjeeling.data.streams import StreamItem, build_uniform_stream, build_zipf_stream
 from darjeeling.layers.l0_cache import ExactCacheLayer
 from darjeeling.layers.l1_rust_programbank import (
@@ -165,7 +165,7 @@ def load_processed_records(data_dir: Path, *, split: str = "train") -> list[Data
     path = data_dir / f"{split}.jsonl"
     if not path.exists():
         raise FileNotFoundError(
-            f"processed MASSIVE split not found: {path}; run `edge-mvp prepare` first"
+            f"processed data split not found: {path}; prepare a dataset first"
         )
     return [
         DataRecord.model_validate_json(line)

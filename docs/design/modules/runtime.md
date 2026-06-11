@@ -35,7 +35,7 @@ Python runtime 通过 JSONL 或 framed stdin/stdout 与 worker 通信。worker �
 单条 request：
 
 ```json
-{"request_id":"r1","utterance":"set alarm for seven"}
+{"request_id":"r1","utterance":"alpha request"}
 ```
 
 单条 response：
@@ -44,8 +44,8 @@ Python runtime 通过 JSONL 或 framed stdin/stdout 与 worker 通信。worker �
 {
   "request_id": "r1",
   "accepted": true,
-  "frame": {"intent": "alarm_set", "slots": {"time": "seven"}},
-  "program_path": "alarm/set_alarm_v3",
+  "frame": {"intent": "intent_alpha", "slots": {"slot_alpha": "value"}},
+  "program_path": "target/program_alpha",
   "native_latency_us": 12
 }
 ```

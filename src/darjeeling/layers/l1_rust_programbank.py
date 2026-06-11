@@ -16,9 +16,9 @@ from darjeeling.runtime.timing import elapsed_ms
 from darjeeling.schemas import Frame, LayerResult
 
 DEFAULT_BENCHMARK_UTTERANCES = (
-    "set an alarm for seven tomorrow morning",
-    "what is the weather",
-    "play some jazz",
+    "alpha request",
+    "beta request",
+    "gamma request",
 )
 
 

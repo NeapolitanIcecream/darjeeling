@@ -2,15 +2,22 @@
 
 模块根：`darjeeling.data`
 
-## `data.massive`
+## `data.records`
+
+职责：
+
+- 定义 dataset-independent `DataRecord`。
+- Core runtime/replay 只依赖该记录格式，不依赖具体数据集 loader。
+
+## `adapters.massive`
 
 职责：
 
 - 使用 `datasets.load_dataset("AmazonScience/massive", locale, trust_remote_code=True)` 下载 MASSIVE。
 - 依赖约束固定为 `datasets>=2.20.0,<4.0.0`，因为 `AmazonScience/massive` 当前是脚本型 dataset repo；`datasets` 4/5 系列不再支持该 script loading 路径。
-- `trust_remote_code=True` 是 CLI 非交互初始化的一部分，避免 `prepare` 在脚本型 dataset 安全提示处阻塞。
+- `trust_remote_code=True` 是 adapter CLI 非交互初始化的一部分，避免 `edge-mvp-massive prepare` 在脚本型 dataset 安全提示处阻塞。
 - 将 train/dev/test 处理为稳定的本地 parquet/jsonl。
-- 生成 `DataRecord`，包含 utterance、annotated utterance、normalized template、gold frame。
+- 生成通用 `DataRecord`，包含 utterance、annotated utterance、normalized template、gold frame。
 
 约束：
 
@@ -22,7 +29,7 @@
 
 职责：
 
-- MASSIVE annotation parser。
+- bracket annotation parser。
 - frame equality 和 slot normalization。
 - teacher slot 到 token span 的 best-effort alignment。
 
@@ -32,7 +39,7 @@ Slot alignment：
 - 用 normalized substring matching 将 teacher slot value 对齐到 utterance token span。
 - 同一 slot value 多次出现时选择最短、最左、未占用 span。
 - 无法对齐的 slot 记录 `alignment_failure`。
-- 不使用 MASSIVE gold annotation 补齐 teacher slot alignment。
+- 不使用 gold annotation 补齐 teacher slot alignment。
 
 ## `data.streams`
 

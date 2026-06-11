@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from random import Random
 
-from darjeeling.data.massive import DataRecord
+from darjeeling.data.records import DataRecord
 
 
 @dataclass(frozen=True)

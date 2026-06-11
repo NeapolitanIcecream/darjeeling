@@ -110,7 +110,7 @@ Agent 可见范围：
 
 Agent 不可见：
 
-- MASSIVE gold。
+- hidden gold labels。
 - `teacher_promotion_holdout`。
 - final eval labels。
 - future stream。
@@ -210,7 +210,7 @@ Agent 可见范围：
 
 Agent 不可见：
 
-- MASSIVE gold。
+- hidden gold labels。
 - `teacher_promotion_holdout`。
 - final eval labels。
 - future stream。
@@ -244,7 +244,7 @@ Agent 权限：
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
 - Target workspace 也暴露 `postprocess_frame(...)`。当 visible target data 支持稳定解析时，L4 agent 应优先用 postprocess 补全 slot 或修正 frame；这类 target-specific code 只能留在 `target/`，不能进入 Darjeeling core。
 - Adopted target workspace 通过 `edge-mvp l2 promote-target` 进入 manifest，写入 `l2_student` 和 `l2_target` artifacts。Runtime replay 与 compiler offline replay 都加载 target wrapper，避免 target-loop evaluator 与系统 replay 语义分叉。
-- Target evaluator 在 visible validation 上暴露 `near_miss_examples`，帮助 L4 agent 找到高 guard probability 但被拒绝的 coverage 机会。它同时写入 `target_diagnostics.json`，按 teacher intent family 汇总 rejected-correct、vetoed-correct、accepted-wrong 和 intent-correct-slot-wrong，并把 validation accepted-wrong families 提升成 `latest_safety_backlog`，避免 agent 只凭 8 条样本或 raw coverage 做选择。当 backlog 非空时，agent round 的目标顺序是先修 visible wrong accepts，再考虑 near-miss coverage。若 validation backlog 已清空但 private selection 仍失败，agent 可以读取 `latest_visible_cross_audit_safety_backlog` 和 `latest_train_audit_safety_backlog`，从 visible held-out retraining 和 visible train rows 中寻找更宽的 target safety pattern；slot-risk backlog 还提供 `high_guard_items`，把低频但 guard probability 高的 visible slot/schema mismatch 单独排出来，避免它们被大 family 的数量排序淹没。每个 slot-risk item 同时列出 `missing_slot_keys`、`extra_slot_keys` 和 `changed_slot_keys`，让 L4 agent 能直接按 schema 差异设计 postprocess 或 veto，而不是只靠读少量例子推断。Slot-risk 之后，intent-confusion backlog 用 teacher intent / predicted intent pair 暴露高 guard wrong-intent examples，覆盖 podcast/radio 等不是 slot mismatch 的边界风险。`visible_slot_cue_summary` 则提供跨 intent 的 visible slot cue 索引，例如 room value 对 `house_place` 的支持，或低频 `podcast_name` 对 podcast 语义的支持；其中 `slot_key_terms`、top values 和 examples 是 slotless/missing-slot accepted frame 停止前必须检查的可见依据，program 会把 podcast cue、room value、lightchange room cue、generic/bare radio-name overfill、missing radio-name cue、radio media-type、calendar date、bare upcoming-events、joke-type/joke-about 和 spoken amount 风险作为 mandatory cue checks，并提供 `slot_cue_probes` 作为可执行 visible-only probe。对直接可解析的 cue，probe 可以要求 exact slot repair 而不是 veto，以保留安全覆盖。这些诊断都是 diagnostic-only，不参与 selection/adoption。Private selection/promotion 的 near-miss、family diagnostics 和 holdout evidence 只能留在 outer artifact 中用于人类/outer harness 分析，不进入 agent workspace。
+- Target evaluator 在 visible validation 上暴露 `near_miss_examples`，帮助 L4 agent 找到高 guard probability 但被拒绝的 coverage 机会。它同时写入 `target_diagnostics.json`，按 teacher intent family 汇总 rejected-correct、vetoed-correct、accepted-wrong 和 intent-correct-slot-wrong，并把 validation accepted-wrong families 提升成 `latest_safety_backlog`，避免 agent 只凭少量样本或 raw coverage 做选择。当 backlog 非空时，agent round 的目标顺序是先修 visible wrong accepts，再考虑 near-miss coverage。若 validation backlog 已清空但 private selection 仍失败，agent 可以读取 `latest_visible_cross_audit_safety_backlog` 和 `latest_train_audit_safety_backlog`，从 visible held-out retraining 和 visible train rows 中寻找更宽的 target safety pattern；slot-risk backlog 还提供 `high_guard_items`，把低频但 guard probability 高的 visible slot/schema mismatch 单独排出来，避免它们被大 family 的数量排序淹没。每个 slot-risk item 同时列出 `missing_slot_keys`、`extra_slot_keys` 和 `changed_slot_keys`，让 L4 agent 能直接按 schema 差异设计 postprocess 或 veto。Slot-risk 之后，intent-confusion backlog 用 teacher intent / predicted intent pair 暴露高 guard wrong-intent examples。`visible_slot_cue_summary` 提供跨 intent 的 visible slot cue 索引；其中 `slot_key_terms`、top values 和 examples 是 slotless/missing-slot accepted frame 停止前必须检查的可见依据。若 target workspace 提供 `data/slot_cue_probes.json`，core evaluator 会执行这些 target-supplied visible-only probes；core 不合成应用特定 mandatory cue checks。这些诊断都是 diagnostic-only，不参与 selection/adoption。Private selection/promotion 的 near-miss、family diagnostics 和 holdout evidence 只能留在 outer artifact 中用于人类/outer harness 分析，不进入 agent workspace。
 
 ## Direct API session 策略
 

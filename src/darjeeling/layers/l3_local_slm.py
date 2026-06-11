@@ -16,9 +16,9 @@ LocalSLMMode = Literal["disabled", "shadow", "guarded"]
 LocalSLMDevicePolicy = Literal["auto", "cpu", "mps", "cuda"]
 
 DEFAULT_L3_BENCHMARK_UTTERANCES = (
-    "set an alarm for seven tomorrow morning",
-    "play some jazz",
-    "what is the weather in san francisco",
+    "alpha request",
+    "beta request",
+    "gamma request",
 )
 
 

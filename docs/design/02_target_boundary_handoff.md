@@ -137,6 +137,31 @@ Remaining known cleanup after this pass:
   names such as alarm, music, and weather. These are mostly test input data, but
   replacing them with neutral fixture names would further reduce boundary
   ambiguity.
-- Native L1 sample programs currently include concrete example program names.
-  They should be treated as demo/target artifacts or moved behind an adapter
-  boundary before being claimed as core defaults.
+
+## Second Pass: Runtime Defaults
+
+The first pass was too narrow by itself. The second pass addresses runtime
+defaults and adapter placement:
+
+- `TaskSchema.schema_version` now defaults to a neutral `task-schema-v1`.
+- Generic `DataRecord` lives in `darjeeling.data.records`.
+- The MASSIVE loader lives in `darjeeling.adapters.massive`; runtime/replay reads
+  processed `DataRecord` rows and does not import the MASSIVE adapter.
+- The core `edge-mvp` CLI no longer owns dataset preparation. The bundled
+  MASSIVE adapter exposes `edge-mvp-massive prepare` for converting that dataset
+  into the shared `DataRecord` format.
+- Core L1 settings and CLI defaults now point to `native/l1_empty_programbank`,
+  a contract-only Rust worker that always abstains.
+- The application-specific `native/l1_programbank` remains in the repository as
+  an explicit demo/target crate and test fixture, not as the core default.
+- Report source excerpts no longer name specific L1 demo source files; they read
+  from the promoted crate generically.
+
+This keeps the design small: there is no registry, plugin layer, or adapter
+framework. The boundary is expressed by defaults, console entry points, and
+import direction:
+
+```text
+core runtime/compiler/eval -> generic records, schemas, manifests, workspaces
+adapter/demo code -> concrete dataset loader or concrete target crate
+```

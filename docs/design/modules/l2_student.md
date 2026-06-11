@@ -95,7 +95,7 @@ Slot 输出还经过两层 schema-aware 后处理：
 utterance -> L4 teacher_frame
 ```
 
-不使用 MASSIVE gold。
+不使用 hidden gold labels。
 
 ## Guard training
 
@@ -141,7 +141,7 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 - grid 默认覆盖 `0.70..0.98`。
 - 搜索会额外加入 teacher_train 上观测到的 guard probability 及其相邻阈值，避免安全阈值落在粗 grid 间隙时被跳过。
 - 搜索必须先缓存每条 trace 的 L2 prediction，再在缓存上评估所有 threshold；不能为每个 threshold 重新调用 `bundle.predict()`，否则样本扩大后会退化为 O(N²)。
-- 搜索输入只来自 `teacher_train` 内部切分出的 calibration window，不读取 promotion holdout 或 MASSIVE gold。
+- 搜索输入只来自 `teacher_train` 内部切分出的 calibration window，不读取 promotion holdout 或 hidden gold labels。
 - 默认优先在 chronological residual validation 上校准 threshold：用 calibration train prefix 模拟 L0 exact cache，过滤 validation 中 exact repeat 和已记录的 L0/L1 accepted 请求，只在会真正到达 L2 的 residual validation traces 上评估 L2。
 - 如果 residual validation 为空或 calibration train 不足以训练 L2，则回退到旧的 training-scope search，并在 `candidate_metrics["l2_guard_calibration"]` 中记录 fallback reason。
 - 先过滤 `wrong_accept_rate <= l2_max_wrong_accept_rate` 且 `accepted_accuracy >= l2_min_guarded_accuracy` 的候选。
@@ -237,7 +237,7 @@ Inner L2 target-evolution path：
 - 通过 adoption gate 的 target candidate 可由 `edge-mvp l2 promote-target` 转成 runtime artifact。未通过 adoption gate 的 `best_round` 只能在显式 `--allow-non-adopted` 下 stage 到隔离 run，用于外层 replay 诊断；manifest 必须标记 `l2_target_inner_adopted=false`，不能被误读为 inner-adopted artifact。
 - `edge-mvp l2 replay-target` 是 target artifact 的正式 outer replay gate：candidate 默认取 current manifest，baseline 默认取 parent manifest，在同一批 teacher-labeled traces 上输出 `l2-target-outer-replay-v1`。默认 `accuracy_epsilon=0`，并包含 settings L1 Rust worker，确保 target candidate 不能用 frame exactness regression 换 L4 share。无论 inner 是否 adopted，最终是否采用仍以 3k/10k e2e replay 的 frame exactness、wrong accept 和 L4 share 为准。
 - `promote-target` 不改 Darjeeling core：它写入新的 `l2_student.joblib` 和 `l2_target` module artifact；runtime replay 与 compiler offline replay 加载同一 target wrapper，保持评估/运行语义一致。若普通 compiler generation 重新训练 core L2 bundle，则必须丢弃继承来的 `l2_target`，除非该 generation 明确做了 target-aware adoption；否则会把 target code 和不兼容 bundle 混用。
-- target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/validation-fold 数据推导，不能依赖 MASSIVE 或外部 dataset 知识。单条 visible row 的 exact utterance exception 或 request-id 记忆化不允许作为泛化机制；agent 应优先写有多个 visible 支持或清晰 schema 语义的 pattern-level lexical/slot-support 规则。是否采用由 holdout/promotion 指标和 outer replay 决定，而不是由 dataset-independent core 规则决定。Summary 和 promoted manifest 必须记录 `target_code_policy`，其中明确 `core_must_remain_dataset_independent=true`、`target_specific_code_is_not_rejected_for_dataset_dependence=true` 和 single-row memorization 禁止规则。
+- target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/validation-fold 数据推导，不能依赖 hidden dataset knowledge 或外部 dataset 知识。单条 visible row 的 exact utterance exception 或 request-id 记忆化不允许作为泛化机制；agent 应优先写有多个 visible 支持或清晰 schema 语义的 pattern-level lexical/slot-support 规则。是否采用由 holdout/promotion 指标和 outer replay 决定，而不是由 dataset-independent core 规则决定。Summary 和 promoted manifest 必须记录 `target_code_policy`，其中明确 `core_must_remain_dataset_independent=true`、`target_specific_code_is_not_rejected_for_dataset_dependence=true` 和 single-row memorization 禁止规则。
 - 当前实现状态：已支持 baseline-first `agent-session` single-launch 主路径、legacy `dry-run`/`local-search`/`codex-cli` 兼容路径、target workspace evaluator、可见多 fold validation、private holdout gate、visible `tools/search_config.py`、local-search trial report 和机器可读 `evidence_policy`。下一轮真实 L2 实验应优先使用 `agent-session`，让 agent 在一个 session 内自行调用 evaluate/search。
 
 Optuna tuning path：
@@ -245,7 +245,7 @@ Optuna tuning path：
 - `edge-mvp l2 tune --traces <trace.jsonl> --out <report.json>` 是 L4 coding agent 可调用的本地工具接口。
 - `L2_TUNING_MODE=optuna` 时，compiler 在每个 generation 中先对 L2 training scope 做内部 train/validation split，再运行 Optuna search，最后用 best config 训练 runtime candidate。
 - Tuning report 使用 `l2-tune-v1`，记录每个 trial 的 params、最终 `L2StudentConfig`、split policy、validation unguarded/guarded metrics 和 p95 latency。
-- Optuna 不能读取 promotion holdout、MASSIVE gold、final eval 或 future stream；它只优化 teacher-visible train window 的内部 residual validation。
+- Optuna 不能读取 promotion holdout、hidden gold labels、final eval 或 future stream；它只优化 teacher-visible train window 的内部 residual validation。
 - `candidate_metrics["l2_tuning"]` 记录 trial 数、best value、best metrics；`artifact_paths["l2_tuning"]` 指向完整 tuning report。
 - Tuning validation 默认使用 `chronological` split，即用 teacher-visible train window 的尾部模拟 future stream。`stratified_random` 只作为 ablation 开关保留；它会让每个 intent 更均匀，但容易高估真实 L0/L1 miss 后续分布。
 - 在 tuning validation 上也会应用同一套 residual filter：从 validation 中移除 calibration train prefix 的 exact repeat 和已记录 L0/L1 accepted 请求，并记录 `validation_residual_size`、`objective_validation_size` 与 `objective_validation_source`。若 residual 为空，才回退到未过滤 validation，防止样本过小时 tuning 完全失效。

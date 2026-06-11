@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.data.massive import DataRecord
+from darjeeling.data.records import DataRecord
 from darjeeling.layers.l2_student import L2StudentConfig, L2TrainingExample, train_l2_student
 from darjeeling.layers.l3_local_slm import L3PromptArtifact
 from darjeeling.runtime.replay import run_replay

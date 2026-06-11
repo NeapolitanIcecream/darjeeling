@@ -1,7 +1,7 @@
 import sys
 from types import SimpleNamespace
 
-from darjeeling.data.massive import prepare_massive_dataset
+from darjeeling.adapters.massive import prepare_massive_dataset
 
 
 class _IntentFeature:

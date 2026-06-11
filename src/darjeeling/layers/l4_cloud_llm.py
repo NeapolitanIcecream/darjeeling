@@ -30,7 +30,7 @@ class TeacherParseError(RuntimeError):
 class TaskSchema:
     intent_names: list[str]
     slot_names: list[str]
-    schema_version: str = "massive-en-us-v1"
+    schema_version: str = "task-schema-v1"
 
 
 @dataclass(frozen=True)

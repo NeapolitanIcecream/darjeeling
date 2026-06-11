@@ -14,6 +14,21 @@ def l1_binary() -> Path:
     return build_l1_binary(Path("native/l1_programbank"))
 
 
+@pytest.fixture(scope="module")
+def empty_l1_binary() -> Path:
+    return build_l1_binary(Path("native/l1_empty_programbank"))
+
+
+def test_default_empty_rust_l1_worker_abstains(empty_l1_binary: Path) -> None:
+    with RustL1Worker(empty_l1_binary) as worker:
+        response = worker.answer("set an alarm for seven", request_id="r-empty")
+
+    assert response.request_id == "r-empty"
+    assert not response.accepted
+    assert response.frame is None
+    assert response.program_path == "abstain"
+
+
 def test_rust_l1_worker_answers_alarm_request(l1_binary: Path) -> None:
     with RustL1Worker(l1_binary) as worker:
         response = worker.answer("set an alarm for seven", request_id="r1")

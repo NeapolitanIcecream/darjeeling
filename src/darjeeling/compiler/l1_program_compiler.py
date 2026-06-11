@@ -888,7 +888,7 @@ def _constraints_text() -> str:
             "",
             "- L1 runtime is Rust native code.",
             "- L1 must abstain when uncertain.",
-            "- Do not use MASSIVE evaluation labels or future labels.",
+            "- Do not use hidden evaluation labels or future labels.",
             "- Do not modify the outer evaluator, promotion logic, teacher cache,",
             "  or Python orchestration.",
             "- Candidate output is not self-certified; outer replay decides promotion.",

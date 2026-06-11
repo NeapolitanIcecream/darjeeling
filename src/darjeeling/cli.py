@@ -42,7 +42,6 @@ from darjeeling.compiler.replay import (
     layer_deltas,
     load_offline_artifact_set,
 )
-from darjeeling.data.massive import prepare_massive_dataset
 from darjeeling.eval.experiments import (
     ExperimentSpec,
     apply_experiment_settings,
@@ -87,7 +86,7 @@ from darjeeling.runtime.replay import (
 )
 from darjeeling.runtime.trace import read_traces
 from darjeeling.schemas import TeacherTrace, traces_to_teacher_view
-from darjeeling.settings import load_settings
+from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -113,20 +112,6 @@ def _load_cli_settings():
 
 
 @app.command()
-def prepare(
-    locale: Annotated[str, typer.Option(help="MASSIVE locale/config to prepare.")] = "en-US",
-    out: Annotated[
-        Path,
-        typer.Option(help="Output directory for processed parquet/jsonl files."),
-    ] = Path("data/processed/massive_en_us"),
-) -> None:
-    """Download and process MASSIVE records for replay."""
-
-    result = prepare_massive_dataset(locale=locale, out_dir=out)
-    console.print(f"prepared {result['records']} records in {out}")
-
-
-@app.command()
 def run(
     stream: Annotated[
         str,
@@ -141,8 +126,8 @@ def run(
     run_dir: Annotated[Path, typer.Option(help="Run output directory.")] = Path("runs/latest"),
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     """Run the replay demo.
 
@@ -257,7 +242,7 @@ def l1_build(
     crate_dir: Annotated[
         Path,
         typer.Option(help="Rust L1 ProgramBank crate directory."),
-    ] = Path("native/l1_programbank"),
+    ] = Path("native/l1_empty_programbank"),
     release: Annotated[bool, typer.Option(help="Build the release profile.")] = False,
 ) -> None:
     """Build the Rust L1 ProgramBank worker."""
@@ -271,7 +256,7 @@ def l1_bench(
     crate_dir: Annotated[
         Path,
         typer.Option(help="Rust L1 ProgramBank crate directory."),
-    ] = Path("native/l1_programbank"),
+    ] = Path("native/l1_empty_programbank"),
     release: Annotated[bool, typer.Option(help="Use the release profile binary.")] = False,
     out: Annotated[
         Path | None,
@@ -330,8 +315,8 @@ def l3_bench(
     ] = None,
     data_dir: Annotated[
         Path,
-        typer.Option(help="Optional processed MASSIVE data dir for task schema discovery."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Optional processed data dir for task schema discovery."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
     fail_on_error: Annotated[
         bool,
         typer.Option(help="Exit non-zero if the local SLM benchmark records an error."),
@@ -393,8 +378,8 @@ def l3_replay_prompt(
     out: Annotated[Path, typer.Option(help="Output l3-prompt-replay-v1 JSON path.")],
     data_dir: Annotated[
         Path,
-        typer.Option(help="Optional processed MASSIVE data dir for task schema discovery."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Optional processed data dir for task schema discovery."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
     max_requests: Annotated[
         int | None,
         typer.Option(min=1, help="Optional maximum labeled traces to replay."),
@@ -431,8 +416,8 @@ def l3_prompt_evolve(
     out_dir: Annotated[Path, typer.Option(help="Output directory for L3 prompt evolution.")],
     data_dir: Annotated[
         Path,
-        typer.Option(help="Optional processed MASSIVE data dir for task schema discovery."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Optional processed data dir for task schema discovery."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
     max_traces: Annotated[
         int | None,
         typer.Option(min=1, help="Optional prefix of traces to use for the prompt split."),
@@ -1503,8 +1488,8 @@ def experiment_main_evolution(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "main-evolution",
@@ -1532,8 +1517,8 @@ def experiment_direct_l4_optimization(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "direct-l4-optimization",
@@ -1561,8 +1546,8 @@ def experiment_l2_family(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "l2-family",
@@ -1590,8 +1575,8 @@ def experiment_l2_mlp(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "l2-mlp",
@@ -1619,8 +1604,8 @@ def experiment_l2_tuned(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "l2-tuned",
@@ -1648,8 +1633,8 @@ def experiment_l2_tuned_lower_miss(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "l2-tuned-lower-miss",
@@ -1674,8 +1659,8 @@ def experiment_l2_agent(
     teacher: Annotated[str, typer.Option(help="Teacher mode: live, cache, or live-or-cache.")] = (
         "live-or-cache"
     ),
-    data_dir: Annotated[Path, typer.Option(help="Processed data directory.")] = Path(
-        "data/processed/massive_en_us"
+    data_dir: Annotated[Path, typer.Option(help="Processed data directory.")] = (
+        DEFAULT_PROCESSED_DATA_DIR
     ),
 ) -> None:
     _run_single_experiment(
@@ -1704,8 +1689,8 @@ def experiment_no_guard(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "no-guard",
@@ -1733,8 +1718,8 @@ def experiment_no_l2(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "no-l2",
@@ -1762,8 +1747,8 @@ def experiment_hard_buffer(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_single_experiment(
         "hard-buffer",
@@ -1790,8 +1775,8 @@ def experiment_workload_locality(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
 ) -> None:
     _run_workload_locality_experiment(
         run_dir=run_dir,
@@ -1851,8 +1836,8 @@ def experiment_suite(
     ] = "live-or-cache",
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
     parallel: Annotated[int, typer.Option(min=1, help="Maximum concurrent experiments.")] = 2,
     compare: Annotated[bool, typer.Option(help="Generate comparison report after success.")] = True,
 ) -> None:
@@ -1913,8 +1898,8 @@ def experiment_preflight(
     ] = Path("runs/latest"),
     data_dir: Annotated[
         Path,
-        typer.Option(help="Processed MASSIVE data directory produced by prepare."),
-    ] = Path("data/processed/massive_en_us"),
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
     teacher: Annotated[
         str,
         typer.Option(help="Teacher mode to validate: live, cache, or live-or-cache."),

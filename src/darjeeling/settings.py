@@ -11,6 +11,8 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
+DEFAULT_PROCESSED_DATA_DIR = Path("data/processed/default")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
@@ -79,7 +81,7 @@ class Settings(BaseSettings):
         validation_alias="L3_AGENT_APPROVAL_POLICY",
     )
     l1_rust_crate_dir: Path = Field(
-        default=Path("native/l1_programbank"),
+        default=Path("native/l1_empty_programbank"),
         validation_alias="L1_RUST_CRATE_DIR",
     )
     l1_rust_binary: Path | None = Field(default=None, validation_alias="L1_RUST_BINARY")
