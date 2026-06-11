@@ -472,32 +472,32 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
 def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
     risky_example = {
         "request_id": "visible-risk-1",
-        "utterance": "tell me about the latest media trends",
-        "teacher_frame": {"intent": "general_quirky", "slots": {}},
+        "utterance": "alpha request with extra cue",
+        "teacher_frame": {"intent": "intent_alpha", "slots": {}},
         "predicted_frame": {
-            "intent": "general_quirky",
-            "slots": {"date": "the latest media trends"},
+            "intent": "intent_alpha",
+            "slots": {"slot_extra": "extra cue"},
         },
         "guard_probability": 0.99,
     }
     high_guard_slot_example = {
         "request_id": "visible-risk-2",
-        "utterance": "play the morning show in the kitchen",
+        "utterance": "beta request with blue cue",
         "teacher_frame": {
-            "intent": "intent_eta",
-            "slots": {"slot_theta": "kitchen"},
+            "intent": "intent_beta",
+            "slots": {"slot_beta": "blue"},
         },
-        "predicted_frame": {"intent": "intent_eta", "slots": {}},
+        "predicted_frame": {"intent": "intent_beta", "slots": {}},
         "guard_probability": 0.995,
     }
     intent_confusion_example = {
         "request_id": "visible-risk-3",
-        "utterance": "play the newest science podcast",
+        "utterance": "theta request with red cue",
         "teacher_frame": {
             "intent": "intent_theta",
-            "slots": {"slot_iota": "science"},
+            "slots": {"slot_iota": "red"},
         },
-        "predicted_frame": {"intent": "intent_eta", "slots": {}},
+        "predicted_frame": {"intent": "intent_beta", "slots": {}},
         "guard_probability": 0.94,
     }
     family_stats = {
@@ -520,7 +520,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             },
         },
         "accepted_wrong_risk": {
-            "teacher_intent": "general_quirky",
+            "teacher_intent": "intent_alpha",
             "total": 5,
             "accepted_correct": 1,
             "accepted_wrong": 2,
@@ -530,9 +530,9 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 2,
             "missing_slot_keys": {},
-            "extra_slot_keys": {"date": 1},
+            "extra_slot_keys": {"slot_extra": 1},
             "changed_slot_keys": {},
-            "predicted_intents": {"general_quirky": 5},
+            "predicted_intents": {"intent_alpha": 5},
             "examples": {
                 "accepted_wrong": [risky_example],
                 "rejected_correct": [],
@@ -541,7 +541,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             },
         },
         "high_guard_slot_risk": {
-            "teacher_intent": "intent_eta",
+            "teacher_intent": "intent_beta",
             "total": 2,
             "accepted_correct": 0,
             "accepted_wrong": 0,
@@ -550,10 +550,10 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 1,
-            "missing_slot_keys": {"slot_theta": 1},
+            "missing_slot_keys": {"slot_beta": 1},
             "extra_slot_keys": {},
             "changed_slot_keys": {},
-            "predicted_intents": {"intent_eta": 2},
+            "predicted_intents": {"intent_beta": 2},
             "examples": {
                 "accepted_wrong": [],
                 "rejected_correct": [],
@@ -571,11 +571,11 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
             "vetoed_correct": 0,
             "vetoed_wrong": 0,
             "intent_correct_slot_wrong": 0,
-            "predicted_intents": {"intent_eta": 3},
+            "predicted_intents": {"intent_beta": 3},
             "intent_confusions": {
-                "intent_eta": {
+                "intent_beta": {
                     "teacher_intent": "intent_theta",
-                    "predicted_intent": "intent_eta",
+                    "predicted_intent": "intent_beta",
                     "total": 3,
                     "default_accepts": 1,
                     "accepted_wrong": 0,
@@ -603,7 +603,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
     assert safety_backlog["priority"] == (
         "fix_visible_accepted_wrong_before_coverage_expansion"
     )
-    assert safety_backlog["items"][0]["teacher_intent"] == "general_quirky"
+    assert safety_backlog["items"][0]["teacher_intent"] == "intent_alpha"
     assert safety_backlog["items"][0]["accepted_wrong"] == 2
     assert safety_backlog["items"][0]["wrong_examples"] == [risky_example]
     assert "postprocess" in safety_backlog["items"][0]["recommended_action"]
@@ -618,21 +618,21 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
     )
     assert [item["teacher_intent"] for item in slot_risk_backlog["items"]] == [
         "intent_delta",
-        "general_quirky",
-        "intent_eta",
+        "intent_alpha",
+        "intent_beta",
     ]
     assert slot_risk_backlog["items"][0]["intent_correct_slot_wrong"] == 5
     assert slot_risk_backlog["items"][1]["slot_mismatch_examples"] == [risky_example]
     assert slot_risk_backlog["high_guard_item_limit"] == 8
-    assert slot_risk_backlog["high_guard_items"][0]["teacher_intent"] == "intent_eta"
+    assert slot_risk_backlog["high_guard_items"][0]["teacher_intent"] == "intent_beta"
     assert slot_risk_backlog["high_guard_items"][0]["slot_mismatch_examples"] == [
         high_guard_slot_example,
     ]
     assert slot_risk_backlog["high_guard_items"][0]["missing_slot_keys"] == [
-        {"slot_key": "slot_theta", "count": 1},
+        {"slot_key": "slot_beta", "count": 1},
     ]
     assert slot_risk_backlog["items"][1]["extra_slot_keys"] == [
-        {"slot_key": "date", "count": 1},
+        {"slot_key": "slot_extra", "count": 1},
     ]
     assert "postprocess" in slot_risk_backlog["items"][0]["recommended_action"]
     intent_confusion_backlog = payload["intent_confusion_backlog"]
@@ -640,7 +640,7 @@ def test_l2_target_family_diagnostics_expose_safety_backlog() -> None:
         "l2-target-intent-confusion-backlog-v1"
     )
     assert intent_confusion_backlog["items"][0]["teacher_intent"] == "intent_theta"
-    assert intent_confusion_backlog["items"][0]["predicted_intent"] == "intent_eta"
+    assert intent_confusion_backlog["items"][0]["predicted_intent"] == "intent_beta"
     assert intent_confusion_backlog["items"][0]["examples"] == [
         intent_confusion_example,
     ]
@@ -690,15 +690,15 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
         [
             _trace_with_utterance(
                 1,
-                utterance="turn off the kitchen lights",
-                intent="iot_hue_lightoff",
-                slots={"slot_theta": "kitchen"},
+                utterance="alpha request with red cue",
+                intent="intent_alpha",
+                slots={"slot_shared": "red"},
             ),
             _trace_with_utterance(
                 2,
-                utterance="start vacuuming the bathroom",
-                intent="iot_cleaning",
-                slots={"slot_theta": "bathroom"},
+                utterance="beta request with blue cue",
+                intent="intent_beta",
+                slots={"slot_shared": "blue"},
             ),
             _trace_with_utterance(
                 3,
@@ -717,24 +717,24 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
     assert payload["schema_version"] == "l2-target-visible-slot-cue-summary-v1"
     assert payload["visibility"] == "visible_validation_only"
     assert "slotless or missing-slot accepted frames" in payload["usage_hint"]
-    slot_theta = next(
-        item for item in payload["items"] if item["slot_key"] == "slot_theta"
+    slot_shared = next(
+        item for item in payload["items"] if item["slot_key"] == "slot_shared"
     )
-    assert slot_theta["total"] == 2
-    assert slot_theta["slot_key_terms"] == ["slot", "theta"]
-    assert slot_theta["top_values"] == [
-        {"value": "bathroom", "count": 1},
-        {"value": "kitchen", "count": 1},
+    assert slot_shared["total"] == 2
+    assert slot_shared["slot_key_terms"] == ["slot", "shared"]
+    assert slot_shared["top_values"] == [
+        {"value": "blue", "count": 1},
+        {"value": "red", "count": 1},
     ]
-    assert slot_theta["top_teacher_intents"] == [
-        {"intent": "iot_cleaning", "count": 1},
-        {"intent": "iot_hue_lightoff", "count": 1},
+    assert slot_shared["top_teacher_intents"] == [
+        {"intent": "intent_alpha", "count": 1},
+        {"intent": "intent_beta", "count": 1},
     ]
-    assert slot_theta["examples"][0] == {
+    assert slot_shared["examples"][0] == {
         "request_id": "r1",
-        "utterance": "turn off the kitchen lights",
-        "teacher_intent": "iot_hue_lightoff",
-        "slot_value": "kitchen",
+        "utterance": "alpha request with red cue",
+        "teacher_intent": "intent_alpha",
+        "slot_value": "red",
     }
 
 
@@ -906,20 +906,20 @@ def test_l2_target_core_does_not_embed_default_application_probe_terms() -> None
 def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
     volume_example = {
         "request_id": "visible-volume-risk",
-        "utterance": "add reminder for tomorrow",
+        "utterance": "epsilon request with red cue",
         "teacher_frame": {
             "intent": "intent_epsilon",
-            "slots": {"date": "tomorrow"},
+            "slots": {"slot_epsilon": "red"},
         },
         "predicted_frame": {"intent": "intent_epsilon", "slots": {}},
         "guard_probability": 0.4,
     }
     high_guard_example = {
         "request_id": "visible-high-guard-risk",
-        "utterance": "tell me a zeta about airplanes",
+        "utterance": "zeta request with blue cue",
         "teacher_frame": {
             "intent": "intent_zeta",
-            "slots": {"slot_zeta": "airplanes"},
+            "slots": {"slot_zeta": "blue"},
         },
         "predicted_frame": {"intent": "intent_zeta", "slots": {}},
         "guard_probability": 0.97,
@@ -942,7 +942,7 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
                             {"intent": "intent_epsilon", "count": 20},
                         ],
                         "missing_slot_keys": [
-                            {"slot_key": "date", "count": 10},
+                            {"slot_key": "slot_epsilon", "count": 10},
                         ],
                         "extra_slot_keys": [],
                         "changed_slot_keys": [],
@@ -983,12 +983,12 @@ def test_l2_target_aggregate_slot_risk_backlog_keeps_high_guard_view() -> None:
 def test_l2_target_aggregate_intent_confusion_backlog_merges_pairs() -> None:
     confusion_example = {
         "request_id": "visible-confusion-risk",
-        "utterance": "play the science podcast",
+        "utterance": "theta request with red cue",
         "teacher_frame": {
             "intent": "intent_theta",
-            "slots": {"slot_iota": "science"},
+            "slots": {"slot_iota": "red"},
         },
-        "predicted_frame": {"intent": "intent_eta", "slots": {}},
+        "predicted_frame": {"intent": "intent_beta", "slots": {}},
         "guard_probability": 0.96,
     }
 
@@ -1000,7 +1000,7 @@ def test_l2_target_aggregate_intent_confusion_backlog_merges_pairs() -> None:
                 "items": [
                     {
                         "teacher_intent": "intent_theta",
-                        "predicted_intent": "intent_eta",
+                        "predicted_intent": "intent_beta",
                         "total": 2,
                         "default_accepts": 1,
                         "accepted_wrong": 0,
@@ -1015,7 +1015,7 @@ def test_l2_target_aggregate_intent_confusion_backlog_merges_pairs() -> None:
     assert payload["schema_version"] == "l2-target-intent-confusion-backlog-v1"
     assert payload["visibility"] == "visible_validation_only"
     assert payload["items"][0]["teacher_intent"] == "intent_theta"
-    assert payload["items"][0]["predicted_intent"] == "intent_eta"
+    assert payload["items"][0]["predicted_intent"] == "intent_beta"
     assert payload["items"][0]["default_accepts"] == 1
     assert payload["items"][0]["examples"] == [confusion_example]
 

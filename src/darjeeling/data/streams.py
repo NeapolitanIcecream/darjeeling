@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from random import Random
 
+from darjeeling.data.frames import normalize_utterance
 from darjeeling.data.records import DataRecord
 
 
@@ -31,7 +32,7 @@ def build_zipf_stream(
     rng = Random(seed)
     groups: dict[str, list[DataRecord]] = defaultdict(list)
     for record in records:
-        groups[f"{record.gold_frame.intent}:{record.template}"].append(record)
+        groups[_record_workload_group_key(record)].append(record)
 
     ordered_groups = sorted(groups.values(), key=len, reverse=True)
     weights = [1.0 / ((rank + 1) ** exponent) for rank in range(len(ordered_groups))]
@@ -42,3 +43,11 @@ def build_zipf_stream(
         )
         for i in range(max_requests)
     ]
+
+
+def _record_workload_group_key(record: DataRecord) -> str:
+    if record.workload_group_key:
+        return record.workload_group_key
+    if record.template:
+        return f"{record.gold_frame.intent}:{record.template}"
+    return f"{record.gold_frame.intent}:{normalize_utterance(record.utterance)}"

@@ -3,6 +3,7 @@ from pathlib import Path
 from darjeeling.data.records import DataRecord
 from darjeeling.layers.l4_cloud_llm import TaskSchema
 from darjeeling.runtime.replay import load_processed_records
+from darjeeling.schemas import Frame
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 
 
@@ -17,6 +18,14 @@ def test_core_defaults_are_dataset_independent() -> None:
 
 def test_generic_data_record_is_not_owned_by_massive_adapter() -> None:
     assert DataRecord.__module__ == "darjeeling.data.records"
+    record = DataRecord(
+        request_id="r1",
+        utterance="alpha request",
+        gold_frame=Frame(intent="intent_alpha"),
+    )
+    assert record.workload_group_key is None
+    assert record.annotated_utterance is None
+    assert record.template is None
 
 
 def test_processed_data_loader_error_is_dataset_independent(tmp_path: Path) -> None:
@@ -43,10 +52,18 @@ def test_core_runtime_replay_does_not_import_massive_adapter() -> None:
 def test_core_source_does_not_embed_bundled_dataset_or_demo_defaults() -> None:
     forbidden_terms = (
         "MASSIVE",
+        "massive",
         "massive_en_us",
         "alpha request for seven tomorrow morning",
         "what is the gamma in san francisco",
         'Path("native/l1_programbank")',
+        "alarm_set",
+        "weather_query",
+        "qa_factoid",
+        "lists_query",
+        "list_name",
+        "iot_",
+        "programs/alarm",
     )
 
     for path in Path("src/darjeeling").rglob("*.py"):
@@ -65,14 +82,21 @@ def test_shared_core_tests_use_neutral_fixtures() -> None:
     }
     forbidden_terms = (
         "MASSIVE",
+        "massive",
         "massive_en_us",
         "AmazonScience/massive",
         "native/l1_programbank",
         "alarm_set",
         "music_play",
         "weather_query",
+        "qa_factoid",
+        "lists_query",
+        "list_name",
+        "iot_",
+        "programs/alarm",
         "set an alarm",
         "set alarm",
+        "alarm at",
         "play jazz",
         "play music",
         "play smooth jazz",
@@ -80,6 +104,13 @@ def test_shared_core_tests_use_neutral_fixtures() -> None:
         "calendar",
         "joke",
         "radio",
+        "podcast",
+        "email",
+        "emails",
+        "kitchen",
+        "bathroom",
+        "carrie",
+        "robert",
     )
 
     for path in Path("tests").glob("test_*.py"):

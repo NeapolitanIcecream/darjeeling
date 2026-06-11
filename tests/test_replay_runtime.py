@@ -19,29 +19,17 @@ def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> N
     records = [
         DataRecord(
             request_id="r1",
-            locale="en-US",
-            split="train",
             utterance="alpha request",
-            annotated_utterance="alpha request",
-            template="alpha request",
             gold_frame=Frame(intent="intent_alpha"),
         ),
         DataRecord(
             request_id="r2",
-            locale="en-US",
-            split="train",
             utterance="beta sample request",
-            annotated_utterance="beta sample request",
-            template="beta sample request",
             gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r3",
-            locale="en-US",
-            split="train",
             utterance="gamma request",
-            annotated_utterance="gamma request",
-            template="gamma request",
             gold_frame=Frame(intent="intent_gamma"),
         ),
     ]
@@ -112,11 +100,7 @@ def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:
     records = [
         DataRecord(
             request_id="r1",
-            locale="en-US",
-            split="train",
             utterance="beta sample request",
-            annotated_utterance="beta sample request",
-            template="beta sample request",
             gold_frame=Frame(intent="intent_beta"),
         )
     ]
@@ -180,11 +164,7 @@ def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
     (data_dir / "train.jsonl").write_text(
         DataRecord(
             request_id="r1",
-            locale="en-US",
-            split="train",
             utterance="beta sample request",
-            annotated_utterance="beta sample request",
-            template="beta sample request",
             gold_frame=Frame(intent="intent_beta", slots={"genre": "jazz"}),
         ).model_dump_json()
         + "\n",
@@ -278,11 +258,7 @@ def test_run_replay_loads_promoted_l3_prompt_artifact(tmp_path: Path) -> None:
     (data_dir / "train.jsonl").write_text(
         DataRecord(
             request_id="r1",
-            locale="en-US",
-            split="train",
             utterance="beta sample request",
-            annotated_utterance="beta sample request",
-            template="beta sample request",
             gold_frame=Frame(intent="intent_beta"),
         ).model_dump_json()
         + "\n",

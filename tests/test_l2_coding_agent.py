@@ -44,16 +44,16 @@ def _teacher_trace():
 def _slot_wrong_hard_case():
     trace = TraceRecord(
         request_id="r-slot",
-        utterance="what's on my to do list",
-        gold_frame=Frame(intent="lists_query", slots={"list_name": "to do"}),
-        teacher_frame=Frame(intent="lists_query", slots={"list_name": "to do"}),
+        utterance="alpha request with red value",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "red"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "red"}),
         chosen_layer="L2",
-        final_frame=Frame(intent="lists_query", slots={}),
+        final_frame=Frame(intent="intent_alpha", slots={}),
         layer_results=[
             LayerResult(
                 layer="L2",
                 accepted=True,
-                frame=Frame(intent="lists_query", slots={}),
+                frame=Frame(intent="intent_alpha", slots={}),
                 confidence=0.95,
                 latency_ms=2.0,
                 metadata={
@@ -142,7 +142,7 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     assert slot_error_summary["schema_version"] == "l2-slot-error-summary-v1"
     assert slot_error_summary["l2_wrong_accept_count"] == 1
     assert slot_error_summary["l2_intent_correct_slot_mismatch_count"] == 1
-    assert slot_error_summary["missing_slot_counts"] == {"list_name": 1}
+    assert slot_error_summary["missing_slot_counts"] == {"slot_alpha": 1}
     assert slot_error_summary["examples"][0]["l2_metadata"]["guard_probability"] == 0.95
     manifest = json.loads(
         (result.workspace_repo_dir / "workspace_manifest.json").read_text(encoding="utf-8")
@@ -176,7 +176,7 @@ def test_l2_coding_agent_dry_run_packages_workspace_and_context(
     assert provenance["schema_version"] == "l2-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"
     assert provenance["runtime_patch_applied"] is False
-    assert provenance["diff"]["changed_file_count"] == 1
+    assert "tests/test_l2_agent_marker.py" in provenance["diff"]["changed_files"]
 
     context_text = "\n".join(
         path.read_text(encoding="utf-8") for path in result.context_dir.iterdir()

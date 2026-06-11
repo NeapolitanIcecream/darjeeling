@@ -9,8 +9,8 @@ The project has just clarified a system-wide boundary rule, recorded in
 `AGENTS.md`: Darjeeling core must remain dataset- and application-independent.
 
 This is not an L2-only issue. The previous L2 work exposed the problem because
-`l2_target_evolution.py` now contains concrete radio, joke, calendar, and slot
-examples, but the same boundary applies to all layers and their tooling.
+`l2_target_evolution.py` previously contained concrete application examples,
+but the same boundary applies to all layers and their tooling.
 
 The useful analogy is LLVM:
 
@@ -60,9 +60,9 @@ checks. The final result was useful:
   complexity.
 
 However, the implementation also put target-dependent examples and schema facts
-into core. Examples include concrete radio/joke/calendar phrases and checks in
+into core. Examples included concrete application phrases and checks in
 `src/darjeeling/compiler/l2_target_evolution.py`, along with tests and prompt
-text that assume a specific task schema.
+text that assumed a specific task schema.
 
 Those examples are legitimate experiment evidence, but they are not legitimate
 core defaults.
@@ -110,9 +110,9 @@ This pass keeps the boundary smaller than a plugin system:
   test fixtures.
 
 The immediate implementation target is the L2 target-evolution slot-cue probe.
-The old core behavior generated probes for concrete MASSIVE-like radio,
-podcast, calendar, joke, room, and audio slots from
-`visible_slot_cue_summary`. That mixed useful experiment evidence into core.
+The old core behavior generated probes for concrete application-specific
+intents and slots from `visible_slot_cue_summary`. That mixed useful
+experiment evidence into core.
 The refactor makes `slot_cue_probes` an optional data-driven diagnostic:
 
 ```text

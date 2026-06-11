@@ -9,10 +9,11 @@ from darjeeling.schemas import Frame
 
 class DataRecord(BaseModel):
     request_id: str
-    locale: str
-    split: str
     utterance: str
-    annotated_utterance: str
-    template: str
     gold_frame: Frame
+    split: str = "train"
+    locale: str = ""
+    workload_group_key: str | None = None
+    annotated_utterance: str | None = None
+    template: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

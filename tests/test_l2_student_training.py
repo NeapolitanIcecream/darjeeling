@@ -179,7 +179,7 @@ def test_token_slot_tagger_learns_teacher_slot_spans() -> None:
 
 
 def test_slot_alignment_and_bio_reconstruction() -> None:
-    tokens = ["alarm", "at", "nine", "tomorrow"]
+    tokens = ["alpha", "at", "nine", "tomorrow"]
 
     tags = bio_tags_for_teacher_slots(tokens, {"time": "nine tomorrow"})
     slots, invalid_bio = slots_from_bio_tags(tokens, tags)
@@ -191,7 +191,7 @@ def test_slot_alignment_and_bio_reconstruction() -> None:
     assert tags == ["O", "O", "B-time", "I-time"]
     assert slots == {"time": "nine tomorrow"}
     assert not invalid_bio
-    assert duplicate_slots == {"time": "alarm"}
+    assert duplicate_slots == {"time": "alpha"}
     assert duplicate_invalid_bio
 
 
@@ -201,7 +201,7 @@ def test_l2_filters_predicted_slots_by_intent_schema() -> None:
     assert slots_by_intent["intent_alpha"] == ("time",)
     assert filter_slots_for_intent(
         "intent_beta",
-        {"time": "seven", "playlist_name": "jazz"},
+        {"time": "seven", "slot_beta": "value"},
         slots_by_intent,
     ) == {}
 
@@ -209,72 +209,58 @@ def test_l2_filters_predicted_slots_by_intent_schema() -> None:
 def test_l2_slot_patterns_fill_missing_schema_slots() -> None:
     examples = [
         L2TrainingExample(
-            utterance="how old is carrie underwood",
-            teacher_frame=Frame(intent="qa_factoid", slots={"person": "carrie underwood"}),
+            utterance="alpha prefix red suffix",
+            teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "red"}),
         ),
         L2TrainingExample(
-            utterance="what does regal mean",
-            teacher_frame=Frame(intent="qa_definition", slots={"definition_word": "regal"}),
+            utterance="beta marker blue tail",
+            teacher_frame=Frame(intent="intent_beta", slots={"slot_beta": "blue"}),
         ),
     ]
     slots_by_intent = slots_by_intent_from_examples(examples)
     patterns = slot_patterns_by_intent_from_examples(examples)
 
     assert apply_slot_patterns(
-        "qa_factoid",
-        "how old is dolly parton",
+        "intent_alpha",
+        "alpha prefix green suffix",
         {},
         slots_by_intent,
         patterns,
-    ) == {"person": "dolly parton"}
+    ) == {"slot_alpha": "green"}
     assert apply_slot_patterns(
-        "qa_definition",
-        "what does hesitant mean",
+        "intent_beta",
+        "beta marker yellow tail",
         {},
         slots_by_intent,
         patterns,
-    ) == {"definition_word": "hesitant"}
+    ) == {"slot_beta": "yellow"}
 
 
-def test_l2_slot_patterns_match_question_is_contractions() -> None:
+def test_l2_slot_patterns_match_surrounding_context() -> None:
     examples = [
         L2TrainingExample(
-            utterance="what is on my shopping list",
-            teacher_frame=Frame(intent="lists_query", slots={"list_name": "shopping"}),
+            utterance="gamma before red after",
+            teacher_frame=Frame(intent="intent_gamma", slots={"slot_gamma": "red"}),
         )
     ]
     slots_by_intent = slots_by_intent_from_examples(examples)
     patterns = slot_patterns_by_intent_from_examples(examples)
 
     assert apply_slot_patterns(
-        "lists_query",
-        "what's on my to do list",
+        "intent_gamma",
+        "gamma before blue after",
         {},
         slots_by_intent,
         patterns,
-    ) == {"list_name": "to do"}
+    ) == {"slot_gamma": "blue"}
 
 
-def test_l2_slot_fallback_extracts_list_name_before_list_marker() -> None:
-    slots_by_intent = {"lists_query": ("list_name",)}
+def test_l2_slot_patterns_do_not_guess_without_visible_pattern() -> None:
+    slots_by_intent = {"intent_alpha": ("slot_alpha",)}
 
     assert apply_slot_patterns(
-        "lists_query",
-        "what's on my to do list",
-        {},
-        slots_by_intent,
-        {},
-    ) == {"list_name": "to do"}
-    assert apply_slot_patterns(
-        "lists_query",
-        "show grocery list",
-        {},
-        slots_by_intent,
-        {},
-    ) == {"list_name": "grocery"}
-    assert apply_slot_patterns(
-        "lists_query",
-        "what's on my list",
+        "intent_alpha",
+        "alpha before blue after",
         {},
         slots_by_intent,
         {},
@@ -307,7 +293,7 @@ def test_l2_bundle_drops_slots_not_seen_for_predicted_intent() -> None:
 
 def test_l2_guard_training_labels_postprocessed_frames() -> None:
     class FakeIntentPipeline:
-        classes_ = ["qa_factoid"]
+        classes_ = ["intent_alpha"]
 
         def predict_proba(self, utterances):
             return [[1.0] for _utterance in utterances]
@@ -318,8 +304,8 @@ def test_l2_guard_training_labels_postprocessed_frames() -> None:
 
     examples = [
         L2TrainingExample(
-            utterance="how old is carrie underwood",
-            teacher_frame=Frame(intent="qa_factoid", slots={"person": "carrie underwood"}),
+            utterance="alpha prefix red suffix",
+            teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "red"}),
         )
     ]
     guard = train_guard(

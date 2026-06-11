@@ -13,6 +13,15 @@ class _FakeDataset(list):
     features = {"intent": _IntentFeature()}
 
 
+class _FakeDataFrame:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def to_parquet(self, path, *, index):
+        del index
+        path.write_text("fake parquet\n", encoding="utf-8")
+
+
 def test_prepare_massive_dataset_uses_noninteractive_trust_remote_code(
     tmp_path,
     monkeypatch,
@@ -43,6 +52,11 @@ def test_prepare_massive_dataset_uses_noninteractive_trust_remote_code(
         sys.modules,
         "datasets",
         SimpleNamespace(load_dataset=load_dataset),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pandas",
+        SimpleNamespace(DataFrame=_FakeDataFrame),
     )
 
     result = prepare_massive_dataset("en-US", tmp_path)

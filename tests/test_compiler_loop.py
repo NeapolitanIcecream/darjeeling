@@ -555,29 +555,17 @@ def test_run_replay_compile_every_promotes_l0_for_repeated_teacher_trace(
     records = [
         DataRecord(
             request_id="r1",
-            locale="en-US",
-            split="train",
             utterance="beta sample request",
-            annotated_utterance="beta sample request",
-            template="beta sample request",
             gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r2",
-            locale="en-US",
-            split="train",
             utterance="beta sample request",
-            annotated_utterance="beta sample request",
-            template="beta sample request",
             gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r3",
-            locale="en-US",
-            split="train",
             utterance="beta sample request",
-            annotated_utterance="beta sample request",
-            template="beta sample request",
             gold_frame=Frame(intent="intent_beta"),
         ),
     ]
@@ -633,29 +621,17 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
     records = [
         DataRecord(
             request_id="r1",
-            locale="en-US",
-            split="train",
             utterance="beta smooth request",
-            annotated_utterance="beta smooth request",
-            template="beta smooth request",
             gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r2",
-            locale="en-US",
-            split="train",
             utterance="beta alternate request",
-            annotated_utterance="beta alternate request",
-            template="beta alternate request",
             gold_frame=Frame(intent="intent_beta"),
         ),
         DataRecord(
             request_id="r3",
-            locale="en-US",
-            split="train",
             utterance="please beta smooth request",
-            annotated_utterance="please beta smooth request",
-            template="please beta smooth request",
             gold_frame=Frame(intent="intent_beta"),
         ),
     ]

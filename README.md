@@ -14,10 +14,15 @@ Profile-guided edge intelligence runtime MVP for the NLU replay demo described i
 uv sync --extra dev
 ```
 
-`datasets` is pinned below 4.0 because the MASSIVE adapter still loads
-`AmazonScience/massive` through its dataset script. Run `uv sync --extra dev`
-after changing dependency constraints so `edge-mvp-massive prepare` does not pick up a
-script-incompatible datasets release.
+The MASSIVE adapter dependencies are optional. Install them only when you need
+`edge-mvp-massive prepare`:
+
+```bash
+uv sync --extra dev --extra massive
+```
+
+`datasets` is pinned below 4.0 in the `massive` extra because the MASSIVE
+adapter still loads `AmazonScience/massive` through its dataset script.
 
 Create a `.env` from `.env.example` and set `OPENAI_API_KEY` unless the selected
 run already has a complete teacher cache.
@@ -33,6 +38,7 @@ uv run edge-mvp --settings settings.yaml experiment preflight --run-dir runs/lat
 ## Smoke run
 
 ```bash
+uv sync --extra dev --extra massive
 uv run edge-mvp-massive prepare --locale en-US
 uv run edge-mvp experiment preflight --run-dir runs/latest --teacher live-or-cache
 uv run edge-mvp run --stream zipf-heavy --max-requests 3000 --compile-every 500 --teacher live-or-cache

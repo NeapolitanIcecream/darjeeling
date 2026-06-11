@@ -649,7 +649,7 @@ def test_generate_run_report_includes_l1_program_paths_and_diff_snippet(
                 frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
                 latency_ms=1.5,
                 metadata={
-                    "program_path": "programs/alarm::try_intent_alpha",
+                    "program_path": "programs/alpha::try_intent_alpha",
                     "native_latency_us": 42,
                 },
             )
@@ -662,8 +662,8 @@ def test_generate_run_report_includes_l1_program_paths_and_diff_snippet(
     (generation_dir / "diff.patch").write_text(
         "\n".join(
             [
-                "diff --git a/src/programs/alarm.rs b/src/programs/alarm.rs",
-                "+fn evolved_alarm_path() {}",
+                "diff --git a/src/programs/alpha.rs b/src/programs/alpha.rs",
+                "+fn evolved_alpha_path() {}",
                 "",
             ]
         ),
@@ -702,9 +702,9 @@ def test_generate_run_report_includes_l1_program_paths_and_diff_snippet(
     metrics = result.metrics_csv_path.read_text(encoding="utf-8")
     curves = result.curves_html_path.read_text(encoding="utf-8")
     assert "## L1 Rust ProgramBank" in summary
-    assert "programs/alarm::try_intent_alpha" in summary
+    assert "programs/alpha::try_intent_alpha" in summary
     assert "native p95 latency: 42.0 us" in summary
-    assert "evolved_alarm_path" in summary
+    assert "evolved_alpha_path" in summary
     assert "native_latency_p95_us" in metrics
     assert "l1_generation_benchmark" in metrics
     assert "L1 Program Paths" in curves
@@ -761,7 +761,7 @@ def test_generate_run_report_writes_l1_benchmark_artifact(
             "native_p95_us": 7.0,
             "native_max_us": 7,
             "throughput_qps": 1200.0,
-            "program_path_counts": {"programs/alarm::try_intent_alpha": 1},
+            "program_path_counts": {"programs/alpha::try_intent_alpha": 1},
         }
 
     monkeypatch.setattr("darjeeling.eval.reports.benchmark_worker", fake_benchmark_worker)

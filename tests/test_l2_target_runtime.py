@@ -79,19 +79,17 @@ def postprocess_frame(utterance, frame, metadata):
     del metadata
     if " from " in f" {utterance} ":
         updated = dict(frame)
-        updated["slots"] = {"person": utterance.rsplit(" from ", 1)[1]}
+        updated["slots"] = {"slot_alpha": utterance.rsplit(" from ", 1)[1]}
         return updated
     return frame
 """,
         encoding="utf-8",
     )
 
-    result = TargetL2Layer(_Bundle(), target_path).try_answer(
-        "do i have emails from robert"
-    )
+    result = TargetL2Layer(_Bundle(), target_path).try_answer("alpha request from red")
 
     assert result.accepted is True
-    assert result.frame == Frame(intent="intent_iota", slots={"person": "robert"})
+    assert result.frame == Frame(intent="intent_iota", slots={"slot_alpha": "red"})
     assert result.metadata["raw_predicted_frame"] == {
         "intent": "intent_iota",
         "slots": {},
@@ -112,7 +110,7 @@ def accept_prediction(utterance, frame, metadata, default_accept):
     )
     bundle = _Bundle(accept_threshold=1.0)
 
-    result = TargetL2Layer(bundle, target_path).try_answer("do i have email")
+    result = TargetL2Layer(bundle, target_path).try_answer("alpha request")
 
     assert result.accepted is False
     assert result.reason == "guard rejected"

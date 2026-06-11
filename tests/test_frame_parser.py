@@ -5,7 +5,7 @@ from darjeeling.data.frames import (
 )
 
 
-def test_frame_parser_extracts_slots_from_massive_style_annotation() -> None:
+def test_frame_parser_extracts_slots_from_bracket_annotation() -> None:
     annotated = "alpha request for [time : seven tomorrow morning]"
 
     frame = frame_from_annotated_utterance("intent_alpha", annotated)

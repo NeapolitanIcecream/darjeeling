@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 from darjeeling.data.frames import frame_from_annotated_utterance, normalized_template
 from darjeeling.data.records import DataRecord
 
@@ -30,6 +28,7 @@ def _iter_split_records(locale: str, split: str) -> list[DataRecord]:
     for idx, row in enumerate(dataset):
         utterance = row.get("utt") or row.get("utterance") or ""
         annotated = row.get("annot_utt") or row.get("annotated_utterance") or utterance
+        template = normalized_template(annotated)
         intent = _intent_name(dataset, row["intent"])
         records.append(
             DataRecord(
@@ -38,7 +37,8 @@ def _iter_split_records(locale: str, split: str) -> list[DataRecord]:
                 split=split,
                 utterance=utterance,
                 annotated_utterance=annotated,
-                template=normalized_template(annotated),
+                template=template,
+                workload_group_key=f"{intent}:{template}",
                 gold_frame=frame_from_annotated_utterance(intent, annotated),
                 metadata={"domain": row.get("domain")},
             )
@@ -47,6 +47,8 @@ def _iter_split_records(locale: str, split: str) -> list[DataRecord]:
 
 
 def prepare_massive_dataset(locale: str, out_dir: Path) -> dict[str, int]:
+    import pandas as pd
+
     out_dir.mkdir(parents=True, exist_ok=True)
     splits = ["train", "validation", "test"]
     all_records: list[DataRecord] = []
