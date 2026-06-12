@@ -720,7 +720,7 @@ def _l3_evaluate_prompt_tool_text() -> str:
         _l3_tool_prelude_text()
         + """from darjeeling.compiler.l3_prompt_optimizer import replay_l3_prompt_artifact
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
-from darjeeling.layers.l4_cloud_llm import TaskSchema
+from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
 from darjeeling.schemas import TeacherTrace
 
 
@@ -789,7 +789,7 @@ from darjeeling.targets.nlu.layers.l3_local_slm import (
     LocalSLMConfig,
     benchmark_l3_layer,
 )
-from darjeeling.layers.l4_cloud_llm import TaskSchema
+from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
 
 
 def read_json(path: Path) -> dict:
@@ -831,7 +831,7 @@ def _l3_latency_cost_eval_tool_text() -> str:
     return (
         _l3_tool_prelude_text()
         + """from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
-from darjeeling.layers.l4_cloud_llm import TaskSchema
+from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
 from darjeeling.schemas import TeacherTrace
 
 

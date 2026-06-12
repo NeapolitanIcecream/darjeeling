@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from darjeeling.layers.l4_cloud_llm import TaskSchema
 from darjeeling.runtime.replay import load_processed_records
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
+from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
 
 STRICT_CORE_NLU_VOCABULARY = (
     "Frame",
@@ -24,8 +24,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/cli.py"),
     Path("src/darjeeling/eval/experiments.py"),
     Path("src/darjeeling/eval/reports.py"),
-    Path("src/darjeeling/layers/l2_student.py"),
-    Path("src/darjeeling/layers/l4_cloud_llm.py"),
     Path("src/darjeeling/runtime/replay.py"),
     Path("src/darjeeling/runtime/router.py"),
     Path("src/darjeeling/runtime/trace.py"),

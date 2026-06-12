@@ -227,8 +227,3 @@ def test_cache_hit_does_not_call_live_teacher(tmp_path: Path) -> None:
     assert result.metadata["teacher_source"] == "cache"
     assert fake_client.completions.calls == []
 
-
-def test_legacy_l4_module_reexports_nlu_target_layer() -> None:
-    from darjeeling.layers.l4_cloud_llm import CachedTeacherLayer as LegacyCachedTeacherLayer
-
-    assert LegacyCachedTeacherLayer is CachedTeacherLayer

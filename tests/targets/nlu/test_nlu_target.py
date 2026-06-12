@@ -98,12 +98,6 @@ def test_legacy_core_frame_alias_points_to_nlu_target_frame() -> None:
     assert LegacyFrame is Frame
 
 
-def test_legacy_l4_task_schema_alias_points_to_nlu_target_schema() -> None:
-    from darjeeling.layers.l4_cloud_llm import TaskSchema as LegacyTaskSchema
-
-    assert LegacyTaskSchema is TaskSchema
-
-
 def test_legacy_l0_compiler_wrapper_uses_nlu_target_normalization() -> None:
     from darjeeling.compiler.l0_compile import exact_cache_from_teacher_traces
     from darjeeling.schemas import TeacherTrace as LegacyTeacherTrace
@@ -219,8 +213,8 @@ def test_nlu_teacher_adapter_rejects_invalid_json() -> None:
         NluTeacherAdapter().parse_response("not json", task_schema={})
 
 
-def test_legacy_teacher_parser_uses_nlu_target_frame_type() -> None:
-    from darjeeling.layers.l4_cloud_llm import parse_teacher_frame
+def test_nlu_teacher_parser_uses_nlu_target_frame_type() -> None:
+    from darjeeling.targets.nlu.layers.l4_cloud_llm import parse_teacher_frame
 
     parsed = parse_teacher_frame(
         json.dumps({"intent": "intent_alpha", "slots": {"slot_alpha": "value alpha"}})

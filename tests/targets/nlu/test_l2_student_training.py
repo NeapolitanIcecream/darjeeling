@@ -460,8 +460,3 @@ def test_l2_student_bundle_round_trips_with_joblib(tmp_path: Path) -> None:
         "slot_alpha": "value gamma extra"
     }
 
-
-def test_legacy_l2_student_module_reexports_nlu_target_layer() -> None:
-    from darjeeling.layers.l2_student import L2StudentLayer as LegacyL2StudentLayer
-
-    assert LegacyL2StudentLayer is L2StudentLayer

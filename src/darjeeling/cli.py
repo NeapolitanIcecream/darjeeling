@@ -52,16 +52,6 @@ from darjeeling.eval.reports import (
     generate_experiment_comparison_report,
     generate_run_report,
 )
-from darjeeling.layers.l2_student import (
-    L2StudentConfig,
-    train_l2_student,
-    training_examples_from_teacher_traces,
-)
-from darjeeling.layers.l4_cloud_llm import (
-    MissingTeacherError,
-    TaskSchema,
-    require_live_or_cached_teacher,
-)
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.runtime.replay import (
     load_processed_records,
@@ -79,6 +69,11 @@ from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     binary_path_for,
     build_l1_binary,
 )
+from darjeeling.targets.nlu.layers.l2_student import (
+    L2StudentConfig,
+    train_l2_student,
+    training_examples_from_teacher_traces,
+)
 from darjeeling.targets.nlu.layers.l2_target import load_target_module, target_config_overrides
 from darjeeling.targets.nlu.layers.l3_local_slm import (
     DEFAULT_L3_BENCHMARK_UTTERANCES,
@@ -87,6 +82,11 @@ from darjeeling.targets.nlu.layers.l3_local_slm import (
     LocalSLMConfig,
     LocalSLMError,
     benchmark_l3_layer,
+)
+from darjeeling.targets.nlu.layers.l4_cloud_llm import (
+    MissingTeacherError,
+    TaskSchema,
+    require_live_or_cached_teacher,
 )
 
 app = typer.Typer(no_args_is_help=True)

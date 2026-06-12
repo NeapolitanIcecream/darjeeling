@@ -2,11 +2,15 @@ import json
 from pathlib import Path
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.layers.l2_student import L2StudentConfig, L2TrainingExample, train_l2_student
 from darjeeling.runtime.replay import run_replay
 from darjeeling.schemas import Frame
 from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.data import DataRecord
+from darjeeling.targets.nlu.layers.l2_student import (
+    L2StudentConfig,
+    L2TrainingExample,
+    train_l2_student,
+)
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
 
 
