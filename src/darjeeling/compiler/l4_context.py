@@ -79,7 +79,7 @@ def build_teacher_context(
 def build_teacher_stable_prefix(*, task_schema: Any, settings: Any) -> str:
     return "\n".join(
         [
-            "You are the L4 teacher for Darjeeling, a virtual-assistant NLU replay demo.",
+            "You are the L4 teacher for Darjeeling, a schema-constrained frame task.",
             "Return strict JSON only.",
             "Do not include explanations or markdown.",
             "The JSON object must have this shape:",

@@ -13,7 +13,7 @@ fn worker_answers_jsonl_requests() {
         let stdin = child.stdin.as_mut().expect("worker stdin");
         writeln!(
             stdin,
-            r#"{{"request_id":"r1","utterance":"set an alarm for seven"}}"#
+            r#"{{"request_id":"r1","utterance":"alpha accept red"}}"#
         )
         .expect("write request");
     }
@@ -23,6 +23,6 @@ fn worker_answers_jsonl_requests() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 output");
     assert!(stdout.contains(r#""request_id":"r1""#));
     assert!(stdout.contains(r#""accepted":true"#));
-    assert!(stdout.contains(r#""intent":"alarm_set""#));
+    assert!(stdout.contains(r#""intent":"intent_alpha""#));
     assert!(stdout.contains(r#""native_latency_us":"#));
 }

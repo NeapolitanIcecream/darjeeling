@@ -77,7 +77,6 @@ def test_core_source_does_not_embed_bundled_dataset_or_demo_defaults() -> None:
 def test_shared_core_tests_use_neutral_fixtures() -> None:
     adapter_or_demo_tests = {
         Path("tests/test_massive_prepare.py"),
-        Path("tests/test_l1_rust_worker.py"),
         Path("tests/test_target_boundary.py"),
     }
     forbidden_terms = (
@@ -119,6 +118,29 @@ def test_shared_core_tests_use_neutral_fixtures() -> None:
         source = path.read_text(encoding="utf-8")
         for term in forbidden_terms:
             assert term not in source, f"{path} contains shared-test target fixture {term!r}"
+
+
+def test_tracked_l1_native_fixtures_are_dataset_independent() -> None:
+    assert not Path("native/l1_programbank").exists()
+
+    forbidden_terms = (
+        "alarm_set",
+        "weather_query",
+        "qa_factoid",
+        "programs/alarm",
+        "set an alarm",
+        "weather in",
+        "play some jazz",
+        "carrie",
+    )
+    for path in Path("tests/fixtures/l1_neutral_programbank").rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix not in {".rs", ".toml", ".lock"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for term in forbidden_terms:
+            assert term not in source.lower(), f"{path} contains target fixture {term!r}"
 
 
 def test_current_architecture_doc_uses_dataset_independent_gold_label_terms() -> None:

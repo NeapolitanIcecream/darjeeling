@@ -466,7 +466,7 @@ def _baseline_l3_prompt_artifact(
     return L3PromptArtifact(
         prompt_version=prompt_version,
         system_prompt=(
-            "You are Darjeeling L3, a local virtual-assistant NLU model. "
+            "You are Darjeeling L3, a local schema-constrained frame model. "
             "Return one strict JSON object only."
         ),
         few_shot_examples=examples,

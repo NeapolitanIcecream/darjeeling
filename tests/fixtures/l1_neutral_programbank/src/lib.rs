@@ -4,9 +4,7 @@ pub mod programs;
 
 use crate::frame::{L1Result, Request};
 use crate::normalize::normalize;
-use crate::programs::alarm::try_alarm_set;
-use crate::programs::qa::try_qa_person_age;
-use crate::programs::weather::try_weather_query;
+use crate::programs::alpha::try_alpha_accept;
 use crate::programs::Candidate;
 use std::time::Instant;
 
@@ -49,13 +47,7 @@ pub fn try_answer(request: &Request) -> L1Result {
 
 fn collect_candidates(q: &str) -> Vec<Candidate> {
     let mut candidates = Vec::new();
-    if let Some(candidate) = try_alarm_set(q) {
-        candidates.push(candidate);
-    }
-    if let Some(candidate) = try_weather_query(q) {
-        candidates.push(candidate);
-    }
-    if let Some(candidate) = try_qa_person_age(q) {
+    if let Some(candidate) = try_alpha_accept(q) {
         candidates.push(candidate);
     }
     candidates
@@ -75,38 +67,38 @@ mod tests {
     use crate::frame::Request;
 
     #[test]
-    fn accepts_alarm_program() {
+    fn accepts_neutral_alpha_program() {
         let result = try_answer(&Request {
             request_id: "r1".to_string(),
-            utterance: "Set an alarm for seven".to_string(),
-        });
-
-        assert!(result.accepted);
-        assert_eq!(result.frame.unwrap().intent, "alarm_set");
-        assert!(result.native_latency_us < 10_000);
-    }
-
-    #[test]
-    fn accepts_person_age_factoid_program() {
-        let result = try_answer(&Request {
-            request_id: "r3".to_string(),
-            utterance: "How old is Carrie Underwood?".to_string(),
+            utterance: "Alpha accept red".to_string(),
         });
 
         assert!(result.accepted);
         let frame = result.frame.unwrap();
-        assert_eq!(frame.intent, "qa_factoid");
+        assert_eq!(frame.intent, "intent_alpha");
         assert_eq!(
-            frame.slots.get("person").map(String::as_str),
-            Some("carrie underwood")
+            frame.slots.get("slot_alpha").map(String::as_str),
+            Some("red")
         );
+        assert!(result.native_latency_us < 10_000);
+    }
+
+    #[test]
+    fn abstains_on_out_of_contract_alpha_request() {
+        let result = try_answer(&Request {
+            request_id: "r3".to_string(),
+            utterance: "Alpha accept one two three four".to_string(),
+        });
+
+        assert!(!result.accepted);
+        assert!(result.frame.is_none());
     }
 
     #[test]
     fn abstains_on_unknown_request() {
         let result = try_answer(&Request {
             request_id: "r2".to_string(),
-            utterance: "play some jazz".to_string(),
+            utterance: "beta request".to_string(),
         });
 
         assert!(!result.accepted);

@@ -11,7 +11,7 @@ from darjeeling.layers.l1_rust_programbank import (
 
 @pytest.fixture(scope="module")
 def l1_binary() -> Path:
-    return build_l1_binary(Path("native/l1_programbank"))
+    return build_l1_binary(Path("tests/fixtures/l1_neutral_programbank"))
 
 
 @pytest.fixture(scope="module")
@@ -21,7 +21,7 @@ def empty_l1_binary() -> Path:
 
 def test_default_empty_rust_l1_worker_abstains(empty_l1_binary: Path) -> None:
     with RustL1Worker(empty_l1_binary) as worker:
-        response = worker.answer("set an alarm for seven", request_id="r-empty")
+        response = worker.answer("alpha accept red", request_id="r-empty")
 
     assert response.request_id == "r-empty"
     assert not response.accepted
@@ -29,15 +29,15 @@ def test_default_empty_rust_l1_worker_abstains(empty_l1_binary: Path) -> None:
     assert response.program_path == "abstain"
 
 
-def test_rust_l1_worker_answers_alarm_request(l1_binary: Path) -> None:
+def test_rust_l1_worker_answers_neutral_alpha_request(l1_binary: Path) -> None:
     with RustL1Worker(l1_binary) as worker:
-        response = worker.answer("set an alarm for seven", request_id="r1")
+        response = worker.answer("alpha accept red", request_id="r1")
 
     assert response.request_id == "r1"
     assert response.accepted
     assert response.frame is not None
-    assert response.frame.intent == "alarm_set"
-    assert response.frame.slots == {"time": "seven"}
+    assert response.frame.intent == "intent_alpha"
+    assert response.frame.slots == {"slot_alpha": "red"}
     assert response.native_latency_us >= 0
     assert response.program_path
 
@@ -45,14 +45,14 @@ def test_rust_l1_worker_answers_alarm_request(l1_binary: Path) -> None:
 @pytest.mark.parametrize(
     "utterance",
     [
-        "weather in leisure city",
-        "what will the weather be on friday",
-        "show me what alarm times i've set for the week",
-        "please set an alarm at seven am tomorrow morning",
-        "please set a reminder alarm for three p. m. on saturday",
+        "alpha accept one two three four",
+        "alpha accept red/blue",
+        "beta accept red",
+        "alpha request red",
+        "gamma request",
     ],
 )
-def test_rust_l1_worker_abstains_when_rule_would_need_unsupported_slots(
+def test_rust_l1_worker_abstains_outside_fixture_contract(
     l1_binary: Path,
     utterance: str,
 ) -> None:
@@ -66,7 +66,7 @@ def test_rust_l1_worker_abstains_when_rule_would_need_unsupported_slots(
 def test_rust_l1_layer_abstains_on_unknown_request(l1_binary: Path) -> None:
     with RustL1Worker(l1_binary) as worker:
         layer = RustProgramBankLayer(worker)
-        result = layer.try_answer("play some jazz")
+        result = layer.try_answer("beta request")
 
     assert result.layer == "L1"
     assert not result.accepted

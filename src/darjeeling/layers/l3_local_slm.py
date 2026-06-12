@@ -54,7 +54,8 @@ class LocalSLMConfig(BaseModel):
 class L3PromptArtifact(BaseModel):
     prompt_version: str = "l3-prompt-v1"
     system_prompt: str = (
-        "You are Darjeeling L3, a local virtual-assistant NLU model. Return one JSON object only."
+        "You are Darjeeling L3, a local schema-constrained frame model. "
+        "Return one JSON object only."
     )
     confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     few_shot_examples: list[dict[str, Any]] = Field(default_factory=list)
