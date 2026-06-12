@@ -11,13 +11,14 @@
 - 必需字段只表达通用 request、utterance 和 label；adapter-specific annotation
   或 template 字段只能作为可选兼容字段或 metadata。
 
-## `adapters.massive`
+## `targets.nlu.adapters.massive`
 
 职责：
 
 - 使用 `datasets.load_dataset("AmazonScience/massive", locale, trust_remote_code=True)` 下载 MASSIVE。
 - 依赖约束固定为 `datasets>=2.20.0,<4.0.0`，因为 `AmazonScience/massive` 当前是脚本型 dataset repo；`datasets` 4/5 系列不再支持该 script loading 路径。
-- `trust_remote_code=True` 是 adapter CLI 非交互初始化的一部分，避免 `edge-mvp-massive prepare` 在脚本型 dataset 安全提示处阻塞。
+- `trust_remote_code=True` 是 target CLI 非交互初始化的一部分，避免
+  `edge-mvp-nlu massive prepare` 在脚本型 dataset 安全提示处阻塞。
 - 将 train/dev/test 处理为稳定的本地 parquet/jsonl。
 - 生成通用 `DataRecord`，包含 utterance、gold frame 和可选 workload group key。
   MASSIVE 的 annotated utterance / normalized template 可写入兼容字段，但不是
@@ -30,7 +31,7 @@
 - `prepare` 阶段可以构造 workload group key 和 gold frame，但这些字段不能进入
   compiler context。
 
-## `data.frames`
+## `targets.nlu.data`
 
 职责：
 

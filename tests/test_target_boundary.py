@@ -36,7 +36,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/settings.py"),
     Path("tests/test_experiment_suite_cli.py"),
     Path("tests/test_experiments.py"),
-    Path("tests/test_massive_prepare.py"),
     Path("tests/test_replay_runtime.py"),
     Path("tests/test_report_l3_summary.py"),
     Path("tests/test_settings.py"),
@@ -150,7 +149,6 @@ def test_core_source_does_not_embed_bundled_dataset_or_demo_defaults() -> None:
 
 def test_shared_core_tests_use_neutral_fixtures() -> None:
     adapter_or_demo_tests = {
-        Path("tests/test_massive_prepare.py"),
         Path("tests/test_target_boundary.py"),
     }
     forbidden_terms = (
@@ -248,7 +246,9 @@ def test_current_architecture_doc_uses_dataset_independent_gold_label_terms() ->
     assert "MASSIVE gold" not in source
 
 
-def test_massive_adapter_has_separate_cli_entrypoint() -> None:
+def test_massive_adapter_uses_nlu_target_cli_entrypoint() -> None:
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
 
-    assert 'edge-mvp-massive = "darjeeling.adapters.massive_cli:app"' in pyproject
+    assert 'edge-mvp-nlu = "darjeeling.targets.nlu.cli:app"' in pyproject
+    assert "edge-mvp-massive" not in pyproject
+    assert "darjeeling.adapters.massive" not in pyproject

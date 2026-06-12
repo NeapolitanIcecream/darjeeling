@@ -15,7 +15,7 @@ uv sync --extra dev
 ```
 
 The MASSIVE adapter dependencies are optional. Install them only when you need
-`edge-mvp-massive prepare`:
+`edge-mvp-nlu massive prepare`:
 
 ```bash
 uv sync --extra dev --extra massive
@@ -39,7 +39,7 @@ uv run edge-mvp --settings settings.yaml experiment preflight --run-dir runs/lat
 
 ```bash
 uv sync --extra dev --extra massive
-uv run edge-mvp-massive prepare --locale en-US
+uv run edge-mvp-nlu massive prepare --locale en-US
 uv run edge-mvp experiment preflight --run-dir runs/latest --teacher live-or-cache
 uv run edge-mvp run --stream zipf-heavy --max-requests 3000 --compile-every 500 --teacher live-or-cache
 uv run edge-mvp report --run-dir runs/latest

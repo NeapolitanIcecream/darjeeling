@@ -35,7 +35,7 @@ NLU 报告都在 NLU target 侧。
 
 ### Data 和 adapter 已经是 NLU 形状
 
-现状：
+初始状态：
 
 - `src/darjeeling/data/records.py` 的 `DataRecord` 是 `utterance + gold_frame`。
 - `src/darjeeling/data/frames.py` 负责 MASSIVE/NLU annotation 解析。
@@ -423,8 +423,8 @@ NLU 报告都在 NLU target 侧。
   teacher adapter、target spec、runtime placeholder 和 MASSIVE adapter。
 - 新增 repo-local static registry，当前显式注册 `nlu -> NluTarget`；该 registry
   是普通 mapping，不使用 entry point、plugin system 或 DI container。
-- 新增 `edge-mvp-nlu massive prepare` 入口；旧 `edge-mvp-massive` 仍保留并通过
-  compatibility wrapper 调用 target-owned MASSIVE adapter。
+- 新增 `edge-mvp-nlu massive prepare` 入口；旧 `edge-mvp-massive` 在该阶段先通过
+  compatibility wrapper 调用 target-owned MASSIVE adapter，后续收尾阶段已删除。
 - 新增 NLU target test scope `tests/targets/nlu/`，覆盖 target registry、
   frame parser、teacher adapter、target spec equality/validation 和 MASSIVE mapping。
 
@@ -666,6 +666,15 @@ NLU 报告都在 NLU target 侧。
   remaining NLU report caller imports `normalize_utterance` from
   `darjeeling.targets.nlu.data` directly until reports move fully target-side.
 - Removed the old frame helper source path from the strict boundary allowlist.
+
+### 2026-06-12 MASSIVE adapter entrypoint ownership
+
+- Removed the legacy core `darjeeling.adapters.massive*` compatibility modules
+  and the `edge-mvp-massive` console script. The target-owned
+  `edge-mvp-nlu massive prepare` path is now the only packaged MASSIVE prepare
+  entrypoint.
+- Removed the duplicate shared MASSIVE prepare test; target-scoped MASSIVE
+  adapter coverage remains in `tests/targets/nlu/test_nlu_target.py`.
 
 ## 风险和处理
 

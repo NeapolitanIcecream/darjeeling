@@ -11,7 +11,7 @@
 ## 命令
 
 ```bash
-edge-mvp-massive prepare --locale en-US --out data/processed/default
+edge-mvp-nlu massive prepare --locale en-US --out data/processed/default
 edge-mvp run --stream zipf-heavy --max-requests 3000 --compile-every 500 --teacher live-or-cache
 edge-mvp --settings settings.yaml run --stream zipf-heavy --max-requests 3000 --compile-every 500 --teacher live-or-cache
 edge-mvp experiment preflight --run-dir runs/latest --teacher live-or-cache
@@ -32,8 +32,8 @@ edge-mvp l3 promote-prompt --run-dir runs/main --prompt runs/main/artifacts/gene
 L1 子命令是 harness/debug 入口，不代表 L1 用 Python 实现。`l1 bench` 输出 `l1-benchmark-v1` JSON，可写入 `--out` 供 report 复用。
 
 `edge-mvp` 是 core/runtime CLI，只读取处理后的 `DataRecord` 目录，默认路径是
-`data/processed/default`。MASSIVE 的下载和转换入口是 adapter-owned
-`edge-mvp-massive prepare`；它把 MASSIVE 数据处理成 core 通用
+`data/processed/default`。MASSIVE 的下载和转换入口是 NLU target-owned
+`edge-mvp-nlu massive prepare`；它把 MASSIVE 数据处理成 core 通用
 `DataRecord` JSONL/parquet。Runtime/replay 不依赖 MASSIVE loader。
 
 `--settings <path>` 是全局 option，位置在子命令之前。未显式传入时，CLI 会在当前工作目录存在 `settings.yaml` 的情况下读取它；环境变量和 `.env` 会覆盖 YAML 文件值。写入 run directory 的 `settings.json` 是非 secret 配置快照，不包含 API key 明文。
