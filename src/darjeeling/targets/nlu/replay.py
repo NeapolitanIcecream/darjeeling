@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from darjeeling.artifacts.store import ArtifactStore
-from darjeeling.runtime.trace import TraceWriter, read_traces
 from darjeeling.settings import Settings
 from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
 from darjeeling.targets.nlu.data import DataRecord
@@ -31,6 +30,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
 )
 from darjeeling.targets.nlu.schemas import Frame, TraceRecord
 from darjeeling.targets.nlu.streams import StreamItem, build_uniform_stream, build_zipf_stream
+from darjeeling.targets.nlu.trace import TraceWriter, read_traces
 
 
 @dataclass(frozen=True)

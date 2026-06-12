@@ -747,6 +747,14 @@ NLU 报告都在 NLU target 侧。
   target-neutral JSON cascade router and no longer imports NLU schemas.
 - Removed the core router source path from the strict boundary allowlist.
 
+### 2026-06-12 NLU trace IO ownership
+
+- Moved the legacy NLU `TraceRecord` JSONL reader/writer from
+  `darjeeling.runtime.trace` to `darjeeling.targets.nlu.trace`.
+- CLI, target replay and target reports import the target trace helper directly,
+  and the old runtime trace source path was removed from the strict boundary
+  allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

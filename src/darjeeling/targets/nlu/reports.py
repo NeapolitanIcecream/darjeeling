@@ -11,7 +11,6 @@ from time import perf_counter
 from typing import Any
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.runtime.trace import read_traces
 from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import calibrate_l3_confidence_threshold
 from darjeeling.targets.nlu.compiler.mining import load_hard_buffer_jsonl, write_hard_buffer_jsonl
 from darjeeling.targets.nlu.data import normalize_utterance
@@ -22,6 +21,7 @@ from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     build_l1_binary,
 )
 from darjeeling.targets.nlu.schemas import Frame, LayerName, TraceRecord
+from darjeeling.targets.nlu.trace import read_traces
 
 L1_BENCHMARK_FILENAME = "l1_benchmark.json"
 L3_BENCHMARK_FILENAME = "l3_benchmark.json"
