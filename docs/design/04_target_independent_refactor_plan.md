@@ -660,6 +660,13 @@ NLU 报告都在 NLU target 侧。
 - Added target-scoped metric coverage and removed the old eval metrics source
   path from the strict boundary allowlist.
 
+### 2026-06-12 NLU frame parser helper ownership
+
+- Removed the legacy core `darjeeling.data.frames` compatibility wrapper. The
+  remaining NLU report caller imports `normalize_utterance` from
+  `darjeeling.targets.nlu.data` directly until reports move fully target-side.
+- Removed the old frame helper source path from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

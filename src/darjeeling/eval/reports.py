@@ -13,7 +13,6 @@ from typing import Any
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.compiler.l3_prompt_optimizer import calibrate_l3_confidence_threshold
 from darjeeling.compiler.mining import load_hard_buffer_jsonl, write_hard_buffer_jsonl
-from darjeeling.data.frames import normalize_utterance
 from darjeeling.layers.l1_rust_programbank import (
     DEFAULT_BENCHMARK_UTTERANCES,
     benchmark_worker,
@@ -22,6 +21,7 @@ from darjeeling.layers.l1_rust_programbank import (
 )
 from darjeeling.runtime.trace import read_traces
 from darjeeling.schemas import Frame, LayerName, TraceRecord
+from darjeeling.targets.nlu.data import normalize_utterance
 
 L1_BENCHMARK_FILENAME = "l1_benchmark.json"
 L3_BENCHMARK_FILENAME = "l3_benchmark.json"

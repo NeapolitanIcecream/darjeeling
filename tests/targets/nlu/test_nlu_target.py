@@ -92,14 +92,6 @@ def test_nlu_metrics_compare_frames_and_intents() -> None:
     assert intent_matches(different_intent, expected) is False
 
 
-def test_legacy_frame_parser_module_reexports_target_functions() -> None:
-    from darjeeling.data.frames import (
-        frame_from_annotated_utterance as legacy_frame_from_annotated_utterance,
-    )
-
-    assert legacy_frame_from_annotated_utterance is frame_from_annotated_utterance
-
-
 def test_legacy_core_frame_alias_points_to_nlu_target_frame() -> None:
     from darjeeling.schemas import Frame as LegacyFrame
 

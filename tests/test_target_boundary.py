@@ -25,7 +25,6 @@ STRICT_CORE_NLU_VOCABULARY = (
 
 CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/cli.py"),
-    Path("src/darjeeling/data/frames.py"),
     Path("src/darjeeling/eval/experiments.py"),
     Path("src/darjeeling/eval/reports.py"),
     Path("src/darjeeling/layers/l2_student.py"),
