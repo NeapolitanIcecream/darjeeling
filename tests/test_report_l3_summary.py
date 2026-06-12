@@ -3,14 +3,14 @@ import json
 from pathlib import Path
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore, LayerDelta
-from darjeeling.eval.reports import (
+from darjeeling.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
+from darjeeling.targets.nlu.compiler.mining import build_hard_buffer, write_hard_buffer_jsonl
+from darjeeling.targets.nlu.reports import (
     _l3_report_section,
     _promotion_report_section,
     generate_experiment_comparison_report,
     generate_run_report,
 )
-from darjeeling.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
-from darjeeling.targets.nlu.compiler.mining import build_hard_buffer, write_hard_buffer_jsonl
 
 
 def test_l3_report_section_summarizes_mode_device_and_failures(tmp_path: Path) -> None:
@@ -764,7 +764,7 @@ def test_generate_run_report_writes_l1_benchmark_artifact(
             "program_path_counts": {"programs/alpha::try_intent_alpha": 1},
         }
 
-    monkeypatch.setattr("darjeeling.eval.reports.benchmark_worker", fake_benchmark_worker)
+    monkeypatch.setattr("darjeeling.targets.nlu.reports.benchmark_worker", fake_benchmark_worker)
 
     result = generate_run_report(tmp_path)
 

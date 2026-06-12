@@ -716,6 +716,15 @@ NLU 报告都在 NLU target 侧。
 - CLI and experiment tests now import the target-owned registry directly, and the
   old eval experiment source path was removed from the strict boundary allowlist.
 
+### 2026-06-12 NLU report ownership
+
+- Moved the concrete report generator from `darjeeling.eval.reports` to
+  `darjeeling.targets.nlu.reports`. It still consumes legacy trace objects while
+  runtime replay/trace are migrated, but the report vocabulary and diagnostics
+  are now target-owned.
+- CLI and report tests import the target report module directly, and the old eval
+  report source path was removed from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
