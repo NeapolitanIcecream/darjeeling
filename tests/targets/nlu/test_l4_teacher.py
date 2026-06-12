@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling.layers.l4_cloud_llm import (
+from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     CachedTeacherLayer,
     CloudLLMTeacher,
     TaskSchema,
     TeacherCache,
     parse_teacher_frame,
 )
-from darjeeling.settings import load_settings
 
 
 class FakeCompletions:
@@ -226,3 +226,9 @@ def test_cache_hit_does_not_call_live_teacher(tmp_path: Path) -> None:
     assert result.accepted
     assert result.metadata["teacher_source"] == "cache"
     assert fake_client.completions.calls == []
+
+
+def test_legacy_l4_module_reexports_nlu_target_layer() -> None:
+    from darjeeling.layers.l4_cloud_llm import CachedTeacherLayer as LegacyCachedTeacherLayer
+
+    assert LegacyCachedTeacherLayer is CachedTeacherLayer

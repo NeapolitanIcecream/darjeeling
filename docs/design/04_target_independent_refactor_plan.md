@@ -545,6 +545,15 @@ NLU 报告都在 NLU target 侧。
   the old shared test path plus `src/darjeeling/layers/l3_local_slm.py` from the
   strict boundary allowlist.
 
+### 2026-06-12 NLU L4 teacher runtime target ownership
+
+- NLU cached/live teacher runtime moved to
+  `darjeeling.targets.nlu.layers.l4_cloud_llm`; old `darjeeling.layers.l4_cloud_llm`
+  is now a compatibility re-export for remaining compiler/CLI callers.
+- Moved `tests/test_l4_teacher.py` into the NLU target test scope and removed the
+  old shared test path from the strict boundary allowlist. The old source path
+  remains allowlisted until legacy `TaskSchema` imports are migrated.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

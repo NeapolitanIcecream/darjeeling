@@ -63,7 +63,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("tests/test_l3_prompt_optimizer.py"),
     Path("tests/test_l4_context.py"),
     Path("tests/test_l4_proposal.py"),
-    Path("tests/test_l4_teacher.py"),
     Path("tests/test_massive_prepare.py"),
     Path("tests/test_replay_promotion.py"),
     Path("tests/test_replay_runtime.py"),
