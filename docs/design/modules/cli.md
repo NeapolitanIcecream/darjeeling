@@ -1,6 +1,6 @@
 # CLI 模块
 
-模块：`darjeeling.cli`
+模块：`darjeeling.targets.nlu.main_cli`
 
 ## 职责
 
@@ -31,7 +31,7 @@ edge-mvp l3 promote-prompt --run-dir runs/main --prompt runs/main/artifacts/gene
 
 L1 子命令是 harness/debug 入口，不代表 L1 用 Python 实现。`l1 bench` 输出 `l1-benchmark-v1` JSON，可写入 `--out` 供 report 复用。
 
-`edge-mvp` 是 core/runtime CLI，只读取处理后的 `DataRecord` 目录，默认路径是
+`edge-mvp` 当前指向 NLU target workflow CLI，只读取处理后的 `DataRecord` 目录，默认路径是
 `data/processed/default`。MASSIVE 的下载和转换入口是 NLU target-owned
 `edge-mvp-nlu massive prepare`；它把 MASSIVE 数据处理成 core 通用
 `DataRecord` JSONL/parquet。Runtime/replay 不依赖 MASSIVE loader。

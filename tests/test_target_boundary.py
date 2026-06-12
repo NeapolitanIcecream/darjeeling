@@ -21,7 +21,6 @@ STRICT_CORE_NLU_VOCABULARY = (
 )
 
 CURRENT_NLU_COUPLED_PATHS = {
-    Path("src/darjeeling/cli.py"),
     Path("tests/test_target_boundary.py"),
 }
 

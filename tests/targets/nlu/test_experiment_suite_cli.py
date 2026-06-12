@@ -3,7 +3,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from darjeeling import cli
+from darjeeling.targets.nlu import main_cli as cli
 from darjeeling.targets.nlu.compiler.l2_tuner import L2TuneResult
 
 
@@ -62,7 +62,7 @@ def test_experiment_suite_builds_parallel_subprocess_plan(
         "l2-family",
     ]
     first_command = captured["commands"][0]["command"]
-    assert first_command[:3] == [first_command[0], "-m", "darjeeling.cli"]
+    assert first_command[:3] == [first_command[0], "-m", "darjeeling.targets.nlu.main_cli"]
     assert "main-evolution" in first_command
     assert str(tmp_path / "main-evolution") in first_command
 

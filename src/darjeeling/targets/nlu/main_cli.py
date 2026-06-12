@@ -2173,7 +2173,7 @@ def _experiment_suite_commands(
     commands: list[dict] = []
     for experiment_name in experiments:
         experiment_spec(experiment_name)
-        command = [sys.executable, "-m", "darjeeling.cli"]
+        command = [sys.executable, "-m", "darjeeling.targets.nlu.main_cli"]
         if _settings_path is not None:
             command.extend(["--settings", str(_settings_path)])
         command.extend(

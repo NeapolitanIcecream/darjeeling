@@ -7,14 +7,6 @@ from typer.testing import CliRunner
 
 import darjeeling.targets.nlu.compiler.l2_target_evolution as l2_target_evolution
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.cli import (
-    _resolve_l2_target_agent_rounds,
-    _resolve_l2_target_budget,
-    _resolve_l2_target_local_search_cross_audit_top_k,
-    _resolve_l2_target_visible_cross_audit_folds,
-    _resolve_l2_target_visible_validation_folds,
-    app,
-)
 from darjeeling.targets.nlu.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
     _adoption_decision,
@@ -24,6 +16,14 @@ from darjeeling.targets.nlu.compiler.l2_target_evolution import (
     prepare_l2_target_workspace,
     run_l2_target_evolution,
     split_l2_target_traces,
+)
+from darjeeling.targets.nlu.main_cli import (
+    _resolve_l2_target_agent_rounds,
+    _resolve_l2_target_budget,
+    _resolve_l2_target_local_search_cross_audit_top_k,
+    _resolve_l2_target_visible_cross_audit_folds,
+    _resolve_l2_target_visible_validation_folds,
+    app,
 )
 from darjeeling.targets.nlu.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
 

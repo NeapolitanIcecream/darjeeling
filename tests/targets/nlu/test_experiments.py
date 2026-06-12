@@ -5,16 +5,16 @@ from types import SimpleNamespace
 import pytest
 
 from darjeeling.artifacts.store import ArtifactStore
-from darjeeling.cli import (
+from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import l3_prompt_artifact_hash
+from darjeeling.targets.nlu.experiments import apply_experiment_settings, experiment_spec
+from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
+from darjeeling.targets.nlu.main_cli import (
     _execute_experiment_run,
     _experiment_preflight_payload,
     _preflight_l3_check,
     _promote_l3_prompt_artifact,
     _run_settings_payload,
 )
-from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import l3_prompt_artifact_hash
-from darjeeling.targets.nlu.experiments import apply_experiment_settings, experiment_spec
-from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
 from darjeeling.targets.nlu.settings import load_settings
 
 
@@ -108,8 +108,14 @@ def test_execute_experiment_run_writes_metadata_and_report(
         calls["report_run_dir"] = run_dir
         return SimpleNamespace(report_dir=run_dir / "reports")
 
-    monkeypatch.setattr("darjeeling.cli._execute_replay_run", fake_execute_replay_run)
-    monkeypatch.setattr("darjeeling.cli.generate_run_report", fake_generate_run_report)
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.main_cli._execute_replay_run",
+        fake_execute_replay_run,
+    )
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.main_cli.generate_run_report",
+        fake_generate_run_report,
+    )
 
     _execute_experiment_run(
         experiment_spec("no-l2"),

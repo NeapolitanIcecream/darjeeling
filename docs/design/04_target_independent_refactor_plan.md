@@ -769,6 +769,13 @@ NLU 报告都在 NLU target 侧。
   and NLU runtime defaults, so callers now import it from the target package.
 - Removed the old core settings source path from the strict boundary allowlist.
 
+### 2026-06-12 NLU workflow CLI ownership
+
+- Moved the current `edge-mvp` NLU workflow CLI from `darjeeling.cli` to
+  `darjeeling.targets.nlu.main_cli` and repointed the console script there.
+- Tests import the target CLI module directly, and the old core CLI source path
+  was removed from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling import cli
+from darjeeling.targets.nlu import main_cli as cli
 from darjeeling.targets.nlu.settings import load_settings
 
 
