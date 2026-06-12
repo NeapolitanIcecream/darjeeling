@@ -502,6 +502,13 @@ NLU 报告都在 NLU target 侧。
 - 旧 `utterance -> Frame` cascade 保留为显式 `FrameCascadeRouter`，`JsonCascadeRouter`
   暂时作为 `CascadeRouter` alias 保持兼容。
 
+### 2026-06-12 NLU L0 layer target ownership
+
+- NLU `ExactCacheLayer(utterance -> Frame)` moved to
+  `darjeeling.targets.nlu.layers.l0_cache`; old `darjeeling.layers.l0_cache`
+  is now a compatibility re-export.
+- Removed `src/darjeeling/layers/l0_cache.py` from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
