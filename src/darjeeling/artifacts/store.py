@@ -20,6 +20,8 @@ class LayerDelta(BaseModel):
 class ArtifactManifest(BaseModel):
     artifact_set_id: str
     generation: int
+    target_name: str | None = None
+    target_schema_version: str | None = None
     parent_artifact_set_id: str | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     schema_versions: dict[str, str] = Field(default_factory=dict)

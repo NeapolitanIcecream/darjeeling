@@ -439,6 +439,13 @@ NLU 报告都在 NLU target 侧。
 - 旧 `layers/l0_cache.py` NLU 兼容路径暂不删除，后续 runtime/replay 切换时再把
   manifest 装载格式从 `frames_by_normalized_utterance` 收敛到 generic exact cache。
 
+### 2026-06-12 Artifact manifest target identity
+
+- `ArtifactManifest` 新增可选 `target_name` 和 `target_schema_version` 字段，为后续
+  replay/promotion 装载 target-owned artifacts 提供通用身份信息。
+- 字段保持可选，旧 manifest 可以继续加载；core 不写入 NLU 默认值，后续由
+  target-aware CLI/runtime builder 在选择 target 后显式填充。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
