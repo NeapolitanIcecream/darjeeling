@@ -740,6 +740,13 @@ NLU 报告都在 NLU target 侧。
 - Removed the core `darjeeling.schemas` module and updated NLU target code/tests
   to import target schemas directly.
 
+### 2026-06-12 Core router cleanup
+
+- Removed the unused legacy `FrameCascadeRouter` compatibility path from
+  `darjeeling.runtime.router`. The core router module now only exposes the
+  target-neutral JSON cascade router and no longer imports NLU schemas.
+- Removed the core router source path from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
