@@ -2,14 +2,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling.compiler.guard_optimizer import (
+from darjeeling.schemas import TeacherTrace
+from darjeeling.targets.nlu.compiler.guard_optimizer import (
     evaluate_l2_unguarded,
     guard_search_spec_from_proposal,
     select_l2_accept_threshold,
 )
-from darjeeling.compiler.l2_distiller import l2_config_from_proposal
-from darjeeling.layers.l2_student import GuardDecision, guard_accepts
-from darjeeling.schemas import Frame, TeacherTrace
+from darjeeling.targets.nlu.compiler.l2_distiller import l2_config_from_proposal
+from darjeeling.targets.nlu.layers.l2_student import GuardDecision, guard_accepts
+from darjeeling.targets.nlu.schemas import Frame
 
 
 def test_l2_guard_accepts_at_threshold() -> None:
@@ -272,6 +273,18 @@ def test_guard_search_spec_from_proposal_bounds_grid_and_wrong_accept_rate() -> 
                 "max_wrong_accept_rate": 0.03,
             }
         )
+
+
+def test_legacy_l2_compiler_modules_reexport_nlu_target_helpers() -> None:
+    from darjeeling.compiler.guard_optimizer import (
+        select_l2_accept_threshold as LegacySelectThreshold,
+    )
+    from darjeeling.compiler.l2_distiller import (
+        l2_config_from_proposal as legacy_l2_config_from_proposal,
+    )
+
+    assert LegacySelectThreshold is select_l2_accept_threshold
+    assert legacy_l2_config_from_proposal is l2_config_from_proposal
 
 
 def _teacher_trace(request_id: str, utterance: str, intent: str) -> TeacherTrace:

@@ -565,6 +565,16 @@ NLU 报告都在 NLU target 侧。
   source path remains allowlisted until compiler and CLI imports are migrated off
   the legacy module.
 
+### 2026-06-12 NLU L2 compiler helper target ownership
+
+- NLU L2 guard threshold search, config distillation and tuner logic moved to
+  `darjeeling.targets.nlu.compiler.{guard_optimizer,l2_distiller,l2_tuner}`; old
+  `darjeeling.compiler.*` modules are compatibility re-exports for existing
+  compiler/CLI imports.
+- Moved `tests/test_l2_guard.py` and `tests/test_l2_tuner.py` into the NLU target
+  test scope and removed the old shared test paths plus the old compiler helper
+  source paths from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

@@ -25,12 +25,9 @@ STRICT_CORE_NLU_VOCABULARY = (
 
 CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/cli.py"),
-    Path("src/darjeeling/compiler/guard_optimizer.py"),
     Path("src/darjeeling/compiler/l0_compile.py"),
     Path("src/darjeeling/compiler/l1_program_compiler.py"),
-    Path("src/darjeeling/compiler/l2_distiller.py"),
     Path("src/darjeeling/compiler/l2_target_evolution.py"),
-    Path("src/darjeeling/compiler/l2_tuner.py"),
     Path("src/darjeeling/compiler/l3_prompt_optimizer.py"),
     Path("src/darjeeling/compiler/l4_context.py"),
     Path("src/darjeeling/compiler/l4_proposal.py"),
@@ -56,9 +53,7 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("tests/test_gold_leakage.py"),
     Path("tests/test_hard_buffer.py"),
     Path("tests/test_l1_coding_agent.py"),
-    Path("tests/test_l2_guard.py"),
     Path("tests/test_l2_target_evolution.py"),
-    Path("tests/test_l2_tuner.py"),
     Path("tests/test_l3_prompt_optimizer.py"),
     Path("tests/test_l4_context.py"),
     Path("tests/test_l4_proposal.py"),

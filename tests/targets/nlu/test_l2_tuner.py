@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from darjeeling.compiler.l2_tuner import (
+from darjeeling.schemas import LayerResult, TeacherTrace
+from darjeeling.targets.nlu.compiler.l2_tuner import (
     L2TuneSpec,
     residual_l2_validation_traces,
     split_l2_tune_traces,
     tune_l2_student,
 )
-from darjeeling.layers.l2_student import L2StudentConfig
-from darjeeling.schemas import Frame, LayerResult, TeacherTrace
+from darjeeling.targets.nlu.layers.l2_student import L2StudentConfig
+from darjeeling.targets.nlu.schemas import Frame
 
 
 def test_l2_tuner_selects_best_config_and_reports_trials() -> None:
@@ -119,6 +120,12 @@ def test_l2_residual_validation_filters_lower_layer_hits_and_l0_repeats() -> Non
     residual = residual_l2_validation_traces(train, validation)
 
     assert [trace.request_id for trace in residual] == ["v4"]
+
+
+def test_legacy_l2_tuner_module_reexports_nlu_target_tuner() -> None:
+    from darjeeling.compiler.l2_tuner import tune_l2_student as legacy_tune_l2_student
+
+    assert legacy_tune_l2_student is tune_l2_student
 
 
 def _teacher_traces() -> list[TeacherTrace]:
