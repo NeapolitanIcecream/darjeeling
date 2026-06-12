@@ -416,6 +416,18 @@ NLU 报告都在 NLU target 侧。
   router 作为兼容路径；新增中立 fixture 测试证明 core orchestration 可以在
   `input={"text": ...}` / `output={"label": ...}` 形状上运行。
 
+### 2026-06-12 Phase 2 package scaffold
+
+- 新增 `darjeeling.targets.nlu` package，先放入 NLU-owned `Frame`、
+  `TaskSchema`、`DataRecord`、utterance normalization、annotation frame parser、
+  teacher adapter、target spec、runtime placeholder 和 MASSIVE adapter。
+- 新增 repo-local static registry，当前显式注册 `nlu -> NluTarget`；该 registry
+  是普通 mapping，不使用 entry point、plugin system 或 DI container。
+- 新增 `edge-mvp-nlu massive prepare` 入口；旧 `edge-mvp-massive` 仍保留并通过
+  compatibility wrapper 调用 target-owned MASSIVE adapter。
+- 新增 NLU target test scope `tests/targets/nlu/`，覆盖 target registry、
+  frame parser、teacher adapter、target spec equality/validation 和 MASSIVE mapping。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

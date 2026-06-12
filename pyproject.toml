@@ -41,6 +41,7 @@ dev = [
 [project.scripts]
 edge-mvp = "darjeeling.cli:app"
 edge-mvp-massive = "darjeeling.adapters.massive_cli:app"
+edge-mvp-nlu = "darjeeling.targets.nlu.cli:app"
 
 [build-system]
 requires = ["hatchling"]

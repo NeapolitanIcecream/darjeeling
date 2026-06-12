@@ -181,6 +181,8 @@ def test_core_source_does_not_embed_bundled_dataset_or_demo_defaults() -> None:
     for path in Path("src/darjeeling").rglob("*.py"):
         if "adapters" in path.parts:
             continue
+        if "targets" in path.parts:
+            continue
         source = path.read_text(encoding="utf-8")
         for term in forbidden_terms:
             assert term not in source, f"{path} contains target-specific default {term!r}"
