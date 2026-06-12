@@ -527,6 +527,15 @@ NLU 报告都在 NLU target 侧。
   removed the old shared test path plus `src/darjeeling/layers/l2_target.py`
   from the strict boundary allowlist.
 
+### 2026-06-12 NLU native L1 ABI target ownership
+
+- NLU `RustL1Worker` / `RustProgramBankLayer` moved to
+  `darjeeling.targets.nlu.layers.l1_rust_programbank`; old
+  `darjeeling.layers.l1_rust_programbank` is now a compatibility re-export.
+- Moved `tests/test_l1_rust_worker.py` into the NLU target test scope and
+  removed the old shared test path plus `src/darjeeling/layers/l1_rust_programbank.py`
+  from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

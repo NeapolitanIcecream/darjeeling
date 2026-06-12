@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from darjeeling.layers.l1_rust_programbank import (
+from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     RustL1Worker,
     RustProgramBankLayer,
     build_l1_binary,
@@ -72,3 +72,11 @@ def test_rust_l1_layer_abstains_on_unknown_request(l1_binary: Path) -> None:
     assert not result.accepted
     assert result.frame is None
     assert "native_latency_us" in result.metadata
+
+
+def test_legacy_l1_rust_module_reexports_nlu_target_layer() -> None:
+    from darjeeling.layers.l1_rust_programbank import (
+        RustProgramBankLayer as LegacyRustProgramBankLayer,
+    )
+
+    assert LegacyRustProgramBankLayer is RustProgramBankLayer
