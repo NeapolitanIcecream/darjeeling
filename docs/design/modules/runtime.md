@@ -2,78 +2,63 @@
 
 模块根：`darjeeling.runtime`
 
+Core runtime 当前只保留 target-independent mechanics：router、exact cache、cost
+和 timing。Concrete NLU replay 和 trace JSONL IO 已移到
+`darjeeling.targets.nlu.replay` 与 `darjeeling.targets.nlu.trace`。
+
 ## `runtime.router`
 
 职责：
 
 - 固定顺序执行 `L0 -> L1 -> L2 -> L3 -> L4`。
-- 收集每层 `LayerResult`。
+- 收集每层 target-neutral `LayerResult`。
 - 根据 `accepted` 决定是否停止。
-- 支持 shadow/audit 模式。
+- 返回 target-owned output JSON。
 
-Router 不读取 gold label，不训练模型，不调用 compiler。
-
-## L1 调用形态
-
-L1 是 Rust native program。MVP 初期推荐 long-lived subprocess worker：
-
-```text
-darjeeling-l1-worker --artifact runs/<id>/artifacts/generations/gen_003/l1
-```
-
-Python runtime 通过 JSONL 或 framed stdin/stdout 与 worker 通信。worker 启动后常驻，避免 per-request process spawn 污染 latency。
-
-当前实现状态：
-
-- runtime 默认从 settings 指向的 Rust crate/binary 启动 long-lived worker。
-- 若 promoted manifest 中包含 `l1_crate_dir`，runtime 会构建并使用该 promoted crate。
-- `compile_every` 后若 manifest 的 L1 crate 发生变化，runtime 会关闭旧 worker 并启动新的 promoted worker，使下一窗口使用 candidate L1。
-- Python integration timeout 默认 5s，用于覆盖 worker 冷启动抖动；Rust `native_latency_us` 仍由 worker 内部单独记录。
-- `L2_ENABLED=false` 时 runtime 跳过 promoted L2 artifact。
-- `L2_GUARD_MODE=always_accept` 时 runtime 将 loaded L2 bundle 的 accept threshold 设为 0，用于 no-guard ablation。正常主实验仍由 promotion gate 控制 artifact 是否进入 runtime；`experiment no-guard` 会在隔离 run 中设置 `FORCE_PROMOTE_ARTIFACTS=true`，以便测量无 guard 的真实 L2 行为。
+Router 不读取 gold label，不训练模型，不调用 compiler，不解释 target payload。
 
 单条 request：
 
 ```json
-{"request_id":"r1","utterance":"alpha request"}
+{"request_id": "r1", "input": {"text": "alpha request"}}
 ```
 
-单条 response：
+单条 layer response：
 
 ```json
 {
-  "request_id": "r1",
+  "layer": "L1",
   "accepted": true,
-  "frame": {"intent": "intent_alpha", "slots": {"slot_alpha": "value"}},
-  "program_path": "target/program_alpha",
-  "native_latency_us": 12
+  "output": {"label": "alpha"},
+  "confidence": 0.98,
+  "reason": "accepted by target artifact",
+  "latency_ms": 1.2,
+  "metadata": {"artifact": "l1"}
 }
 ```
 
-## `runtime.trace`
+## `runtime.exact_cache`
 
-职责：
+Exact cache 使用 target contract：
 
-- append-only 写入 `traces.jsonl`。
-- 写入 `teacher_cache.jsonl`。
-- 生成 compiler-visible `TeacherTrace` view。
-- 维护 hard buffer 输入事件。
+```text
+target.normalize_request(input) -> teacher_label JSON
+```
 
-Trace 写入必须包含 schema version。Teacher cache line 必须记录 prompt version、model、raw response、usage 和 cache key。
+Core 可以保存 target-owned JSON payload，但不能解释字段名。
+
+## Trace ownership
+
+Core contract 中定义 target-neutral `TraceRecord` 和 `TeacherTrace`。当前 NLU
+workflow 仍使用 legacy NLU trace schema，因此 reader/writer 位于 target package。
+新增 core workflow 时应使用 `darjeeling.contracts.TraceRecord`。
 
 ## `runtime.cost`
 
 职责：
 
 - 根据配置中的 pricing 参数估算 cost。
-- 将 cost 归因到 L4 teacher/fallback、compiler proposal、L1 coding-agent job。
-
-当前实现状态：
-
-- L0/L1/L2/L3 的 per-request cost estimate 来自 settings。
-- L4 live call 和 offline replay 优先使用 OpenAI usage token counts 估算成本，支持 cached input token discount。
-- 若 replay trace 没有 L4 usage，则使用 `L4_DEFAULT_COST_USD_PER_REQUEST` 作为 fallback estimate。
-- `settings.json` 会写入这些非 secret price assumptions；report 的 Settings 段展示它们。
+- 将 cost 归因到 L4 teacher/fallback、compiler proposal、agent job。
 
 价格不可 hardcode 到逻辑里。Report 必须写明价格假设。
 
@@ -83,4 +68,4 @@ Trace 写入必须包含 schema version。Teacher cache line 必须记录 prompt
 
 - 提供 monotonic timing helper。
 - 记录每层 wall-clock latency。
-- 对 L1 额外记录 Rust 内部 `native_latency_us`。
+- 允许 target layer 在 metadata 中追加 native/backend latency。

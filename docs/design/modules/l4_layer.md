@@ -1,6 +1,9 @@
 # L4 layer 模块
 
-模块根：`darjeeling.layers.l4`
+模块根：当前 NLU teacher/runtime 位于
+`darjeeling.targets.nlu.layers.l4_cloud_llm`，NLU prompt/proposal helpers 位于
+`darjeeling.targets.nlu.compiler.l4_context` 和
+`darjeeling.targets.nlu.compiler.l4_proposal`。
 
 L4 是一个层次，不是一种单一调用方式。
 
@@ -10,7 +13,7 @@ L4 是一个层次，不是一种单一调用方式。
 L4TeacherAdapter
   direct model API
   stateless
-  labels utterance / runtime fallback
+  labels target request / runtime fallback
 
 L4ProposalAdapter
   direct model API
@@ -35,16 +38,15 @@ L4CodingAgentAdapter
 Context：
 
 - stable teacher prefix。
-- intent schema。
-- slot schema。
+- target task schema。
 - output schema。
-- current utterance。
+- current input。
 
 不包含历史 trace、artifact metrics、hot clusters 或 gold label。
 
 Teacher consistency：
 
-- Teacher cache key 包含 normalized utterance、intent schema version、slot schema version、teacher prompt version 和 model。
+- Teacher cache key 包含 normalized request、target schema version、teacher prompt version 和 model。
 - 同一 cache key 命中时不刷新。
 - prompt/schema/model 变化进入新的 cache namespace。
 - Parse failure 可以 retry，但不能 fallback fake label。
@@ -52,8 +54,8 @@ Teacher consistency：
 
 当前实现状态：
 
-- `CloudLLMTeacher` 已接入 `darjeeling.compiler.l4_context.build_teacher_context`。
-- live teacher call 使用 stable system prefix + current-utterance dynamic tail。
+- `CloudLLMTeacher` 已接入 target-owned teacher context builder。
+- live teacher call 使用 stable system prefix + current-input dynamic tail。
 - OpenAI request 使用 `prompt_cache_key` 和 `prompt_cache_retention`。
 - teacher cache line 记录 `context_hash`、`prompt_cache_key`、prompt/schema/model/cache key、raw response 和 usage。
 
@@ -78,7 +80,7 @@ Context：
 当前实现状态：
 
 - proposal context builder 已实现，能构造 bounded JSON proposal 的 stable prefix 和 teacher-visible dynamic context。
-- direct model API adapter `darjeeling.compiler.l4_proposal.L4ProposalAdapter` 已实现。
+- direct model API adapter `darjeeling.targets.nlu.compiler.l4_proposal.L4ProposalAdapter` 已实现。
 - adapter 使用 `build_proposal_context`、OpenAI chat completions、JSON response format、`prompt_cache_key`、`prompt_cache_retention` 和 `PROPOSAL_MAX_TOKENS`。
 - adapter 返回 validated JSON object、raw response、usage、model、context hash、prompt cache key 和 source trace IDs。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded L2 config proposal；这是轻量 proposal path。
@@ -132,7 +134,7 @@ Agent 权限：
 
 当前实现状态：
 
-- 已实现 `darjeeling.compiler.l1_program_compiler.L4CodingAgentAdapter`。
+- 已实现 `darjeeling.targets.nlu.compiler.l1_program_compiler.L4CodingAgentAdapter`。
 - adapter 会创建隔离 candidate workspace，写入 teacher-visible context files、prompt、raw transcript、diff、commands、agent report 和 `provenance.json`。
 - `provenance.json` 汇总 Codex JSONL event types、外层命令摘要和 diff stats；raw transcript 仍单独保存，供后续更细解析。
 - `agent-session` 模式会在隔离 `l1_programbank/` workspace 中启动一个 long-running Codex session；agent 自己决定 edit/test/bench/replay 的顺序和次数。
@@ -230,7 +232,11 @@ Agent 权限：
 
 当前实现状态：
 
-- 已实现 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve --mode agent-session`，用于 target-dependent single-session inner job。该路径当前支持 baseline-first evaluation、one-session Codex launch、fixed split evaluator、target workspace scope gate、private selection/promotion gates 和 target snapshot promotion。
+- 已实现 `darjeeling.targets.nlu.compiler.l2_target_evolution` 和
+  `edge-mvp l2 target-evolve --mode agent-session`，用于 target-dependent
+  single-session inner job。该路径当前支持 baseline-first evaluation、one-session
+  Codex launch、fixed split evaluator、target workspace scope gate、
+  private selection/promotion gates 和 target snapshot promotion。
 - Codex CLI 配置由 `L2_TARGET_AGENT_*` settings 控制，包括命令、模型、timeout、sandbox、approval policy、config/rules/session persistence 隔离选项。
 - 普通 replay/tuning 不会产生 live LLM cost；真实 target evolution 必须显式运行 `edge-mvp l2 target-evolve --mode agent-session`。
 - `tools/search_config.py` 不消耗 LLM tokens；它只优化可见 train/validation folds，并把 best visible config 写入 `target/config.json`。L4 coding agent 可在同一个 session 内调用它，但 search 结果不能自证 adoption。若 visible support 已经达标，agent 不应仅为了提高 raw accepts 降低 `accept_threshold`；这种 config 覆盖扩张容易绕过 target-local veto 的安全意图，必须由 visible train-audit、cross-audit 和 cue probes 共同证明必要且安全。

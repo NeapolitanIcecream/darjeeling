@@ -1,6 +1,10 @@
 # compiler 模块
 
-模块根：`darjeeling.compiler`
+模块根：core `darjeeling.compiler` 目前只保留 package boundary；concrete NLU
+compiler 已迁到 `darjeeling.targets.nlu.compiler.*`。
+
+本页的 L1/L2/L3 训练、intent/slot mining、frame objective 和 prompt evolution
+描述的是 NLU target compiler，不是 target-independent core 默认语义。
 
 ## 职责
 
@@ -15,7 +19,7 @@
 2. 加载 recent teacher traces。
 3. 按 split policy 切分 `teacher_train`、`teacher_promotion_holdout`、`teacher_regression_sample`。
 4. 从 candidate-generation 可见 split 构建 hard buffer。
-5. Mining hot utterances、hot intents、embedding clusters、failure cases。
+5. 调用 target compiler 提供的 mining/diagnostic/proposal 入口。
 6. 构造 L0 candidates。
 7. 运行 L1 coding-agent compiler job，产生 Rust candidate artifact。
 8. 请求 L4 direct API 提议 L2 config candidates。
@@ -33,7 +37,7 @@
 已实现最小可运行 compiler generation 与离线 promotion gate：
 
 - `compile_every` 到达时，从当前 run 的 `traces.jsonl` 构造 `TeacherTrace` 视图。
-- compiler 输入会移除 `gold_frame`，并执行 teacher-visible-only 检查。
+- compiler 输入会移除 hidden gold label，并执行 teacher-visible-only 检查。
 - 按 deterministic split 切分 `teacher_train`、`teacher_promotion_holdout` 和小规模 `teacher_regression_sample`。
 - 从 current manifest 的上一版 hard buffer、本轮 `teacher_train`、以及 replay-only evaluation split 中合并 hard buffer，记录 weak wrong accept、L4 fallback、slow path 等 teacher-visible 困难样本。
 - 只用 `teacher_train` 生成 L0 exact cache artifact、训练 L2 student artifact，并在 `L1_AGENT_MODE` 非 disabled 时运行 L1 coding-agent job；L1 agent 只能看到 `teacher_train` 和 `visibility=train_visible` hard cases。
@@ -60,7 +64,7 @@
 L0 -> L1 -> L2 -> recorded L3 accept -> teacher fallback
 ```
 
-其中 recorded L3 accept 使用 trace 中已经记录的 L3 result，不在 compiler 中加载本地模型；teacher fallback 直接使用 evaluator 可见的 `teacher_frame`，用于评估候选弱层是否安全吸收。这个切片已经移除了无条件 bootstrap promotion，并把 L1 candidate 纳入 gate，但仍不是 proposal 的完整 replay evaluator。
+其中 recorded L3 accept 使用 trace 中已经记录的 L3 result，不在 compiler 中加载本地模型；teacher fallback 直接使用 evaluator 可见的 teacher label，用于评估候选弱层是否安全吸收。这个切片已经移除了无条件 bootstrap promotion，并把 L1 candidate 纳入 gate，但仍不是 proposal 的完整 replay evaluator。
 
 非阻塞后续项：
 
@@ -146,7 +150,7 @@ Optuna tuning 不能读取 `teacher_promotion_holdout`、gold eval 或 future st
 默认 score：
 
 ```text
-+ 100.0 * frame_exact_match
++ 100.0 * correctness
 - 200.0 * wrong_accept_rate
 -   1.0 * cost_usd_per_100_requests
 -   0.01 * p95_latency_ms

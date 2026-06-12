@@ -1,6 +1,11 @@
 # L2 student 模块
 
-模块：`darjeeling.layers.l2_student`
+模块：`darjeeling.targets.nlu.layers.l2_student` 和
+`darjeeling.targets.nlu.compiler.*`。
+
+本页描述 NLU target 的 L2 student/runtime/compiler 设计，不是 Darjeeling core
+默认语义。这里出现的 utterance、intent、slot、frame 和 NLU diagnostics 都必须
+停留在 target package、target workspace、target tests 或 experiment evidence 中。
 
 ## 职责
 

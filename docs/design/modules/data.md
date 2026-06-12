@@ -48,13 +48,13 @@ Slot alignment：
 - 无法对齐的 slot 记录 `alignment_failure`。
 - 不使用 gold annotation 补齐 teacher slot alignment。
 
-## `data.streams`
+## `targets.nlu.streams`
 
 职责：
 
-- 从真实 utterance 构造 replay stream。
+- 从 NLU target record 构造 replay stream。
 - 支持 `uniform`、`zipf-mild`、`zipf-heavy`。
 - 将抽样结果写入 `runs/<id>/stream.json`。
 
 Zipf stream 可以使用 `workload_group_key` 形成 workload locality；没有该字段时
-回退到 intent + normalized utterance。Group key 不进入 runtime/compiler 输入。
+回退到 target-owned grouping logic。Group key 不进入 core runtime/compiler 输入。

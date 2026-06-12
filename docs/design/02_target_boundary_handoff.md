@@ -1,5 +1,11 @@
 # Target Boundary Handoff
 
+> Historical audit snapshot. This handoff records the pre-refactor boundary
+> problems and should be read together with
+> [03 Target-Independent 架构](03_target_independent_architecture.md) and
+> [04 Target-Independent 重构计划](04_target_independent_refactor_plan.md),
+> whose execution log records the current module ownership.
+
 This handoff is for the next Codex session. Start from design. Do not begin by
 moving code.
 

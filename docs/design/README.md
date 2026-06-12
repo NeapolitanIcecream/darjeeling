@@ -59,7 +59,9 @@
 name = "darjeeling"
 
 [project.scripts]
-edge-mvp = "darjeeling.cli:app"
+edge-mvp = "darjeeling.targets.nlu.main_cli:app"
+edge-mvp-nlu = "darjeeling.targets.nlu.cli:app"
 ```
 
-当前实现已使用 `src/darjeeling`。CLI 命令名不需要随 Python 包名变化。
+当前实现已使用 `src/darjeeling`。`edge-mvp` 目前指向 NLU target workflow
+CLI，`edge-mvp-nlu` 暴露 NLU target 的 dataset/target 子命令。

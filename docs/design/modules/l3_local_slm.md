@@ -1,6 +1,10 @@
 # L3 local SLM 模块
 
-模块：`darjeeling.layers.l3_local_slm`
+模块：`darjeeling.targets.nlu.layers.l3_local_slm` 和
+`darjeeling.targets.nlu.compiler.l3_prompt_optimizer`。
+
+本页描述 NLU target 的 local SLM layer。Core 只要求 target layer 返回
+`LayerResult(output=...)`，不解释 prompt 输出中的 frame/intent/slot 字段。
 
 ## 职责
 

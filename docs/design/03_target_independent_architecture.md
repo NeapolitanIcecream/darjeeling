@@ -11,15 +11,18 @@ NLU 是一个 target。MASSIVE 是 NLU target 的一个 dataset adapter。
 
 ```text
 darjeeling core
+  contracts.py
   runtime/
   compiler/
   artifacts/
   eval/
-  settings/
-  cli/
+  layers/base.py
 
 targets.nlu
   schemas.py
+  settings.py
+  main_cli.py
+  cli.py
   teacher.py
   data.py
   layers/
@@ -33,7 +36,7 @@ targets.nlu
     massive.py
 ```
 
-Core 不 import `targets.nlu` 的具体模块。Core 通过 target contract 调用
+Core packages outside `targets/` 不 import `targets.nlu` 的具体模块。Core 通过 target contract 调用
 目标任务能力。CLI 或配置负责选择 target，并把 target object 传给 core。
 Target discovery 使用 repo 内静态 registry，例如 target name 到 constructor
 的显式 mapping；不引入 packaging entry point、动态插件系统或 DI container。
@@ -456,6 +459,11 @@ edge-mvp-nlu l3 prompt-evolve --traces runs/latest/traces.jsonl --out-dir ...
 
 Core CLI should not expose NLU-only option names. Target CLI may expose
 intent/slot/frame vocabulary.
+
+Current implementation note: `edge-mvp` is currently packaged as the NLU target
+workflow CLI (`darjeeling.targets.nlu.main_cli`) while the generic core CLI is
+carved back out. `edge-mvp-nlu` owns target preparation commands such as MASSIVE
+prepare.
 
 ## Boundary Tests
 

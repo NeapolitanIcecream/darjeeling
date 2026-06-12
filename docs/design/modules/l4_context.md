@@ -1,6 +1,9 @@
 # L4 context 管理模块
 
-模块：`darjeeling.compiler.l4_context`
+模块：`darjeeling.targets.nlu.compiler.l4_context`。
+
+本页描述当前 NLU target 的 teacher/proposal context 管理。Core contract 只要求
+teacher adapter 提供 `build_messages`、`parse_response` 和 `cache_key_parts`。
 
 ## 设计目标
 
@@ -35,17 +38,16 @@ Final artifact is externally replayed.
 Teacher context：
 
 - task instruction。
-- intent schema。
-- slot schema。
+- target task schema。
 - output JSON schema。
-- current utterance。
+- current input。
 
 不包含历史。
 
 当前实现状态：
 
-- `darjeeling.compiler.l4_context` 已实现 teacher context builder。
-- Teacher prompt 采用 stable system prefix + dynamic user tail；dynamic tail 只包含当前 utterance。
+- `darjeeling.targets.nlu.compiler.l4_context` 已实现 teacher context builder。
+- Teacher prompt 采用 stable system prefix + dynamic user tail；dynamic tail 只包含当前 input。
 - builder 输出 `context_hash`、`prompt_cache_key`、`prompt_cache_retention`、`prompt_version` 和 `context_layout_version`。
 - `CloudLLMTeacher` 已使用该 builder；live teacher cache line 会记录 `context_hash` 与 `prompt_cache_key`。
 
@@ -63,7 +65,7 @@ L2/L3/guard proposal context：
 - 已实现 proposal context builder，输入类型使用 `TeacherTrace`，并记录 `source_trace_ids`。
 - dynamic trace block 按 `request_id` 确定性排序。
 - builder 会扫描 forbidden gold/eval/future 字段。
-- 已实现 `darjeeling.compiler.l4_proposal.L4ProposalAdapter` direct model call。
+- 已实现 `darjeeling.targets.nlu.compiler.l4_proposal.L4ProposalAdapter` direct model call。
 - Adapter 会记录 `context_hash`、`prompt_cache_key`、`source_trace_ids`、raw response 和 usage。
 - Compiler 已用可开关方式接入 L2 config proposal、L3 prompt candidate proposal 和 guard search proposal：`L4_PROPOSAL_MODE=live` 时启用，默认 disabled。
 - 当前 guard proposal 只覆盖 threshold search spec；更复杂的 guard feature-family candidate generation 是后续增强。
@@ -97,9 +99,7 @@ A. Stable prefix
    objective definition
 
 B. Semi-stable run prefix
-   dataset locale
-   intent list
-   slot schema
+   target schema
    artifact schema versions
 
 C. Dynamic context
@@ -110,7 +110,7 @@ C. Dynamic context
    metrics
 
 D. Current task
-   label this utterance
+   label this input
    propose L2 config
    propose L3 prompt
    repair invalid JSON
@@ -157,9 +157,8 @@ Token budget 超限时：
 
 Teacher cache 额外记录：
 
-- normalized utterance。
-- intent schema version。
-- slot schema version。
+- normalized request。
+- target schema version。
 - teacher prompt version。
 - model。
 - validated teacher frame。
