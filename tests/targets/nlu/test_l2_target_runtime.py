@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from darjeeling.layers.l2_student import L2StudentConfig
-from darjeeling.schemas import Frame
+from darjeeling.targets.nlu.layers.l2_student import L2StudentConfig
 from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
+from darjeeling.targets.nlu.schemas import Frame
 
 
 class _Prediction:

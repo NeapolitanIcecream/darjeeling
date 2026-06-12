@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from darjeeling.layers.l2_student import (
+from darjeeling.targets.nlu.layers.l2_student import (
     ConstantGuard,
     FrameRetrievalResult,
     IntentCalibrationIndex,
@@ -21,7 +21,7 @@ from darjeeling.layers.l2_student import (
     train_l2_student,
     train_slot_tagger,
 )
-from darjeeling.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame
 
 
 def _examples() -> list[L2TrainingExample]:
@@ -459,3 +459,9 @@ def test_l2_student_bundle_round_trips_with_joblib(tmp_path: Path) -> None:
     assert loaded.predict("please alpha variant value gamma extra").frame.slots == {
         "slot_alpha": "value gamma extra"
     }
+
+
+def test_legacy_l2_student_module_reexports_nlu_target_layer() -> None:
+    from darjeeling.layers.l2_student import L2StudentLayer as LegacyL2StudentLayer
+
+    assert LegacyL2StudentLayer is L2StudentLayer

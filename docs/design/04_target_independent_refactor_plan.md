@@ -554,6 +554,17 @@ NLU 报告都在 NLU target 侧。
   old shared test path from the strict boundary allowlist. The old source path
   remains allowlisted until legacy `TaskSchema` imports are migrated.
 
+### 2026-06-12 NLU L2 student target ownership
+
+- NLU `L2StudentConfig`, `L2StudentBundle`, `L2StudentLayer`, guard features,
+  intent/slot models, slot BIO helpers and retrieval logic moved to
+  `darjeeling.targets.nlu.layers.l2_student`; old `darjeeling.layers.l2_student`
+  is now a compatibility re-export for remaining compiler/CLI callers.
+- Moved `tests/test_l2_student_training.py` into the NLU target test scope and
+  removed the old shared test path from the strict boundary allowlist. The old
+  source path remains allowlisted until compiler and CLI imports are migrated off
+  the legacy module.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

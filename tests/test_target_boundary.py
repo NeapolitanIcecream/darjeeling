@@ -57,7 +57,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("tests/test_hard_buffer.py"),
     Path("tests/test_l1_coding_agent.py"),
     Path("tests/test_l2_guard.py"),
-    Path("tests/test_l2_student_training.py"),
     Path("tests/test_l2_target_evolution.py"),
     Path("tests/test_l2_tuner.py"),
     Path("tests/test_l3_prompt_optimizer.py"),

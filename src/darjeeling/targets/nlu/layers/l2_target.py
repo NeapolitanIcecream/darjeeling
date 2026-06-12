@@ -5,9 +5,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from darjeeling.layers.l2_student import L2StudentBundle, guard_accepts
 from darjeeling.runtime.timing import elapsed_ms
 from darjeeling.schemas import LayerResult
+from darjeeling.targets.nlu.layers.l2_student import L2StudentBundle, guard_accepts
 from darjeeling.targets.nlu.schemas import Frame
 
 
