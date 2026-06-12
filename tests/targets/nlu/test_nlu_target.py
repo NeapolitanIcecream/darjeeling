@@ -79,6 +79,20 @@ def test_nlu_frame_parser_extracts_slots_from_bracket_annotation() -> None:
     assert normalized_template(annotated) == "alpha request [slot_alpha]"
 
 
+def test_legacy_frame_parser_module_reexports_target_functions() -> None:
+    from darjeeling.data.frames import (
+        frame_from_annotated_utterance as legacy_frame_from_annotated_utterance,
+    )
+
+    assert legacy_frame_from_annotated_utterance is frame_from_annotated_utterance
+
+
+def test_legacy_core_frame_alias_points_to_nlu_target_frame() -> None:
+    from darjeeling.schemas import Frame as LegacyFrame
+
+    assert LegacyFrame is Frame
+
+
 def test_nlu_teacher_adapter_builds_prompt_and_parses_frame() -> None:
     adapter = NluTeacherAdapter(prompt_version="teacher-test")
     task_schema = TaskSchema(

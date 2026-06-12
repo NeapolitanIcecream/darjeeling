@@ -456,6 +456,18 @@ NLU 报告都在 NLU target 侧。
 - 现有 experiment helpers 暂时显式使用 `target="nlu"`，等 core experiment CLI
   拆分 target settings 后再暴露 target option。
 
+### 2026-06-12 NLU data compatibility wrappers
+
+- 旧 `darjeeling.data.records` 和 `darjeeling.data.frames` 不再承载
+  `DataRecord`、utterance normalization 或 frame annotation parser 的实现；
+  它们只兼容 re-export `darjeeling.targets.nlu.data` 中的 target-owned 实现。
+- 旧 `darjeeling.schemas.Frame` 不再定义独立 core model，而是兼容 alias 到
+  `darjeeling.targets.nlu.schemas.Frame`，避免 core 和 target 出现两个不同的
+  NLU Frame 类型。
+- 删除 shared core `tests/test_frame_parser.py`，frame parser 行为由
+  `tests/targets/nlu/test_nlu_target.py` 覆盖；shared boundary allowlist 去掉
+  `tests/test_frame_parser.py` 和已清空实现的 `src/darjeeling/data/records.py`。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

@@ -5,13 +5,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from darjeeling.targets.nlu.schemas import Frame
+
 LayerName = Literal["L0", "L1", "L2", "L3", "L4"]
-
-
-class Frame(BaseModel):
-    intent: str
-    slots: dict[str, str] = Field(default_factory=dict)
-    is_abstain: bool = False
 
 
 class LayerResult(BaseModel):

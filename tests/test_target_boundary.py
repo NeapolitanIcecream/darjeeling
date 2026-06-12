@@ -5,6 +5,7 @@ from darjeeling.layers.l4_cloud_llm import TaskSchema
 from darjeeling.runtime.replay import load_processed_records
 from darjeeling.schemas import Frame
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
+from darjeeling.targets.nlu.data import DataRecord as NluDataRecord
 
 STRICT_CORE_NLU_VOCABULARY = (
     "Frame",
@@ -38,7 +39,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/compiler/objective.py"),
     Path("src/darjeeling/compiler/replay.py"),
     Path("src/darjeeling/data/frames.py"),
-    Path("src/darjeeling/data/records.py"),
     Path("src/darjeeling/data/streams.py"),
     Path("src/darjeeling/eval/experiments.py"),
     Path("src/darjeeling/eval/metrics.py"),
@@ -59,7 +59,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("tests/test_compiler_loop.py"),
     Path("tests/test_experiment_suite_cli.py"),
     Path("tests/test_experiments.py"),
-    Path("tests/test_frame_parser.py"),
     Path("tests/test_gold_leakage.py"),
     Path("tests/test_hard_buffer.py"),
     Path("tests/test_l1_coding_agent.py"),
@@ -117,8 +116,8 @@ def test_core_defaults_are_dataset_independent() -> None:
     assert settings.l1_rust_crate_dir == Path("native/l1_empty_programbank")
 
 
-def test_generic_data_record_is_not_owned_by_massive_adapter() -> None:
-    assert DataRecord.__module__ == "darjeeling.data.records"
+def test_legacy_data_record_aliases_nlu_target_record() -> None:
+    assert DataRecord is NluDataRecord
     record = DataRecord(
         request_id="r1",
         utterance="alpha request",
