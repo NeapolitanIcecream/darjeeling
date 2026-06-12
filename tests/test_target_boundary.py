@@ -25,7 +25,6 @@ STRICT_CORE_NLU_VOCABULARY = (
 
 CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/cli.py"),
-    Path("src/darjeeling/compiler/loop.py"),
     Path("src/darjeeling/compiler/mining.py"),
     Path("src/darjeeling/compiler/objective.py"),
     Path("src/darjeeling/compiler/replay.py"),
@@ -40,10 +39,8 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/runtime/trace.py"),
     Path("src/darjeeling/schemas.py"),
     Path("src/darjeeling/settings.py"),
-    Path("tests/test_compiler_loop.py"),
     Path("tests/test_experiment_suite_cli.py"),
     Path("tests/test_experiments.py"),
-    Path("tests/test_gold_leakage.py"),
     Path("tests/test_hard_buffer.py"),
     Path("tests/test_massive_prepare.py"),
     Path("tests/test_replay_promotion.py"),

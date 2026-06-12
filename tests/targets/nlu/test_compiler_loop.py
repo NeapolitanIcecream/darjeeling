@@ -3,12 +3,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.compiler.l2_tuner import L2TuneResult
-from darjeeling.compiler.loop import run_compiler_generation
 from darjeeling.data.records import DataRecord
 from darjeeling.runtime.replay import load_l0_layer_from_manifest, run_replay
 from darjeeling.schemas import Frame, LayerResult, TraceRecord
 from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.compiler.l2_tuner import L2TuneResult
+from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
+
+
+def test_legacy_compiler_loop_module_reexports_nlu_target_runner() -> None:
+    from darjeeling.compiler.loop import run_compiler_generation as legacy_run_generation
+
+    assert legacy_run_generation is run_compiler_generation
 
 
 def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Path) -> None:
@@ -176,7 +182,10 @@ def test_compiler_generation_uses_optuna_l2_tuning_when_enabled(
             trials=[],
         )
 
-    monkeypatch.setattr("darjeeling.compiler.loop.tune_l2_student", fake_tune_l2_student)
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.compiler.loop.tune_l2_student",
+        fake_tune_l2_student,
+    )
     settings = load_settings().model_copy(
         update={
             "l2_tuning_mode": "optuna",
@@ -238,7 +247,10 @@ def test_compiler_generation_can_train_l2_on_observed_lower_misses(
             trials=[],
         )
 
-    monkeypatch.setattr("darjeeling.compiler.loop.tune_l2_student", fake_tune_l2_student)
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.compiler.loop.tune_l2_student",
+        fake_tune_l2_student,
+    )
     settings = load_settings().model_copy(
         update={
             "l2_training_scope": "lower_miss",
@@ -322,7 +334,10 @@ def test_compiler_generation_uses_live_l4_l2_proposal_when_enabled(
                 source_trace_ids=["m1", "m2"],
             )
 
-    monkeypatch.setattr("darjeeling.compiler.loop.L4ProposalAdapter", FakeProposalAdapter)
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.compiler.loop.L4ProposalAdapter",
+        FakeProposalAdapter,
+    )
     settings = load_settings()
     settings.l4_proposal_mode = "live"
 

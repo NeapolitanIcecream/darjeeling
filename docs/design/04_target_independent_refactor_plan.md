@@ -631,6 +631,16 @@ NLU 报告都在 NLU target 侧。
   compatibility re-export for replay callers.
 - Removed the old data stream source path from the strict boundary allowlist.
 
+### 2026-06-12 NLU compiler loop ownership
+
+- The current concrete L0/L1/L2/L3/L4 NLU compiler generation loop moved to
+  `darjeeling.targets.nlu.compiler.loop`; old `darjeeling.compiler.loop` is a
+  compatibility re-export for runtime replay callers while a neutral core compiler
+  entry is carved out.
+- Moved `tests/test_compiler_loop.py` and `tests/test_gold_leakage.py` into the
+  NLU target test scope and removed the old shared test paths plus old compiler
+  loop source path from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
