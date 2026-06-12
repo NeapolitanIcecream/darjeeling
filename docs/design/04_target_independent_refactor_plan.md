@@ -575,6 +575,16 @@ NLU 报告都在 NLU target 侧。
   test scope and removed the old shared test paths plus the old compiler helper
   source paths from the strict boundary allowlist.
 
+### 2026-06-12 NLU L4 compiler helper target ownership
+
+- NLU L4 teacher/proposal context rendering and proposal parsing/call adapter
+  moved to `darjeeling.targets.nlu.compiler.{l4_context,l4_proposal}`; old
+  `darjeeling.compiler.l4_*` modules are compatibility re-exports for existing
+  compiler callers.
+- Moved `tests/test_l4_context.py` and `tests/test_l4_proposal.py` into the NLU
+  target test scope and removed the old shared test paths plus the old compiler
+  helper source paths from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

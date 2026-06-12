@@ -4,10 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling.compiler.l4_proposal import L4ProposalAdapter, ProposalParseError, parse_proposal
-from darjeeling.layers.l4_cloud_llm import TaskSchema
 from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
 from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.compiler.l4_proposal import (
+    L4ProposalAdapter,
+    ProposalParseError,
+    parse_proposal,
+)
+from darjeeling.targets.nlu.schemas import TaskSchema
 
 
 class FakeProposalCompletions:
@@ -291,3 +295,9 @@ def test_parse_proposal_enforces_basic_schema_constraints() -> None:
     for payload in invalid_payloads:
         with pytest.raises(ProposalParseError):
             parse_proposal(json.dumps(payload), schema)
+
+
+def test_legacy_l4_proposal_module_reexports_nlu_target_adapter() -> None:
+    from darjeeling.compiler.l4_proposal import L4ProposalAdapter as LegacyL4ProposalAdapter
+
+    assert LegacyL4ProposalAdapter is L4ProposalAdapter

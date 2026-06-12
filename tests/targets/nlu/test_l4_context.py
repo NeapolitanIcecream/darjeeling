@@ -1,14 +1,14 @@
 import pytest
 
-from darjeeling.compiler.l4_context import (
+from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
+from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.compiler.l4_context import (
     L4ContextError,
     assert_no_forbidden_context,
     build_proposal_context,
     build_teacher_context,
 )
-from darjeeling.layers.l4_cloud_llm import TaskSchema
-from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
-from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.schemas import TaskSchema
 
 
 def _task_schema() -> TaskSchema:
@@ -70,3 +70,9 @@ def test_proposal_context_uses_teacher_visible_traces_only() -> None:
 def test_context_guard_rejects_gold_payloads() -> None:
     with pytest.raises(L4ContextError):
         assert_no_forbidden_context({"gold_frame": {"intent": "intent_alpha"}})
+
+
+def test_legacy_l4_context_module_reexports_nlu_target_context() -> None:
+    from darjeeling.compiler.l4_context import build_teacher_context as legacy_build_context
+
+    assert legacy_build_context is build_teacher_context
