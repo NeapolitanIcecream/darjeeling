@@ -8,12 +8,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from darjeeling.compiler.l4_context import build_teacher_context, build_teacher_stable_prefix
+from darjeeling.compiler.l4_context import build_teacher_context
 from darjeeling.data.frames import normalize_utterance
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.runtime.timing import elapsed_ms
 from darjeeling.schemas import Frame, LayerResult
 from darjeeling.settings import Settings
+from darjeeling.targets.nlu.schemas import TaskSchema
+from darjeeling.targets.nlu.teacher import (
+    NluTeacherParseError,
+)
+from darjeeling.targets.nlu.teacher import (
+    build_teacher_system_prompt as build_nlu_teacher_system_prompt,
+)
+from darjeeling.targets.nlu.teacher import (
+    parse_teacher_frame as parse_nlu_teacher_frame,
+)
 
 TEACHER_MODES = {"live", "cache", "live-or-cache"}
 
@@ -24,13 +34,6 @@ class MissingTeacherError(RuntimeError):
 
 class TeacherParseError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True)
-class TaskSchema:
-    intent_names: list[str]
-    slot_names: list[str]
-    schema_version: str = "task-schema-v1"
 
 
 @dataclass(frozen=True)
@@ -294,18 +297,17 @@ def _openai_retry_delay(settings: Settings, attempt: int) -> float:
 
 
 def build_teacher_system_prompt(task_schema: TaskSchema, settings: Settings) -> str:
-    return build_teacher_stable_prefix(task_schema=task_schema, settings=settings)
+    return build_nlu_teacher_system_prompt(
+        task_schema,
+        prompt_version=settings.teacher_prompt_version,
+    )
 
 
 def parse_teacher_frame(raw_response: str) -> Frame:
     try:
-        payload = json.loads(raw_response)
-    except json.JSONDecodeError as exc:
-        raise TeacherParseError(f"teacher returned invalid JSON: {exc}") from exc
-    try:
-        return Frame.model_validate(payload)
-    except Exception as exc:
-        raise TeacherParseError(f"teacher response does not match Frame schema: {exc}") from exc
+        return parse_nlu_teacher_frame(raw_response)
+    except NluTeacherParseError as exc:
+        raise TeacherParseError(str(exc)) from exc
 
 
 def teacher_cache_key(

@@ -478,6 +478,15 @@ NLU 报告都在 NLU target 侧。
 - NLU normalization/equality 来源改为 `NluTargetSpec` 和 target-owned `Frame`；
   后续切换 compiler loop 时可以直接传 target-neutral traces 和 target object。
 
+### 2026-06-12 NLU teacher schema/parser aliases
+
+- 旧 `layers.l4_cloud_llm.TaskSchema` 改为 `darjeeling.targets.nlu.schemas.TaskSchema`
+  的兼容 alias；旧 `parse_teacher_frame(...)` 委托给
+  `darjeeling.targets.nlu.teacher.parse_teacher_frame(...)`，但保持旧
+  `TeacherParseError` 对外错误类型。
+- L4 transport 仍在旧 module 中，prompt context 渲染仍待拆出；本切片只移走
+  schema/parser ownership，降低 core 中重复 NLU 类型定义。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
