@@ -1,7 +1,9 @@
 # Agent Instructions
 
-- Darjeeling core must remain dataset- and application-independent. Core includes framework runtime, compiler/evaluation harnesses, reusable prompts/program text, default diagnostics, default probe generation, and shared tests.
-- Core may operate on schemas, intent names, slot keys, utterances, labels, and examples only as runtime/input data. It must not hard-code application-specific intent or slot names, dataset utterances, labels, request ids, or experiment failure cases.
-- Application or dataset adapter code may contain application-specific schema names and dataset-independent business logic required to connect Darjeeling to a concrete task, but that code must stay separated from core.
+- Darjeeling core must remain target-, dataset-, and application-independent. Core includes framework runtime, routing, trace flow, compiler/evaluation harnesses, replay/promotion mechanics, artifact plumbing, generic quality gates, generic agent workspace mechanics, and shared core tests.
+- Core may carry target-owned request, label, output, schema, and example payloads as opaque runtime data. Core must not interpret or depend on target-specific fields such as NLU utterances, frames, intents, slots, slot keys, labels, request ids, or experiment failure cases.
+- Target package, application adapter, and dataset adapter code may contain target schema names, application schema names, dataset fields, and dataset-independent business logic required to connect Darjeeling to a concrete task, but that code must stay separated from core.
+- NLU frame parsing is a target. `Frame(intent, slots)`, NLU teacher prompts/parsers, intent/slot diagnostics, NLU L2/L3 training logic, and NLU dataset adapters such as MASSIVE must live in the NLU target or its adapters, not in core.
+- Keep the target/core split low-abstraction: prefer ordinary Python objects, explicit static registries, and moving target code behind the boundary before inventing shared frameworks. Do not add plugin systems, dependency-injection containers, or schema DSLs unless the user explicitly asks for them.
 - Task-specific isolated L1/L2/L3 workspaces and generated target artifacts are owned by the L4 agent flow. Repository coding agents must not directly edit them; change the repo-level harnesses, prompts, tests, adapters, or contracts that govern those workspaces instead.
 - Experiment artifacts and experiment docs may record dataset-specific evidence and failure examples, but that evidence must not become a core default or reusable core rule.

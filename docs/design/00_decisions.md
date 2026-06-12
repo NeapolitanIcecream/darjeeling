@@ -181,3 +181,27 @@ L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution job。Darje
 - Candidate selection gate 要求 visible validation gate、visible support gate、visible train-audit accepted-wrong safety gate 和 private selection holdout gate 同时通过。Visible support gate 要求 candidate 在每个 visible validation fold 至少保留 2 个 correct accepts，防止 near-zero coverage target 靠 abstain 通过 safety gate；private selection 不能掩盖 visible validation、visible support 或 visible train-audit safety regression。
 - Visible validation improvement 不能直接触发采用；通过 candidate selection gate 的 target round 只表示可被选中，只有同时通过 private promotion holdout gate 才能进入 `adoption_decision.adopted=true`。
 - 原先的 L2 host-repo patch harness 已删除；L2 evolve 只通过 target workspace 产出 target-dependent runtime artifact。
+
+## 决策 12：Core 是 target-independent，NLU 是 target
+
+**状态：用户决策。**
+
+Darjeeling core 是 target-independent runtime/compiler harness，不内建 NLU
+世界模型。Core 只处理分层、路由、trace、teacher transport、artifact、
+agent workspace、replay、promotion 和通用质量 gate。Core 可以携带
+target-owned JSON payload，但不解释 payload 内部字段。
+
+设计含义：
+
+- `Frame(intent, slots)`、`utterance`、NLU teacher prompt/parser、
+  intent/slot diagnostics、NLU L1/L2/L3 训练逻辑和 NLU reports 属于 NLU
+  target。
+- MASSIVE 是 NLU target 的 dataset adapter。MASSIVE loader、locale/split
+  约定、annotated utterance 解析和 intent id 映射不进入 core。
+- Core contract 使用 target-neutral 名称，例如 `input`、`output`、
+  `teacher_label`、`gold_label` 和 `task_schema`。
+- Promotion correctness 通过 target contract 判断；core 不直接比较 target
+  payload。
+- Core source 和 shared core tests 不硬编码 target 术语、dataset 字段或
+  experiment failure case。Target package、adapter、target fixtures 和
+  experiment evidence 可以包含这些内容。

@@ -19,11 +19,19 @@
    自主 edit/evaluate/search、outer private gate 和 outer replay promotion。
    不同层的 editable surface 和工具不同：L1 是 Rust/native program，L2
    是 target student code/Optuna/evaluate，L3 是 prompt/context/bench。
+6. **Darjeeling core 应进一步收紧为 target-independent core。**
+   NLU frame parsing 是一个 target，不是 core 的内建世界模型。Core 只保留
+   分层、路由、trace、训练/进化 harness、replay、promotion、artifact 和
+   质量 gate 等目标无关机制；`Frame(intent, slots)`、NLU teacher prompt、
+   intent/slot diagnostics 和 MASSIVE loader 都属于 NLU target 或其 adapter。
 
 ## 文档结构
 
 - [00 用户决策与优先级](00_decisions.md)
 - [01 总体架构](01_architecture.md)
+- [02 Target Boundary Handoff](02_target_boundary_handoff.md)
+- [03 Target-Independent 架构](03_target_independent_architecture.md)
+- [04 Target-Independent 重构计划](04_target_independent_refactor_plan.md)
 - [modules/schemas.md](modules/schemas.md)
 - [modules/settings.md](modules/settings.md)
 - [modules/cli.md](modules/cli.md)

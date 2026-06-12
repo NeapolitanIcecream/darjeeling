@@ -6,6 +6,107 @@ from darjeeling.runtime.replay import load_processed_records
 from darjeeling.schemas import Frame
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 
+STRICT_CORE_NLU_VOCABULARY = (
+    "Frame",
+    "TaskSchema",
+    "utterance",
+    "intent",
+    "intents",
+    "slot",
+    "slots",
+    "teacher_frame",
+    "gold_frame",
+    "final_frame",
+    "frame_exact_match",
+    "intent_confusion",
+    "slot_risk",
+)
+
+CURRENT_NLU_COUPLED_PATHS = {
+    Path("src/darjeeling/cli.py"),
+    Path("src/darjeeling/compiler/guard_optimizer.py"),
+    Path("src/darjeeling/compiler/l0_compile.py"),
+    Path("src/darjeeling/compiler/l1_program_compiler.py"),
+    Path("src/darjeeling/compiler/l2_distiller.py"),
+    Path("src/darjeeling/compiler/l2_target_evolution.py"),
+    Path("src/darjeeling/compiler/l2_tuner.py"),
+    Path("src/darjeeling/compiler/l3_prompt_optimizer.py"),
+    Path("src/darjeeling/compiler/l4_context.py"),
+    Path("src/darjeeling/compiler/l4_proposal.py"),
+    Path("src/darjeeling/compiler/loop.py"),
+    Path("src/darjeeling/compiler/mining.py"),
+    Path("src/darjeeling/compiler/objective.py"),
+    Path("src/darjeeling/compiler/replay.py"),
+    Path("src/darjeeling/data/frames.py"),
+    Path("src/darjeeling/data/records.py"),
+    Path("src/darjeeling/data/streams.py"),
+    Path("src/darjeeling/eval/experiments.py"),
+    Path("src/darjeeling/eval/metrics.py"),
+    Path("src/darjeeling/eval/reports.py"),
+    Path("src/darjeeling/layers/base.py"),
+    Path("src/darjeeling/layers/l0_cache.py"),
+    Path("src/darjeeling/layers/l1_program_bank.py"),
+    Path("src/darjeeling/layers/l1_rust_programbank.py"),
+    Path("src/darjeeling/layers/l2_student.py"),
+    Path("src/darjeeling/layers/l2_target.py"),
+    Path("src/darjeeling/layers/l3_local_slm.py"),
+    Path("src/darjeeling/layers/l4_cloud_llm.py"),
+    Path("src/darjeeling/runtime/replay.py"),
+    Path("src/darjeeling/runtime/router.py"),
+    Path("src/darjeeling/runtime/trace.py"),
+    Path("src/darjeeling/schemas.py"),
+    Path("src/darjeeling/settings.py"),
+    Path("tests/test_compiler_loop.py"),
+    Path("tests/test_experiment_suite_cli.py"),
+    Path("tests/test_experiments.py"),
+    Path("tests/test_frame_parser.py"),
+    Path("tests/test_gold_leakage.py"),
+    Path("tests/test_hard_buffer.py"),
+    Path("tests/test_l1_coding_agent.py"),
+    Path("tests/test_l1_dsl.py"),
+    Path("tests/test_l1_rust_worker.py"),
+    Path("tests/test_l2_guard.py"),
+    Path("tests/test_l2_student_training.py"),
+    Path("tests/test_l2_target_evolution.py"),
+    Path("tests/test_l2_target_runtime.py"),
+    Path("tests/test_l2_tuner.py"),
+    Path("tests/test_l3_local_slm.py"),
+    Path("tests/test_l3_prompt_optimizer.py"),
+    Path("tests/test_l4_context.py"),
+    Path("tests/test_l4_proposal.py"),
+    Path("tests/test_l4_teacher.py"),
+    Path("tests/test_massive_prepare.py"),
+    Path("tests/test_replay_promotion.py"),
+    Path("tests/test_replay_runtime.py"),
+    Path("tests/test_report_l3_summary.py"),
+    Path("tests/test_settings.py"),
+    Path("tests/test_target_boundary.py"),
+}
+
+
+def test_strict_core_boundary_tracks_remaining_nlu_vocabulary() -> None:
+    missing_allowed_paths = [path for path in CURRENT_NLU_COUPLED_PATHS if not path.exists()]
+    assert missing_allowed_paths == []
+
+    violations: list[str] = []
+    scanned_paths = [
+        *Path("src/darjeeling").rglob("*.py"),
+        *Path("tests").glob("test_*.py"),
+    ]
+    for path in sorted(scanned_paths):
+        if "adapters" in path.parts:
+            continue
+        if "targets" in path.parts:
+            continue
+        if path in CURRENT_NLU_COUPLED_PATHS:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for term in STRICT_CORE_NLU_VOCABULARY:
+            if term in source:
+                violations.append(f"{path}: {term}")
+
+    assert violations == []
+
 
 def test_core_defaults_are_dataset_independent() -> None:
     settings = load_settings()

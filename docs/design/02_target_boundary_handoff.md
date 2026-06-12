@@ -181,3 +181,145 @@ import direction:
 core runtime/compiler/eval -> generic records, schemas, manifests, workspaces
 adapter/demo code -> concrete dataset loader or concrete target crate
 ```
+
+## Third Pass: Strict Core Generalization Audit
+
+Date: 2026-06-12.
+
+The boundary above removed concrete MASSIVE/application defaults, but it is not
+strict enough for the LLVM-style split now desired. The current repository is
+best described as a dataset-independent NLU frame runtime, not a
+target-independent Darjeeling core. NLU frame parsing is still embedded in core
+contracts and should become a target implementation.
+
+The desired split is:
+
+```text
+Darjeeling core
+  -> layers, routing, trace flow, agent/evolution harnesses, replay,
+     promotion, manifests, cost/latency accounting, quality gates
+
+NLU target
+  -> utterance input shape, Frame(intent, slots), TaskSchema, teacher prompt,
+     label parser/equality, L1 ABI, L2 student, L3 prompt, NLU diagnostics,
+     NLU report sections, MASSIVE adapter output mapping
+```
+
+### Current Violations
+
+These are not concrete application leaks like `alarm_set` or `weather_query`;
+they are target-contract leaks where core assumes the NLU task shape.
+
+- `src/darjeeling/schemas.py` defines `Frame(intent, slots, is_abstain)` as the
+  shared output type, and `LayerResult`, `TraceRecord`, and `TeacherTrace` all
+  depend on it. This makes every runtime/compiler path a text-to-frame path.
+- `src/darjeeling/layers/base.py`, `src/darjeeling/runtime/router.py`, and
+  `src/darjeeling/runtime/replay.py` expose `try_answer(utterance) -> Frame`.
+  Core should instead route target-neutral request payloads and opaque outputs.
+- `src/darjeeling/runtime/replay.py::task_schema_from_records` derives
+  `TaskSchema(intent_names, slot_names)` from `gold_frame`. Schema discovery is
+  target logic and should be supplied by the target adapter.
+- `src/darjeeling/layers/l4_cloud_llm.py` and
+  `src/darjeeling/compiler/l4_context.py` implement an NLU teacher prompt and
+  parser. Core may own L4 call/retry/caching mechanics, but the prompt,
+  response format, parser, and cache key schema components should be target
+  owned.
+- `src/darjeeling/layers/l1_rust_programbank.py` and
+  `native/l1_empty_programbank` define a native ABI that sends `utterance` and
+  receives `Frame`. Core may own the subprocess harness, build, timeout, and
+  benchmark wrapper; the request/response ABI should be target-owned or generic
+  JSON.
+- `src/darjeeling/layers/l2_student.py` is an NLU target implementation: intent
+  classification, slot tagging, BIO reconstruction, slot postprocess,
+  frame-retrieval, and frame-level guard features. It should move behind an NLU
+  target boundary rather than remain a core layer.
+- `src/darjeeling/layers/l2_target.py` is a target hook, but its hook names and
+  types are still `postprocess_frame`, `accept_prediction`, and `Frame`.
+- `src/darjeeling/layers/l3_local_slm.py` mixes a reusable local-LLM backend
+  with an NLU prompt artifact, frame parser, and intent/slot validator. Split
+  backend execution from NLU prompt/parse/validate logic.
+- `src/darjeeling/compiler/loop.py` directly imports and orchestrates NLU layer
+  implementations. It should become an orchestration loop that calls target
+  compiler hooks for cache compilation, L1 candidate generation, L2 training,
+  L3 prompt evolution, and replay.
+- `src/darjeeling/compiler/l2_target_evolution.py` correctly uses an isolated
+  workspace, but the harness itself is L2/NLU-specific: intent-stratified split,
+  slot-cue probes, slot-risk backlog, intent-confusion backlog, and frame
+  postprocess/veto tools. The reusable part is the agent workspace lifecycle,
+  visible/private split discipline, scope checks, local-search hook, and
+  adoption gates.
+- `src/darjeeling/eval/metrics.py`, `src/darjeeling/compiler/objective.py`, and
+  `src/darjeeling/eval/reports.py` expose `frame_exact_match`, intent/slot
+  summaries, and L2/L3 NLU diagnostics as core report concepts. Core should own
+  generic correctness/safety/cost/latency objectives and let the target render
+  target-specific metric names.
+- `src/darjeeling/settings.py` mixes orchestration settings with NLU/L2/L3
+  target settings. Core settings should cover only generic runtime, teacher
+  transport, agent harness, replay, promotion, and cost assumptions; target
+  settings should be supplied by target config schemas.
+- `tests/test_target_boundary.py` currently prevents concrete application and
+  dataset terms from entering core, but it still treats `Frame`, `intent`,
+  `slot`, and `utterance` as acceptable shared core terms. For strict core
+  generalization, this test suite should be split into core-boundary tests and
+  NLU-target tests.
+
+### Things Already In The Right Direction
+
+- The MASSIVE loader is isolated in `src/darjeeling/adapters/massive.py` and has
+  its own CLI entry point.
+- Hidden gold isolation is a useful core invariant, but the field names should
+  become target-neutral over time, for example `gold_label`, `teacher_label`,
+  and `final_output`.
+- Artifact manifests, run directories, trace append, replay/promotion gates,
+  visible/private split discipline, hard-buffer visibility, workspace scope
+  checks, and agent provenance are mostly target-independent concepts.
+- The L2 target workspace policy already distinguishes editable target code
+  from protected system harness files. That pattern should become the generic
+  target-evolution pattern.
+
+### Refactor Plan
+
+1. Introduce a target contract before moving large modules.
+   Define a `TargetSpec` or `TargetAdapter` interface that owns input
+   normalization, label parsing, output validation, equality/correctness,
+   teacher prompt rendering/parsing, schema discovery, target diagnostics, and
+   report rendering.
+2. Make core schemas target-neutral.
+   Replace public core references to `Frame`, `utterance`, `teacher_frame`,
+   `gold_frame`, and `final_frame` with target-neutral request/output/label
+   payloads. Keep compatibility shims until existing runs and tests migrate.
+3. Extract the current NLU implementation into an explicit target package.
+   A likely first location is `darjeeling.targets.nlu`, containing `Frame`,
+   `TaskSchema`, NLU teacher, NLU L1 ABI helpers, NLU L2 student, NLU L3 prompt,
+   NLU metrics, and NLU diagnostics.
+4. Turn `compiler/loop.py` into orchestration only.
+   It should split visible/private traces, call target/layer compiler hooks,
+   replay candidates through generic layer handles, and apply promotion gates.
+5. Split reusable harnesses from NLU diagnostics.
+   Keep agent workspace creation, protected root checks, transcript/provenance,
+   private gate discipline, and adoption decisions in core; move intent/slot
+   family diagnostics and probe semantics to the NLU target.
+6. Split CLI and settings.
+   Keep core commands for run/report/preflight over a selected target. Move
+   NLU-specific L2 train/tune/target-evolve and L3 prompt commands behind target
+   command groups or a target CLI.
+7. Upgrade architecture tests.
+   Core tests should fail on `Frame`, `intent`, `slot`, `utterance`, and
+   NLU-specific prompt text outside the NLU target package, adapters, fixtures,
+   and experiment evidence. NLU target tests should keep the current behavior
+   coverage.
+
+### Structural Hotspots
+
+A narrowed Cremona scan of `src/darjeeling` agreed with this priority order.
+The highest-pressure files were:
+
+- `src/darjeeling/compiler/l2_target_evolution.py`
+- `src/darjeeling/cli.py`
+- `src/darjeeling/eval/reports.py`
+- `src/darjeeling/layers/l2_student.py`
+- `src/darjeeling/compiler/loop.py`
+
+The scan had partial signal health because coverage data was not supplied. A
+full-repository scan also needs artifact directories such as `runs/` excluded;
+otherwise audit tools can fail on excessive file arguments.
