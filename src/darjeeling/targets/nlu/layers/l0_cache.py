@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from darjeeling.runtime.timing import elapsed_ms
-from darjeeling.schemas import LayerResult
 from darjeeling.targets.nlu.data import normalize_utterance
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, LayerResult
 
 
 class ExactCacheLayer:

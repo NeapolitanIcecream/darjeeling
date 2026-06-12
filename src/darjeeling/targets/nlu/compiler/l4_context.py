@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from darjeeling.schemas import TeacherTrace
+from darjeeling.targets.nlu.schemas import TeacherTrace
 
 FORBIDDEN_CONTEXT_TERMS = (
     "gold_frame",

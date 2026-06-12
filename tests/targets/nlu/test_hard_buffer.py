@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
 from darjeeling.targets.nlu.compiler.mining import (
     build_hard_buffer,
     hard_case_reason_counts,
@@ -10,6 +9,7 @@ from darjeeling.targets.nlu.compiler.mining import (
     merge_hard_buffers,
     write_hard_buffer_jsonl,
 )
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
 
 
 def test_hard_buffer_prioritizes_wrong_accepts_without_gold_leakage(tmp_path: Path) -> None:

@@ -15,7 +15,6 @@ from darjeeling.cli import (
     _resolve_l2_target_visible_validation_folds,
     app,
 )
-from darjeeling.schemas import LayerResult, TraceRecord, traces_to_teacher_view
 from darjeeling.targets.nlu.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
     _adoption_decision,
@@ -26,7 +25,7 @@ from darjeeling.targets.nlu.compiler.l2_target_evolution import (
     run_l2_target_evolution,
     split_l2_target_traces,
 )
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
 
 
 def _trace(index: int, *, intent: str, slots: dict[str, str]) -> TraceRecord:

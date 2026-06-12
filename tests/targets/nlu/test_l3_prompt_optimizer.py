@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from darjeeling.schemas import LayerResult, TraceRecord, traces_to_teacher_view
 from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import (
     L3PromptEvolutionConfig,
     calibrate_l3_confidence_threshold,
@@ -15,7 +14,13 @@ from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import (
     run_l3_prompt_evolution,
 )
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
-from darjeeling.targets.nlu.schemas import Frame, TaskSchema
+from darjeeling.targets.nlu.schemas import (
+    Frame,
+    LayerResult,
+    TaskSchema,
+    TraceRecord,
+    traces_to_teacher_view,
+)
 
 
 class FakeL3Backend:

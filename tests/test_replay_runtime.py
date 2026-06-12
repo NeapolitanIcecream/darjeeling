@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.schemas import Frame
 from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.data import DataRecord
 from darjeeling.targets.nlu.layers.l2_student import (
@@ -12,6 +11,7 @@ from darjeeling.targets.nlu.layers.l2_student import (
 )
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
 from darjeeling.targets.nlu.replay import run_replay
+from darjeeling.targets.nlu.schemas import Frame
 
 
 def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> None:

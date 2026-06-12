@@ -1,8 +1,8 @@
-from darjeeling.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
 from darjeeling.targets.nlu.compiler.loop import (
     assert_teacher_visible_only,
     compiler_inputs_from_traces,
 )
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
 
 
 def test_compiler_inputs_do_not_contain_gold_frame() -> None:

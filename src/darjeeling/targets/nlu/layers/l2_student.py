@@ -18,9 +18,8 @@ from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import normalize
 
 from darjeeling.runtime.timing import elapsed_ms
-from darjeeling.schemas import LayerResult, TeacherTrace
 from darjeeling.targets.nlu.data import normalize_utterance
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TeacherTrace
 
 
 @dataclass(frozen=True)

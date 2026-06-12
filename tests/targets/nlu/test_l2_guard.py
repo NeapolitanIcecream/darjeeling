@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling.schemas import TeacherTrace
 from darjeeling.targets.nlu.compiler.guard_optimizer import (
     evaluate_l2_unguarded,
     guard_search_spec_from_proposal,
@@ -10,7 +9,7 @@ from darjeeling.targets.nlu.compiler.guard_optimizer import (
 )
 from darjeeling.targets.nlu.compiler.l2_distiller import l2_config_from_proposal
 from darjeeling.targets.nlu.layers.l2_student import GuardDecision, guard_accepts
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, TeacherTrace
 
 
 def test_l2_guard_accepts_at_threshold() -> None:

@@ -9,8 +9,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, Field
 
 from darjeeling.runtime.timing import elapsed_ms
-from darjeeling.schemas import LayerResult
-from darjeeling.targets.nlu.schemas import Frame, TaskSchema
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TaskSchema
 
 LocalSLMMode = Literal["disabled", "shadow", "guarded"]
 LocalSLMDevicePolicy = Literal["auto", "cpu", "mps", "cuda"]

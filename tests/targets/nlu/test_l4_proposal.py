@@ -4,14 +4,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
 from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.compiler.l4_proposal import (
     L4ProposalAdapter,
     ProposalParseError,
     parse_proposal,
 )
-from darjeeling.targets.nlu.schemas import TaskSchema
+from darjeeling.targets.nlu.schemas import (
+    Frame,
+    LayerResult,
+    TaskSchema,
+    TraceRecord,
+    traces_to_teacher_view,
+)
 
 
 class FakeProposalCompletions:

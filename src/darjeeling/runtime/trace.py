@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from darjeeling.schemas import TraceRecord
+from darjeeling.targets.nlu.schemas import TraceRecord
 
 
 class TraceWriter:

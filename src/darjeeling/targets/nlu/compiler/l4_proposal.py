@@ -4,7 +4,6 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from darjeeling.schemas import TeacherTrace
 from darjeeling.settings import Settings
 from darjeeling.targets.nlu.compiler.l4_context import build_proposal_context
 from darjeeling.targets.nlu.layers.l4_cloud_llm import (
@@ -15,6 +14,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     _extract_usage,
     create_chat_completion_with_retry,
 )
+from darjeeling.targets.nlu.schemas import TeacherTrace
 
 
 class ProposalParseError(RuntimeError):

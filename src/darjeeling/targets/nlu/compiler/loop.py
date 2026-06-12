@@ -8,7 +8,6 @@ from typing import Any
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore, LayerDelta
 from darjeeling.runtime.cost import replay_cost_model_from_settings
-from darjeeling.schemas import TeacherTrace, TraceRecord, traces_to_teacher_view
 from darjeeling.settings import Settings
 from darjeeling.targets.nlu.compiler.guard_optimizer import (
     GUARD_PROPOSAL_SCHEMA,
@@ -67,7 +66,12 @@ from darjeeling.targets.nlu.layers.l2_student import (
     training_examples_from_teacher_traces,
 )
 from darjeeling.targets.nlu.layers.l4_cloud_llm import MissingTeacherError
-from darjeeling.targets.nlu.schemas import TaskSchema
+from darjeeling.targets.nlu.schemas import (
+    TaskSchema,
+    TeacherTrace,
+    TraceRecord,
+    traces_to_teacher_view,
+)
 
 
 def compiler_inputs_from_traces(traces: list[TraceRecord]) -> list[TeacherTrace]:

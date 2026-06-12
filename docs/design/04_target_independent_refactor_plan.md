@@ -733,6 +733,13 @@ NLU 报告都在 NLU target 侧。
 - CLI and replay tests import the target replay module directly, and the old
   runtime replay source path was removed from the strict boundary allowlist.
 
+### 2026-06-12 NLU schema ownership
+
+- Moved legacy `Frame`, `LayerResult`, `TraceRecord`, `TeacherTrace` and
+  teacher-view helpers fully into `darjeeling.targets.nlu.schemas`.
+- Removed the core `darjeeling.schemas` module and updated NLU target code/tests
+  to import target schemas directly.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from darjeeling.schemas import TeacherTrace
+from darjeeling.targets.nlu.schemas import TeacherTrace
 
 GUARD_PROPOSAL_SCHEMA: dict[str, Any] = {
     "type": "object",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from darjeeling.schemas import LayerResult, TeacherTrace
 from darjeeling.targets.nlu.compiler.l2_tuner import (
     L2TuneSpec,
     residual_l2_validation_traces,
@@ -8,7 +7,7 @@ from darjeeling.targets.nlu.compiler.l2_tuner import (
     tune_l2_student,
 )
 from darjeeling.targets.nlu.layers.l2_student import L2StudentConfig
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TeacherTrace
 
 
 def test_l2_tuner_selects_best_config_and_reports_trials() -> None:

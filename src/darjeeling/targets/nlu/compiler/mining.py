@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from darjeeling.schemas import LayerName, TeacherTrace
 from darjeeling.targets.nlu.compiler.l4_context import assert_no_forbidden_context
+from darjeeling.targets.nlu.schemas import LayerName, TeacherTrace
 
 HardCaseVisibility = Literal["train_visible", "replay_only"]
 

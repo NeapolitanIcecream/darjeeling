@@ -92,15 +92,9 @@ def test_nlu_metrics_compare_frames_and_intents() -> None:
     assert intent_matches(different_intent, expected) is False
 
 
-def test_legacy_core_frame_alias_points_to_nlu_target_frame() -> None:
-    from darjeeling.schemas import Frame as LegacyFrame
-
-    assert LegacyFrame is Frame
-
-
 def test_nlu_l0_compiler_uses_target_normalization() -> None:
-    from darjeeling.schemas import TeacherTrace as LegacyTeacherTrace
     from darjeeling.targets.nlu.compiler.l0_compile import exact_cache_from_teacher_traces
+    from darjeeling.targets.nlu.schemas import TeacherTrace as LegacyTeacherTrace
 
     frame = Frame(intent="intent_alpha")
     cache = exact_cache_from_teacher_traces(

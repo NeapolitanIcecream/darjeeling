@@ -16,7 +16,6 @@ from rich.console import Console
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.runtime.trace import read_traces
-from darjeeling.schemas import TeacherTrace, traces_to_teacher_view
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 from darjeeling.targets import registry as target_registry
 from darjeeling.targets.nlu.compiler.l2_distiller import l2_config_from_settings
@@ -88,6 +87,7 @@ from darjeeling.targets.nlu.reports import (
     generate_experiment_comparison_report,
     generate_run_report,
 )
+from darjeeling.targets.nlu.schemas import TeacherTrace, traces_to_teacher_view
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()

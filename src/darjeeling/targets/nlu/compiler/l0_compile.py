@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from darjeeling.contracts import TeacherTrace as CoreTeacherTrace
 from darjeeling.runtime.exact_cache import exact_cache_from_teacher_traces as exact_json_cache
-from darjeeling.schemas import TeacherTrace
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, TeacherTrace
 from darjeeling.targets.nlu.target import NluTargetSpec
 
 

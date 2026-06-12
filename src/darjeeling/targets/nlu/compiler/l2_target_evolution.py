@@ -10,7 +10,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
-from darjeeling.schemas import TeacherTrace
 from darjeeling.targets.nlu.layers.l2_student import (
     L2StudentConfig,
     train_l2_student,
@@ -22,7 +21,7 @@ from darjeeling.targets.nlu.layers.l2_target import (
     target_config_overrides,
     target_postprocess_frame,
 )
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, TeacherTrace
 
 L2TargetEvolutionMode = Literal[
     "dry-run",

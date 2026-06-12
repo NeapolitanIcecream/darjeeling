@@ -8,13 +8,12 @@ from statistics import quantiles
 from darjeeling.artifacts.store import ArtifactManifest, LayerDelta
 from darjeeling.layers.base import RuntimeLayer
 from darjeeling.runtime.cost import ReplayCostModel
-from darjeeling.schemas import TeacherTrace
 from darjeeling.targets.nlu.compiler.objective import ObjectiveMetrics, objective_score
 from darjeeling.targets.nlu.data import normalize_utterance
 from darjeeling.targets.nlu.layers.l1_rust_programbank import RustL1Worker, build_l1_binary
 from darjeeling.targets.nlu.layers.l2_student import L2StudentBundle, L2StudentLayer
 from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, TeacherTrace
 
 LAYER_LATENCY_MS = {
     "L0": 0.1,

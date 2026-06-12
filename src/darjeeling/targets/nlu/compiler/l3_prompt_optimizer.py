@@ -9,14 +9,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from darjeeling.schemas import TeacherTrace, TraceRecord, traces_to_teacher_view
 from darjeeling.targets.nlu.layers.l3_local_slm import (
     L3LocalSLMLayer,
     L3PromptArtifact,
     LocalSLMBackend,
     LocalSLMConfig,
 )
-from darjeeling.targets.nlu.schemas import Frame, TaskSchema
+from darjeeling.targets.nlu.schemas import (
+    Frame,
+    TaskSchema,
+    TeacherTrace,
+    TraceRecord,
+    traces_to_teacher_view,
+)
 
 L3_PROMPT_EVOLUTION_MODE = "agent-session"
 L3PromptEvolutionMode = Literal["agent-session"]
@@ -723,7 +728,7 @@ def _l3_evaluate_prompt_tool_text() -> str:
 )
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
 from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
-from darjeeling.schemas import TeacherTrace
+from darjeeling.targets.nlu.schemas import TeacherTrace
 
 
 def read_json(path: Path) -> dict:
@@ -834,7 +839,7 @@ def _l3_latency_cost_eval_tool_text() -> str:
         _l3_tool_prelude_text()
         + """from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
 from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
-from darjeeling.schemas import TeacherTrace
+from darjeeling.targets.nlu.schemas import TeacherTrace
 
 
 def read_json(path: Path) -> dict:

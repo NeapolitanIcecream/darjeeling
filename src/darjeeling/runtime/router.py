@@ -7,8 +7,8 @@ from darjeeling.contracts import (
     LayerResult,
     RuntimeLayer,
 )
-from darjeeling.schemas import Frame
-from darjeeling.schemas import LayerResult as FrameLayerResult
+from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import LayerResult as FrameLayerResult
 
 
 class CascadeRouter:

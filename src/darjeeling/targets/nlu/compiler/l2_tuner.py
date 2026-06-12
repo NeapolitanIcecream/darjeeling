@@ -7,7 +7,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from darjeeling.schemas import TeacherTrace
 from darjeeling.targets.nlu.compiler.guard_optimizer import (
     L2ThresholdEvaluation,
     evaluate_l2_unguarded,
@@ -20,6 +19,7 @@ from darjeeling.targets.nlu.layers.l2_student import (
     train_l2_student,
     training_examples_from_teacher_traces,
 )
+from darjeeling.targets.nlu.schemas import TeacherTrace
 
 
 class L2TuneSpec(BaseModel):

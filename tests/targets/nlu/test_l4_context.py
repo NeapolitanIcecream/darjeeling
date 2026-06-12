@@ -1,6 +1,5 @@
 import pytest
 
-from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
 from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.compiler.l4_context import (
     L4ContextError,
@@ -8,7 +7,13 @@ from darjeeling.targets.nlu.compiler.l4_context import (
     build_proposal_context,
     build_teacher_context,
 )
-from darjeeling.targets.nlu.schemas import TaskSchema
+from darjeeling.targets.nlu.schemas import (
+    Frame,
+    LayerResult,
+    TaskSchema,
+    TraceRecord,
+    traces_to_teacher_view,
+)
 
 
 def _task_schema() -> TaskSchema:
