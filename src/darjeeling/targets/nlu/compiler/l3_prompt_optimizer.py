@@ -718,7 +718,9 @@ root = Path(__file__).resolve().parents[1]
 def _l3_evaluate_prompt_tool_text() -> str:
     return (
         _l3_tool_prelude_text()
-        + """from darjeeling.compiler.l3_prompt_optimizer import replay_l3_prompt_artifact
+        + """from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import (
+    replay_l3_prompt_artifact,
+)
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
 from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
 from darjeeling.schemas import TeacherTrace
@@ -781,7 +783,7 @@ print(json.dumps(payload, sort_keys=True))
 def _l3_bench_prompt_tool_text() -> str:
     return (
         _l3_tool_prelude_text()
-        + """from darjeeling.compiler.l3_prompt_optimizer import l3_prompt_artifact_hash
+        + """from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import l3_prompt_artifact_hash
 from darjeeling.targets.nlu.layers.l3_local_slm import (
     DEFAULT_L3_BENCHMARK_UTTERANCES,
     L3LocalSLMLayer,

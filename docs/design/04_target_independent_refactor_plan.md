@@ -701,6 +701,14 @@ NLU 报告都在 NLU target 侧。
   modules directly.
 - Removed those old layer wrapper paths from the strict boundary allowlist.
 
+### 2026-06-12 NLU compiler wrapper ownership
+
+- Removed legacy core wrappers in `darjeeling.compiler.*`. CLI, replay, report
+  code, generated workspace tools and tests now import NLU compiler helpers from
+  `darjeeling.targets.nlu.compiler.*` directly.
+- Removed wrapper-only compiler re-export tests while keeping target behavior and
+  generated-tool coverage.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

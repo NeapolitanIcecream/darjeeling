@@ -296,8 +296,3 @@ def test_parse_proposal_enforces_basic_schema_constraints() -> None:
         with pytest.raises(ProposalParseError):
             parse_proposal(json.dumps(payload), schema)
 
-
-def test_legacy_l4_proposal_module_reexports_nlu_target_adapter() -> None:
-    from darjeeling.compiler.l4_proposal import L4ProposalAdapter as LegacyL4ProposalAdapter
-
-    assert LegacyL4ProposalAdapter is L4ProposalAdapter

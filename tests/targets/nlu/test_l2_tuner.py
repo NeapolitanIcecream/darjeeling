@@ -122,12 +122,6 @@ def test_l2_residual_validation_filters_lower_layer_hits_and_l0_repeats() -> Non
     assert [trace.request_id for trace in residual] == ["v4"]
 
 
-def test_legacy_l2_tuner_module_reexports_nlu_target_tuner() -> None:
-    from darjeeling.compiler.l2_tuner import tune_l2_student as legacy_tune_l2_student
-
-    assert legacy_tune_l2_student is tune_l2_student
-
-
 def _teacher_traces() -> list[TeacherTrace]:
     rows = [
         ("m1", "beta request", "intent_beta", {}),

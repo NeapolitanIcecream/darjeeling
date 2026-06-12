@@ -4059,7 +4059,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_SRC = ROOT / "system" / "darjeeling" / "src"
 sys.path.insert(0, str(SYSTEM_SRC))
 
-from darjeeling.compiler.l2_target_evolution import evaluate_target_workspace_cli
+from darjeeling.targets.nlu.compiler.l2_target_evolution import evaluate_target_workspace_cli
 
 if __name__ == "__main__":
     raise SystemExit(evaluate_target_workspace_cli())
@@ -4076,7 +4076,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_SRC = ROOT / "system" / "darjeeling" / "src"
 sys.path.insert(0, str(SYSTEM_SRC))
 
-from darjeeling.compiler.l2_target_evolution import local_search_target_workspace_cli
+from darjeeling.targets.nlu.compiler.l2_target_evolution import local_search_target_workspace_cli
 
 if __name__ == "__main__":
     raise SystemExit(local_search_target_workspace_cli())

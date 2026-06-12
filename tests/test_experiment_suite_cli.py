@@ -4,7 +4,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from darjeeling import cli
-from darjeeling.compiler.l2_tuner import L2TuneResult
+from darjeeling.targets.nlu.compiler.l2_tuner import L2TuneResult
 
 
 def test_experiment_suite_builds_parallel_subprocess_plan(

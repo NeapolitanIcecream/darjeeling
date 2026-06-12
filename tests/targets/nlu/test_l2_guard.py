@@ -275,18 +275,6 @@ def test_guard_search_spec_from_proposal_bounds_grid_and_wrong_accept_rate() -> 
         )
 
 
-def test_legacy_l2_compiler_modules_reexport_nlu_target_helpers() -> None:
-    from darjeeling.compiler.guard_optimizer import (
-        select_l2_accept_threshold as LegacySelectThreshold,
-    )
-    from darjeeling.compiler.l2_distiller import (
-        l2_config_from_proposal as legacy_l2_config_from_proposal,
-    )
-
-    assert LegacySelectThreshold is select_l2_accept_threshold
-    assert legacy_l2_config_from_proposal is l2_config_from_proposal
-
-
 def _teacher_trace(request_id: str, utterance: str, intent: str) -> TeacherTrace:
     return TeacherTrace(
         request_id=request_id,

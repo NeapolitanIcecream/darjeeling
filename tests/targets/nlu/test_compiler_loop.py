@@ -11,12 +11,6 @@ from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
 from darjeeling.targets.nlu.data import DataRecord
 
 
-def test_legacy_compiler_loop_module_reexports_nlu_target_runner() -> None:
-    from darjeeling.compiler.loop import run_compiler_generation as legacy_run_generation
-
-    assert legacy_run_generation is run_compiler_generation
-
-
 def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Path) -> None:
     train_trace = TraceRecord(
         request_id="r1",

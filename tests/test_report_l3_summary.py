@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore, LayerDelta
-from darjeeling.compiler.mining import build_hard_buffer, write_hard_buffer_jsonl
 from darjeeling.eval.reports import (
     _l3_report_section,
     _promotion_report_section,
@@ -11,6 +10,7 @@ from darjeeling.eval.reports import (
     generate_run_report,
 )
 from darjeeling.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
+from darjeeling.targets.nlu.compiler.mining import build_hard_buffer, write_hard_buffer_jsonl
 
 
 def test_l3_report_section_summarizes_mode_device_and_failures(tmp_path: Path) -> None:

@@ -46,14 +46,6 @@ def _trace(index: int, *, intent: str, slots: dict[str, str]) -> TraceRecord:
     )
 
 
-def test_legacy_l2_target_evolution_module_reexports_nlu_target_runner() -> None:
-    from darjeeling.compiler.l2_target_evolution import (
-        run_l2_target_evolution as legacy_run_l2_target_evolution,
-    )
-
-    assert legacy_run_l2_target_evolution is run_l2_target_evolution
-
-
 def _trace_with_utterance(
     index: int,
     *,

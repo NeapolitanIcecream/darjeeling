@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from darjeeling.artifacts.store import ArtifactStore
-from darjeeling.compiler.loop import run_compiler_generation
 from darjeeling.runtime.trace import TraceWriter, read_traces
 from darjeeling.schemas import Frame, TraceRecord
 from darjeeling.settings import Settings
+from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
 from darjeeling.targets.nlu.data import DataRecord
 from darjeeling.targets.nlu.layers.l0_cache import ExactCacheLayer
 from darjeeling.targets.nlu.layers.l1_rust_programbank import (

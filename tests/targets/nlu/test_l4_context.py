@@ -71,8 +71,3 @@ def test_context_guard_rejects_gold_payloads() -> None:
     with pytest.raises(L4ContextError):
         assert_no_forbidden_context({"gold_frame": {"intent": "intent_alpha"}})
 
-
-def test_legacy_l4_context_module_reexports_nlu_target_context() -> None:
-    from darjeeling.compiler.l4_context import build_teacher_context as legacy_build_context
-
-    assert legacy_build_context is build_teacher_context

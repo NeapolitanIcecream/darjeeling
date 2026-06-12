@@ -334,10 +334,3 @@ def _beta_traces(count: int) -> list[TraceRecord]:
         for index in range(count)
     ]
 
-
-def test_legacy_l3_prompt_optimizer_module_reexports_nlu_target_optimizer() -> None:
-    from darjeeling.compiler.l3_prompt_optimizer import (
-        run_l3_prompt_evolution as legacy_run_l3_prompt_evolution,
-    )
-
-    assert legacy_run_l3_prompt_evolution is run_l3_prompt_evolution

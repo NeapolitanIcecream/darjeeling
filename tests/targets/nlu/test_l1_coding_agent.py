@@ -34,14 +34,6 @@ def _teacher_trace():
     return traces_to_teacher_view([trace])[0]
 
 
-def test_legacy_l1_program_compiler_module_reexports_nlu_target_adapter() -> None:
-    from darjeeling.compiler.l1_program_compiler import (
-        L4CodingAgentAdapter as LegacyL4CodingAgentAdapter,
-    )
-
-    assert LegacyL4CodingAgentAdapter is L4CodingAgentAdapter
-
-
 def test_l1_coding_agent_dry_run_packages_workspace_and_context(
     tmp_path: Path,
 ) -> None:

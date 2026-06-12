@@ -14,34 +14,6 @@ import typer
 from rich.console import Console
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.compiler.l2_distiller import l2_config_from_settings
-from darjeeling.compiler.l2_target_evolution import (
-    DEFAULT_TARGET_EVOLVE_ROUNDS,
-    DEFAULT_TARGET_INNER_PATIENCE_ROUNDS,
-    DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K,
-    DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
-    DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS,
-    L2TargetBudgetProfile,
-    L2TargetEvolutionConfig,
-    L2TargetEvolutionMode,
-    L2TargetScope,
-    L2TargetSplitPolicy,
-    run_l2_target_evolution,
-)
-from darjeeling.compiler.l2_tuner import L2TuneSpec, tune_l2_student
-from darjeeling.compiler.l3_prompt_optimizer import (
-    L3PromptEvolutionConfig,
-    l3_prompt_artifact_hash,
-    replay_l3_prompt_artifact,
-    run_l3_prompt_evolution,
-)
-from darjeeling.compiler.replay import (
-    OfflineReplayResult,
-    decide_artifact_set_promotion,
-    evaluate_offline_artifact_set,
-    layer_deltas,
-    load_offline_artifact_set,
-)
 from darjeeling.eval.experiments import (
     ExperimentSpec,
     apply_experiment_settings,
@@ -63,6 +35,34 @@ from darjeeling.runtime.trace import read_traces
 from darjeeling.schemas import TeacherTrace, traces_to_teacher_view
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 from darjeeling.targets import registry as target_registry
+from darjeeling.targets.nlu.compiler.l2_distiller import l2_config_from_settings
+from darjeeling.targets.nlu.compiler.l2_target_evolution import (
+    DEFAULT_TARGET_EVOLVE_ROUNDS,
+    DEFAULT_TARGET_INNER_PATIENCE_ROUNDS,
+    DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K,
+    DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
+    DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS,
+    L2TargetBudgetProfile,
+    L2TargetEvolutionConfig,
+    L2TargetEvolutionMode,
+    L2TargetScope,
+    L2TargetSplitPolicy,
+    run_l2_target_evolution,
+)
+from darjeeling.targets.nlu.compiler.l2_tuner import L2TuneSpec, tune_l2_student
+from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import (
+    L3PromptEvolutionConfig,
+    l3_prompt_artifact_hash,
+    replay_l3_prompt_artifact,
+    run_l3_prompt_evolution,
+)
+from darjeeling.targets.nlu.compiler.replay import (
+    OfflineReplayResult,
+    decide_artifact_set_promotion,
+    evaluate_offline_artifact_set,
+    layer_deltas,
+    load_offline_artifact_set,
+)
 from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     DEFAULT_BENCHMARK_UTTERANCES,
     benchmark_worker,
