@@ -30,7 +30,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/compiler/objective.py"),
     Path("src/darjeeling/compiler/replay.py"),
     Path("src/darjeeling/data/frames.py"),
-    Path("src/darjeeling/data/streams.py"),
     Path("src/darjeeling/eval/experiments.py"),
     Path("src/darjeeling/eval/metrics.py"),
     Path("src/darjeeling/eval/reports.py"),

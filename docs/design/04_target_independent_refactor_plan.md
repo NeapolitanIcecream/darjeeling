@@ -624,6 +624,13 @@ NLU 报告都在 NLU target 侧。
   compiler loop.
 - Removed the old compiler source path from the strict boundary allowlist.
 
+### 2026-06-12 NLU stream grouping ownership
+
+- NLU workload stream helpers that group by `gold_frame.intent` moved to
+  `darjeeling.targets.nlu.streams`; old `darjeeling.data.streams` is a
+  compatibility re-export for replay callers.
+- Removed the old data stream source path from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
