@@ -518,6 +518,15 @@ NLU 报告都在 NLU target 侧。
   removed the old shared test path plus `src/darjeeling/layers/l1_program_bank.py`
   from the strict boundary allowlist.
 
+### 2026-06-12 NLU L2 target runtime ownership
+
+- NLU `TargetL2Layer` postprocess/veto runtime wrapper moved to
+  `darjeeling.targets.nlu.layers.l2_target`; old `darjeeling.layers.l2_target`
+  is now a compatibility re-export.
+- Moved `tests/test_l2_target_runtime.py` into the NLU target test scope and
+  removed the old shared test path plus `src/darjeeling/layers/l2_target.py`
+  from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
