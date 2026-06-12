@@ -93,6 +93,28 @@ def test_legacy_core_frame_alias_points_to_nlu_target_frame() -> None:
     assert LegacyFrame is Frame
 
 
+def test_legacy_l0_compiler_wrapper_uses_nlu_target_normalization() -> None:
+    from darjeeling.compiler.l0_compile import exact_cache_from_teacher_traces
+    from darjeeling.schemas import TeacherTrace as LegacyTeacherTrace
+
+    frame = Frame(intent="intent_alpha")
+    cache = exact_cache_from_teacher_traces(
+        [
+            LegacyTeacherTrace(
+                request_id="r1",
+                utterance="  Alpha Request  ",
+                teacher_frame=frame,
+                chosen_layer="L4",
+                final_frame=frame,
+                layer_results=[],
+                timestamp="2026-06-12T00:00:00+00:00",
+            )
+        ]
+    )
+
+    assert cache == {"alpha request": frame}
+
+
 def test_nlu_teacher_adapter_builds_prompt_and_parses_frame() -> None:
     adapter = NluTeacherAdapter(prompt_version="teacher-test")
     task_schema = TaskSchema(

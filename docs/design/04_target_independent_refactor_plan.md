@@ -468,6 +468,16 @@ NLU 报告都在 NLU target 侧。
   `tests/targets/nlu/test_nlu_target.py` 覆盖；shared boundary allowlist 去掉
   `tests/test_frame_parser.py` 和已清空实现的 `src/darjeeling/data/records.py`。
 
+### 2026-06-12 L0 compiler compatibility wrapper
+
+- 旧 `compiler.l0_compile.exact_cache_from_teacher_traces(...)` 保持
+  `dict[str, Frame]` 返回值以兼容现有 compiler loop，但内部先把 legacy
+  `TeacherTrace(utterance/teacher_frame)` 转为 target-neutral
+  `contracts.TeacherTrace(input/teacher_label)`，再调用
+  `runtime.exact_cache.exact_cache_from_teacher_traces(...)`。
+- NLU normalization/equality 来源改为 `NluTargetSpec` 和 target-owned `Frame`；
+  后续切换 compiler loop 时可以直接传 target-neutral traces 和 target object。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
