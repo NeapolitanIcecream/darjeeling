@@ -84,10 +84,10 @@ class EmptyThenValidClient(FakeClient):
 
 
 def test_parse_teacher_frame_requires_frame_json() -> None:
-    frame = parse_teacher_frame('{"intent":"intent_alpha","slots":{"time":"seven"}}')
+    frame = parse_teacher_frame('{"intent":"intent_alpha","slots":{"slot_alpha":"value alpha"}}')
 
     assert frame.intent == "intent_alpha"
-    assert frame.slots == {"time": "seven"}
+    assert frame.slots == {"slot_alpha": "value alpha"}
 
 
 def test_live_teacher_client_sets_sdk_timeout_and_disables_sdk_retries(monkeypatch) -> None:

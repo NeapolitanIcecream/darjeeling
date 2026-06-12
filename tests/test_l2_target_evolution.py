@@ -121,9 +121,9 @@ def _slot_cue_probe_workspace(tmp_path: Path, target_code: str) -> Path:
 
 def _traces() -> list[TraceRecord]:
     return [
-        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"slot_alpha": f"value {index}"})
         if index % 2 == 0
-        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"slot_gamma": f"value {index}"})
         for index in range(12)
     ]
 
@@ -702,9 +702,9 @@ def test_l2_target_visible_slot_cue_summary_exposes_cross_intent_slot_values() -
             ),
             _trace_with_utterance(
                 3,
-                utterance="what is the gamma in paris",
+                utterance="gamma request with value gamma",
                 intent="intent_gamma",
-                slots={"place_name": "paris"},
+                slots={"slot_gamma": "value gamma"},
             ),
         ]
     )
@@ -1022,10 +1022,10 @@ def test_l2_target_aggregate_intent_confusion_backlog_merges_pairs() -> None:
 
 def test_l2_target_intent_stratified_split_samples_private_splits() -> None:
     traces = [
-        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"slot_alpha": f"value {index}"})
         for index in range(10)
     ] + [
-        _trace(index + 10, intent="intent_gamma", slots={"location": f"city {index}"})
+        _trace(index + 10, intent="intent_gamma", slots={"slot_gamma": f"value {index}"})
         for index in range(10)
     ]
 
@@ -1051,9 +1051,9 @@ def test_l2_target_lower_miss_scope_filters_lower_layer_accepts(tmp_path: Path) 
             index,
             intent="intent_alpha" if index % 2 == 0 else "intent_gamma",
             slots=(
-                {"time": f"{index} am"}
+                {"slot_alpha": f"value {index}"}
                 if index % 2 == 0
-                else {"location": f"city {index}"}
+                else {"slot_gamma": f"value {index}"}
             ),
             lower_layer="L0" if index < 5 else ("L1" if index < 10 else None),
         )
@@ -1102,9 +1102,9 @@ def test_l2_target_visible_validation_folds_stay_visible_not_private(
     tmp_path: Path,
 ) -> None:
     traces = [
-        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"slot_alpha": f"value {index}"})
         if index % 3 == 0
-        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"slot_gamma": f"value {index}"})
         for index in range(30)
     ]
 
@@ -1158,9 +1158,9 @@ def test_l2_target_visible_validation_folds_stay_visible_not_private(
 
 def test_l2_target_extra_visible_folds_do_not_keep_shrinking_train_split() -> None:
     traces = [
-        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"slot_alpha": f"value {index}"})
         if index % 2 == 0
-        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"slot_gamma": f"value {index}"})
         for index in range(100)
     ]
 
@@ -1202,9 +1202,9 @@ def test_l2_target_extra_visible_folds_do_not_keep_shrinking_train_split() -> No
 
 def test_l2_target_visible_validation_ratio_expands_visible_pool() -> None:
     traces = [
-        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"slot_alpha": f"value {index}"})
         if index % 2 == 0
-        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"slot_gamma": f"value {index}"})
         for index in range(100)
     ]
 
@@ -1759,9 +1759,9 @@ def test_l2_target_agent_session_failure_cannot_support_quality_claim(
     )
 
     traces = [
-        _trace(index, intent="intent_alpha", slots={"time": f"{index} am"})
+        _trace(index, intent="intent_alpha", slots={"slot_alpha": f"value {index}"})
         if index % 2 == 0
-        else _trace(index, intent="intent_gamma", slots={"location": f"city {index}"})
+        else _trace(index, intent="intent_gamma", slots={"slot_gamma": f"value {index}"})
         for index in range(520)
     ]
     summary = run_l2_target_evolution(
@@ -2327,9 +2327,9 @@ def test_l2_target_evolve_cli_accepts_lower_miss_target_scope(tmp_path: Path) ->
             index,
             intent="intent_alpha" if index % 2 == 0 else "intent_gamma",
             slots=(
-                {"time": f"{index} am"}
+                {"slot_alpha": f"value {index}"}
                 if index % 2 == 0
-                else {"location": f"city {index}"}
+                else {"slot_gamma": f"value {index}"}
             ),
             lower_layer="L0" if index < 6 else None,
         )
@@ -2814,8 +2814,8 @@ def config_overrides():
 def postprocess_frame(utterance, frame, metadata):
     del frame, metadata
     if utterance == "intent alpha example 0":
-        return {"intent": "intent_alpha", "slots": {"time": "0 am"}}
-    return {"intent": "intent_gamma", "slots": {"location": "city 1"}}
+        return {"intent": "intent_alpha", "slots": {"slot_alpha": "value 0"}}
+    return {"intent": "intent_gamma", "slots": {"slot_gamma": "value 1"}}
 """,
         encoding="utf-8",
     )

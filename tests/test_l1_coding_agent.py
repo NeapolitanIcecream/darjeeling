@@ -16,16 +16,16 @@ from darjeeling.settings import load_settings
 def _teacher_trace():
     trace = TraceRecord(
         request_id="r1",
-        utterance="alpha request for seven",
-        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        utterance="alpha request value alpha",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "gold-value-alpha"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
                 latency_ms=1.0,
             )
         ],
@@ -80,7 +80,7 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
         (result.context_dir / "context_families.json").read_text(encoding="utf-8")
     )
     assert context_families["schema_version"] == "l1-context-families-v1"
-    assert context_families["families"][0]["family_id"] == "intent_alpha|time"
+    assert context_families["families"][0]["family_id"] == "intent_alpha|slot_alpha"
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l1-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"
@@ -90,8 +90,8 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
         path.read_text(encoding="utf-8") for path in result.context_dir.iterdir()
     )
     assert "gold_frame" not in context_text
-    assert "gold-seven" not in context_text
-    assert "seven" in context_text
+    assert "gold-value-alpha" not in context_text
+    assert "value alpha" in context_text
 
     commands = [
         json.loads(line)

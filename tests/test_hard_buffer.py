@@ -15,9 +15,9 @@ from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teache
 def test_hard_buffer_prioritizes_wrong_accepts_without_gold_leakage(tmp_path: Path) -> None:
     wrong_accept = TraceRecord(
         request_id="wrong",
-        utterance="alpha request for seven",
-        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        utterance="alpha request value alpha",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "gold-value-alpha"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         chosen_layer="L2",
         final_frame=Frame(intent="intent_beta"),
         layer_results=[
@@ -31,17 +31,17 @@ def test_hard_buffer_prioritizes_wrong_accepts_without_gold_leakage(tmp_path: Pa
     )
     fallback = TraceRecord(
         request_id="fallback",
-        utterance="gamma tomorrow",
-        gold_frame=Frame(intent="intent_gamma", slots={"date": "gold-tomorrow"}),
-        teacher_frame=Frame(intent="intent_gamma", slots={"date": "tomorrow"}),
+        utterance="gamma request value delta",
+        gold_frame=Frame(intent="intent_gamma", slots={"slot_beta": "gold-value-delta"}),
+        teacher_frame=Frame(intent="intent_gamma", slots={"slot_beta": "value delta"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="intent_gamma", slots={"date": "tomorrow"}),
+        final_frame=Frame(intent="intent_gamma", slots={"slot_beta": "value delta"}),
         layer_results=[
             LayerResult(layer="L1", accepted=False, latency_ms=3.0),
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="intent_gamma", slots={"date": "tomorrow"}),
+                frame=Frame(intent="intent_gamma", slots={"slot_beta": "value delta"}),
                 latency_ms=900.0,
             ),
         ],
@@ -80,8 +80,8 @@ def test_hard_buffer_prioritizes_wrong_accepts_without_gold_leakage(tmp_path: Pa
     hard_buffer_path = write_hard_buffer_jsonl(tmp_path / "hard_buffer.jsonl", hard_cases)
     payload = hard_buffer_path.read_text(encoding="utf-8")
     assert "gold_frame" not in payload
-    assert "gold-seven" not in payload
-    assert "gold-tomorrow" not in payload
+    assert "gold-value-alpha" not in payload
+    assert "gold-value-delta" not in payload
     assert "weak_wrong_accept" in payload
 
     loaded = load_hard_buffer_jsonl(hard_buffer_path)

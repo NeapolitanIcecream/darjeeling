@@ -637,16 +637,16 @@ def test_generate_run_report_includes_l1_program_paths_and_diff_snippet(
 ) -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="alpha request for seven",
-        gold_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
-        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        utterance="alpha request value alpha",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         chosen_layer="L1",
-        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         layer_results=[
             LayerResult(
                 layer="L1",
                 accepted=True,
-                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
                 latency_ms=1.5,
                 metadata={
                     "program_path": "programs/alpha::try_intent_alpha",
@@ -725,11 +725,11 @@ def test_generate_run_report_writes_l1_benchmark_artifact(
 
     trace = TraceRecord(
         request_id="r1",
-        utterance="alpha request for seven",
-        gold_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
-        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        utterance="alpha request value alpha",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         layer_results=[],
     )
     (tmp_path / "traces.jsonl").write_text(trace.model_dump_json() + "\n", encoding="utf-8")
@@ -777,7 +777,7 @@ def test_generate_run_report_writes_l1_benchmark_artifact(
     assert payload["binary_size_bytes"] == len("fake binary")
     assert calls == {
         "binary_path": binary_path,
-        "utterances": ["alpha request for seven"],
+        "utterances": ["alpha request value alpha"],
         "timeout_s": 0.25,
     }
     assert "L1 independent benchmark" in result.summary_path.read_text(encoding="utf-8")

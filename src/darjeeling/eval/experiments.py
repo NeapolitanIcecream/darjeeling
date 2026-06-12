@@ -62,17 +62,6 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         },
         description="Tune and train L2 on observed L0/L1 miss traces.",
     ),
-    "l2-agent": ExperimentSpec(
-        name="l2-agent",
-        settings_overrides={
-            "l2_agent_mode": "codex-cli",
-            "l2_tuning_mode": "optuna",
-            "l2_tuning_trials": 12,
-            "l2_tuning_min_examples": 200,
-            "l2_tuning_search_space": "compact",
-        },
-        description="Run the L4 coding-agent harness for L2 patch generation.",
-    ),
     "no-guard": ExperimentSpec(
         name="no-guard",
         settings_overrides={

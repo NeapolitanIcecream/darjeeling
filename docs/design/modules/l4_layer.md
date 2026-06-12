@@ -82,7 +82,7 @@ Context：
 - adapter 使用 `build_proposal_context`、OpenAI chat completions、JSON response format、`prompt_cache_key`、`prompt_cache_retention` 和 `PROPOSAL_MAX_TOKENS`。
 - adapter 返回 validated JSON object、raw response、usage、model、context hash、prompt cache key 和 source trace IDs。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded L2 config proposal；这是轻量 proposal path。
-- 用户决策后的 L2 主 evolve path 是 L4 coding agent 负责代码/特征/search-space 设计，Optuna 负责局部调参。当前已实现本地 Optuna tuner、`L2_TUNING_MODE=optuna` compiler 接入，以及 `L2_AGENT_MODE` coding-agent patch harness。
+- 用户决策后的 L2 主 evolve path 是 L4 coding agent 在隔离 target workspace 内负责 target code、特征和 search-space 设计，Optuna/search 作为 workspace tool 辅助局部调参。当前已实现本地 Optuna tuner、`L2_TUNING_MODE=optuna` compiler 接入，以及 `edge-mvp l2 target-evolve --mode agent-session`。
 - L2 proposal 或 Optuna tuning 都不能直接决定 runtime accept；accept threshold 仍由 deterministic grid search 选择，最终仍由 replay gate 决定。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 legacy bounded L3 prompt candidate proposal。
 - L3 prompt proposal 只能引用 teacher-visible trace IDs 作为 few-shot examples；compiler 会展开为 `L3PromptArtifact` 并写入 `l3_prompt_candidate`，但不会在缺少 regenerated/shadow replay 时提升为 runtime `l3_prompt`。真实 L3 prompt evolve 主路径是 `edge-mvp l3 prompt-evolve` 的 agent-session job。
@@ -143,7 +143,7 @@ Agent 权限：
 - L1 candidate 已纳入 `L0 -> L1 -> L2 -> teacher fallback` 离线 replay gate。
 - 当前默认配置仍是 disabled；主 demo 若要展示 L1 evolution，必须显式开启 `agent-session`。
 
-## L2CodingAgentAdapter
+## L2 Target-Evolution Agent
 
 用户决策，优先级高于原 proposal：
 
@@ -164,27 +164,26 @@ Outer/Inner loop 分工：
 - Outer summary 可以记录 `private_holdout_evidence`，用于人类和 outer harness 判断 private gate 失败是 zero-accept sparsity、wrong accepts 还是 promotion gate failure；该 evidence 不进入 agent workspace，不能成为下一轮 L4 agent 的可见反馈。
 - Target split 默认 `chronological`；`intent-stratified` 是显式诊断选项，用来降低小样本 private selection/promotion 对窄 target family 的 zero-accept 稀疏性。它仍然只在 outer harness 内生成 split，不把 private rows 或 aggregate feedback 写回 agent workspace。
 - `fixed-inner` 默认使用 5 个 visible validation folds；`standard`/`smoke` 默认 1 个。多个 folds 只切分 capped 30% visible validation pool，不继续压缩 train。
-- `agent-session` 默认只启动一个 live GPT-5.5/Codex session；`rounds` 是 agent-visible 内部迭代预算提示，不是 harness 固定步骤。Optuna/search 是 workspace tool，由 agent 自己调用。Harness budget 限制 wall time、LLM spend、tool/eval/search cost，但不规定 agent 内部顺序。旧 `codex-cli` multi-launch、`local-search` mode 和 `dry-run` mode 只保留为兼容、smoke 和回归测试路径。`budget_policy.profile_intent` 会把这些边界写入 summary、round state 和 agent-visible objective。`--max-agent-rounds 0` 是 no-launch budget check，用于准备 workspace、baseline 和 context 而不调用 Codex；未启动、agent 命令失败或 workspace scope violation 的 run 不能支持质量结论。
+- `agent-session` 默认只启动一个 live GPT-5.5/Codex session；`rounds` 是 agent-visible 内部迭代预算提示，不是 harness 固定步骤。Optuna/search 是 workspace tool，由 agent 自己调用。Harness budget 限制 wall time、LLM spend、tool/eval/search cost，但不规定 agent 内部顺序。`--max-agent-rounds 0` 是 no-launch budget check，用于准备 workspace、baseline 和 context 而不调用 Codex；未启动、agent 命令失败或 workspace scope violation 的 run 不能支持质量结论。
 - Visible validation improvement 只驱动继续探索；visible validation gate、visible support gate 和 visible train-audit safety gate 都是 selection 的必要条件，但不是充分条件。Adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 visible validation/support/train-audit、private selection 和 private promotion gates 时接受。
 
 职责：
 
-- 在 L2 compiler generation 中启动 Codex CLI。
-- 向 agent 提供 autoresearch-style 隔离 workspace、teacher-visible L2 data files、当前 metrics、objective、constraints 和命令说明。
-- L2 context files 包含 `slot_error_summary.json`，用于暴露 teacher-visible L2 wrong accepts 和 slot-level mismatch，使 agent 在扩大 coverage 前优先处理 frame exactness 风险。
-- 允许 agent 修改 `candidate/` 中的 L2-owned source、tests 和模块设计文档，并调用 Optuna/local tests。
+- 由 `edge-mvp l2 target-evolve --mode agent-session` 启动 Codex CLI。
+- 向 agent 提供隔离 target workspace、teacher-visible L2 data files、当前 metrics、objective、constraints、diagnostics 和命令说明。
+- L2 context files 暴露 visible validation、visible train-audit、visible cross-audit、slot-risk、intent-confusion 和 slot cue diagnostics，使 agent 在扩大 coverage 前优先处理 frame exactness 风险。
+- 允许 agent 修改 `target/` 中的 target-dependent runtime code，并调用 workspace 内的 evaluate/search tools。
 - 收集 diff、raw transcript、commands、agent report 和结构化 provenance。
 
 Workspace layout：
 
 - `program.md` 是稳定任务说明，承担 prompt 前缀之外的主要 instruction surface。
-- `candidate/` 是唯一可写研究代码区，只包含 L2-owned 可 diff 文件。
-- `system/darjeeling/` 是固定 Darjeeling system copy，用于 overlay candidate 后跑验证。
-- `data/` 存放动态 teacher-visible 资料：`teacher_train.jsonl`、`hard_cases.jsonl`、`l2_context_families.json`、`slot_error_summary.json`、`current_metrics.json`、`objective.json`、`constraints.md` 和 `commands.md`。
-- `tools/` 提供本地入口：`inspect_context.py` 查看 data，`run_checks.py` 将 candidate overlay 到 system copy 后运行 focused pytest/ruff。
-- `workspace_manifest.json` 记录 workspace schema、candidate/data 路径和标准命令。
+- `target/` 是唯一可写 runtime code 区域，只包含 target-dependent L2 wrapper/config/hooks。
+- `system/darjeeling/` 是固定 Darjeeling system copy，用于运行 evaluator 和 local tools；agent 不能修改。
+- `data/` 存放动态 teacher-visible 资料：train/visible validation rows、visible diagnostics、current metrics、objective、constraints 和 commands。
+- `tools/` 提供本地入口：`inspect_context.py` 查看 data，evaluate 命令运行 visible validation/train-audit/cross-audit，`search_config.py` 做 target-local search。
+- `workspace_manifest.json` 记录 workspace schema、target/data 路径和标准命令。
 - `tools/inspect_context.py` 是无项目依赖的轻量脚本，标准入口为 `python3 tools/inspect_context.py`，避免只查看 context 时受 `uv --project system/darjeeling`、cache 或系统依赖状态影响。
-- `tools/run_checks.py` 会优先在当前 Python 环境中调用 pytest/ruff；若当前环境缺少模块，则回退到 `uv run pytest/ruff`，避免有可用 venv 时仍强制嵌套 `uv run`。
 
 Target workspace 工具隔离：
 
@@ -199,47 +198,41 @@ Prompt/cache 策略：
 - `data/objective.json` 中的 budget intent 只说明本轮资源边界；它不把 private selection/promotion 结果塞回 prompt，也不让 agent 根据 private holdout 做下一轮调整。
 - 是否读取某个 data file 是 coding agent 的局部决策；harness 只提供可见边界和审计 artifact。
 - Agent objective 必须以 replay/promotion success 为目标；不能为了 raw L2 coverage 牺牲 frame exactness 或 wrong-accept safety。
-- 在 legacy `candidate/` core-patch path 中，dataset-specific intent/slot hardcoding 默认不接受。新的 target-evolution path 不走这个限制：visible-data-derived target-specific code 可以写在 `target/`，且不应仅因为 dataset dependence 被拒绝；拒绝条件是越界进入 Darjeeling core、读取 private holdout、使用 workspace 外部 dataset 知识，或未通过 inner/holdout/outer replay gates。
+- Visible-data-derived target-specific code 可以写在 `target/`，且不应仅因为 dataset dependence 被拒绝；拒绝条件是越界进入 Darjeeling core、读取 private holdout、使用 workspace 外部 dataset 知识，或未通过 inner/holdout/outer replay gates。
 
 Agent 可见范围：
 
 - `teacher_train` 或当前 `L2_TRAINING_SCOPE` 选出的 teacher-visible traces。
-- `visibility=train_visible` hard cases。
+- visible validation folds、visible train-audit、visible cross-audit 和 visible-only diagnostics。
 - 当前 L2 config、tuning、guard calibration、promotion-window metrics 的 summary。
 - objective/gates 和命令说明。
 
 Agent 不可见：
 
 - hidden gold labels。
-- `teacher_promotion_holdout`。
+- private selection holdout。
+- private promotion holdout。
 - final eval labels。
 - future stream。
 
 Agent 权限：
 
-- 只写隔离 research workspace 中的 `candidate/`。
+- 只写隔离 target workspace 中的 `target/`。
 - 不联网。
-- 可运行 `tools/inspect_context.py`、`tools/run_checks.py`、Optuna/local deterministic tools 和小型 cached experiments。
+- 可运行 `tools/inspect_context.py`、workspace evaluate/search tools、Optuna/local deterministic tools 和小型 cached experiments。
 - 不允许修改外层 replay、promotion logic、teacher cache、data loader 或非 L2-owned orchestration。
 
 重要边界：
 
-- Python L2 patch 不在当前 compiler 进程中热加载。Harness 产出的是 auditable patch candidate，记录 `runtime_patch_applied=false`。
-- 若要让 patch 影响真实 L2 runtime，外层开发/实验循环必须应用 patch、纳入 Git、重启实验进程。
-- Agent 不能 self-certify；即便 patch 通过自身验证，也必须经过外层 replay/promotion 和后续 experiment comparison。
+- Target workspace snapshot 只有通过 visible validation/support/train-audit、private selection、private promotion 和 outer replay gates 后才能被采用。
+- Agent 不能 self-certify；即便 target workspace 内部验证通过，也必须经过 outer harness gate。
 - Artifact promotion 仍有遗留风险：整组 promotion 可能掩盖单层 regression。后续需要更细的 per-layer regression attribution 或分层 promotion 设计。
 
 当前实现状态：
 
-- 已实现 `darjeeling.compiler.l2_coding_agent.L2CodingAgentAdapter`。
-- 当前 workspace schema 为 `l2-research-workspace-v1`，参考 `karpathy/autoresearch` 的 `program.md + editable train/candidate code + fixed evaluator` 思路，但边界改为 Darjeeling 的 L2 candidate overlay。
-- 支持 `dry-run` fixture patch 和 `codex-cli` 模式。
-- `codex-cli` 默认使用 `L2_AGENT_MODEL=gpt-5.5`、`L2_AGENT_TIMEOUT_S=7200`、`--ignore-user-config`、`--ignore-rules`、`--ephemeral` 和 `--skip-git-repo-check`。`--ignore-user-config` 不加载 `$CODEX_HOME/config.toml`；auth 仍使用 `CODEX_HOME`。
-- compiler generation 已在 `L2_AGENT_MODE` 非 disabled 时运行该 harness，并记录 `l2_agent_*` artifact paths 与 metrics。
-- `edge-mvp experiment l2-agent` 会开启 `L2_AGENT_MODE=codex-cli` 和 Optuna tuning，用于真实 L2 patch generation 实验。
-- 默认仍是 disabled；普通 replay/tuning 不会产生 live LLM cost。
-- 已新增 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve --mode agent-session`，用于新的 target-dependent single-session inner job。该路径当前支持 baseline-first evaluation、one-session Codex launch、fixed split evaluator、target workspace scope gate、private selection/promotion gates 和 target snapshot promotion。
-- `target-evolve` 仍保留 legacy `dry-run`、`local-search` 和 multi-launch `codex-cli` 模式用于 fixture、protocol probe 和兼容测试。下一步真实 L4 experiment 应优先使用 `agent-session`，而不是 legacy `l2_research/candidate` patch harness 或外层 `local-search` mode。
+- 已实现 `darjeeling.compiler.l2_target_evolution` 和 `edge-mvp l2 target-evolve --mode agent-session`，用于 target-dependent single-session inner job。该路径当前支持 baseline-first evaluation、one-session Codex launch、fixed split evaluator、target workspace scope gate、private selection/promotion gates 和 target snapshot promotion。
+- Codex CLI 配置由 `L2_TARGET_AGENT_*` settings 控制，包括命令、模型、timeout、sandbox、approval policy、config/rules/session persistence 隔离选项。
+- 普通 replay/tuning 不会产生 live LLM cost；真实 target evolution 必须显式运行 `edge-mvp l2 target-evolve --mode agent-session`。
 - `tools/search_config.py` 不消耗 LLM tokens；它只优化可见 train/validation folds，并把 best visible config 写入 `target/config.json`。L4 coding agent 可在同一个 session 内调用它，但 search 结果不能自证 adoption。若 visible support 已经达标，agent 不应仅为了提高 raw accepts 降低 `accept_threshold`；这种 config 覆盖扩张容易绕过 target-local veto 的安全意图，必须由 visible train-audit、cross-audit 和 cue probes 共同证明必要且安全。
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
 - Target workspace 也暴露 `postprocess_frame(...)`。当 visible target data 支持稳定解析时，L4 agent 应优先用 postprocess 补全 slot 或修正 frame；这类 target-specific code 只能留在 `target/`，不能进入 Darjeeling core。

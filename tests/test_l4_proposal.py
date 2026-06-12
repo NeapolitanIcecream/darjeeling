@@ -92,16 +92,16 @@ class AlwaysFailingProposalClient:
 def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="alpha request for seven",
-        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        utterance="alpha request value alpha",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "gold-value-alpha"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
                 latency_ms=1.0,
             )
         ],
@@ -120,7 +120,7 @@ def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> 
 
     result = adapter.propose(
         role="l2",
-        task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=["time"]),
+        task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=["slot_alpha"]),
         traces=traces_to_teacher_view([trace]),
         output_schema=output_schema,
         metrics={"frame_exact_match": 0.9},
@@ -136,7 +136,7 @@ def test_l4_proposal_adapter_calls_direct_api_with_teacher_visible_context() -> 
     assert call["prompt_cache_key"].startswith("darjeeling:l2-proposal-v1:")
     rendered_messages = json.dumps(call["messages"], sort_keys=True)
     assert "gold_frame" not in rendered_messages
-    assert "gold-seven" not in rendered_messages
+    assert "gold-value-alpha" not in rendered_messages
 
 
 def test_l4_proposal_client_sets_sdk_timeout_and_disables_sdk_retries(monkeypatch) -> None:

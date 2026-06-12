@@ -27,16 +27,16 @@ from darjeeling.schemas import Frame
 def _examples() -> list[L2TrainingExample]:
     return [
         L2TrainingExample(
-            utterance="alpha request for seven",
-            teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+            utterance="alpha request value alpha",
+            teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         ),
         L2TrainingExample(
-            utterance="alpha at eight",
-            teacher_frame=Frame(intent="intent_alpha", slots={"time": "eight"}),
+            utterance="alpha variant value beta",
+            teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value beta"}),
         ),
         L2TrainingExample(
-            utterance="alpha at nine tomorrow",
-            teacher_frame=Frame(intent="intent_alpha", slots={"time": "nine tomorrow"}),
+            utterance="alpha variant value gamma extra",
+            teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value gamma extra"}),
         ),
         L2TrainingExample(
             utterance="beta sample request",
@@ -59,7 +59,7 @@ def test_l2_student_trains_from_teacher_frames_and_predicts_intent() -> None:
         L2StudentConfig(accept_threshold=0.0, min_examples=4),
     )
 
-    prediction = bundle.predict("alpha request at six")
+    prediction = bundle.predict("alpha request value delta")
 
     assert prediction.frame.intent == "intent_alpha"
     assert 0.0 <= prediction.guard_probability <= 1.0
@@ -78,11 +78,11 @@ def test_l2_retrieval_frame_source_returns_nearest_teacher_frame() -> None:
         ),
     )
 
-    prediction = bundle.predict("please alpha at nine tomorrow")
+    prediction = bundle.predict("please alpha variant value gamma extra")
 
     assert prediction.frame == Frame(
         intent="intent_alpha",
-        slots={"time": "nine tomorrow"},
+        slots={"slot_alpha": "value gamma extra"},
     )
     assert prediction.frame_source == "retrieval"
     assert prediction.retrieval_frame == prediction.frame
@@ -99,7 +99,7 @@ def test_l2_retrieval_frame_source_requires_intent_agreement() -> None:
     class DisagreeingFramePrototypeIndex:
         def nearest(self, intent_pipeline, utterance):
             return FrameRetrievalResult(
-                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
                 nearest_similarity=0.91,
                 margin=0.32,
             )
@@ -118,7 +118,7 @@ def test_l2_retrieval_frame_source_requires_intent_agreement() -> None:
     assert prediction.frame_source == "student"
     assert prediction.retrieval_frame == Frame(
         intent="intent_alpha",
-        slots={"time": "seven"},
+        slots={"slot_alpha": "value alpha"},
     )
     assert prediction.retrieval_intent_matches_student == 0.0
 
@@ -134,11 +134,11 @@ def test_l2_retrieval_does_not_return_exact_self_neighbor() -> None:
         ),
     )
 
-    prediction = bundle.predict("alpha at nine tomorrow")
+    prediction = bundle.predict("alpha variant value gamma extra")
 
     assert prediction.frame != Frame(
         intent="intent_alpha",
-        slots={"time": "nine tomorrow"},
+        slots={"slot_alpha": "value gamma extra"},
     )
     assert prediction.retrieval_frame == prediction.frame
 
@@ -170,38 +170,38 @@ def test_token_slot_tagger_learns_teacher_slot_spans() -> None:
     )
 
     assert tagger is not None
-    prediction = tagger.predict("alpha at nine tomorrow")
+    prediction = tagger.predict("alpha variant value gamma extra")
 
     assert prediction.model_name == "token_sgd"
-    assert prediction.slots == {"time": "nine tomorrow"}
+    assert prediction.slots == {"slot_alpha": "value gamma extra"}
     assert not prediction.invalid_bio
     assert 0.0 <= prediction.avg_probability <= 1.0
 
 
 def test_slot_alignment_and_bio_reconstruction() -> None:
-    tokens = ["alpha", "at", "nine", "tomorrow"]
+    tokens = ["alpha", "marker", "value", "gamma", "extra"]
 
-    tags = bio_tags_for_teacher_slots(tokens, {"time": "nine tomorrow"})
+    tags = bio_tags_for_teacher_slots(tokens, {"slot_alpha": "value gamma extra"})
     slots, invalid_bio = slots_from_bio_tags(tokens, tags)
     duplicate_slots, duplicate_invalid_bio = slots_from_bio_tags(
         tokens,
-        ["B-time", "B-time", "O", "O"],
+        ["B-slot_alpha", "B-slot_alpha", "O", "O", "O"],
     )
 
-    assert tags == ["O", "O", "B-time", "I-time"]
-    assert slots == {"time": "nine tomorrow"}
+    assert tags == ["O", "O", "B-slot_alpha", "I-slot_alpha", "I-slot_alpha"]
+    assert slots == {"slot_alpha": "value gamma extra"}
     assert not invalid_bio
-    assert duplicate_slots == {"time": "alpha"}
+    assert duplicate_slots == {"slot_alpha": "alpha"}
     assert duplicate_invalid_bio
 
 
 def test_l2_filters_predicted_slots_by_intent_schema() -> None:
     slots_by_intent = slots_by_intent_from_examples(_examples())
 
-    assert slots_by_intent["intent_alpha"] == ("time",)
+    assert slots_by_intent["intent_alpha"] == ("slot_alpha",)
     assert filter_slots_for_intent(
         "intent_beta",
-        {"time": "seven", "slot_beta": "value"},
+        {"slot_alpha": "value alpha", "slot_beta": "value"},
         slots_by_intent,
     ) == {}
 
@@ -276,17 +276,17 @@ def test_l2_bundle_drops_slots_not_seen_for_predicted_intent() -> None:
 
     class FakeSlotTagger:
         def predict(self, utterance: str) -> SlotPrediction:
-            return SlotPrediction(slots={"time": "seven"})
+            return SlotPrediction(slots={"slot_alpha": "value alpha"})
 
     bundle = L2StudentBundle(
         intent_pipeline=FakeIntentPipeline(),
         slot_tagger=FakeSlotTagger(),
         guard_model=ConstantGuard(1.0),
         config=L2StudentConfig(accept_threshold=0.0),
-        slots_by_intent={"intent_beta": (), "intent_alpha": ("time",)},
+        slots_by_intent={"intent_beta": (), "intent_alpha": ("slot_alpha",)},
     )
 
-    prediction = bundle.predict("beta request at seven")
+    prediction = bundle.predict("beta request value alpha")
 
     assert prediction.frame == Frame(intent="intent_beta", slots={})
 
@@ -323,7 +323,7 @@ def test_l2_guard_training_labels_postprocessed_frames() -> None:
 
 def test_intent_calibration_index_scores_predicted_intent_reliability() -> None:
     class FakeIntentPipeline:
-        classes_ = ["intent_delta", "play_beta"]
+        classes_ = ["intent_delta", "intent_epsilon"]
 
         def predict_proba(self, utterances):
             rows = []
@@ -345,11 +345,11 @@ def test_intent_calibration_index_scores_predicted_intent_reliability() -> None:
         ),
         L2TrainingExample(
             utterance="beta request",
-            teacher_frame=Frame(intent="play_beta", slots={"beta_descriptor": "jazz"}),
+            teacher_frame=Frame(intent="intent_epsilon", slots={"slot_beta": "value beta"}),
         ),
         L2TrainingExample(
-            utterance="play queen",
-            teacher_frame=Frame(intent="play_beta", slots={"artist_name": "queen"}),
+            utterance="beta request value gamma",
+            teacher_frame=Frame(intent="intent_epsilon", slots={"slot_gamma": "value gamma"}),
         ),
     ]
 
@@ -360,7 +360,7 @@ def test_intent_calibration_index_scores_predicted_intent_reliability() -> None:
         slots_by_intent=slots_by_intent_from_examples(examples),
     )
     delta_score = calibration.score("intent_delta", {})
-    beta_score = calibration.score("play_beta", {})
+    beta_score = calibration.score("intent_epsilon", {})
 
     assert delta_score.predicted_intent_frame_accuracy == 1.0
     assert beta_score.predicted_intent_frame_accuracy == 0.0
@@ -391,7 +391,7 @@ def test_l2_student_layer_reports_intent_support_metadata() -> None:
     )
     layer = L2StudentLayer(bundle)
 
-    result = layer.try_answer("alpha at eight")
+    result = layer.try_answer("alpha variant value beta")
 
     assert result.metadata["nearest_similarity"] > 0.0
     assert result.metadata["predicted_intent_similarity"] > 0.0
@@ -456,6 +456,6 @@ def test_l2_student_bundle_round_trips_with_joblib(tmp_path: Path) -> None:
     loaded = L2StudentBundle.load(path)
 
     assert loaded.predict("beta request").frame.intent == "intent_beta"
-    assert loaded.predict("please alpha at nine tomorrow").frame.slots == {
-        "time": "nine tomorrow"
+    assert loaded.predict("please alpha variant value gamma extra").frame.slots == {
+        "slot_alpha": "value gamma extra"
     }

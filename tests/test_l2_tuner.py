@@ -129,12 +129,12 @@ def _teacher_traces() -> list[TeacherTrace]:
         ("m4", "beta collection request", "intent_beta", {}),
         ("m5", "beta variant request", "intent_beta", {}),
         ("m6", "beta alternate request", "intent_beta", {}),
-        ("a1", "alpha request for seven", "intent_alpha", {"time": "seven"}),
-        ("a2", "alpha at eight", "intent_alpha", {"time": "eight"}),
-        ("a3", "alpha at nine", "intent_alpha", {"time": "nine"}),
-        ("a4", "set morning alpha", "intent_alpha", {}),
-        ("a5", "alpha tomorrow", "intent_alpha", {"date": "tomorrow"}),
-        ("a6", "set evening alpha", "intent_alpha", {}),
+        ("a1", "alpha request value alpha", "intent_alpha", {"slot_alpha": "value alpha"}),
+        ("a2", "alpha variant value beta", "intent_alpha", {"slot_alpha": "value beta"}),
+        ("a3", "alpha variant value gamma", "intent_alpha", {"slot_alpha": "value gamma"}),
+        ("a4", "alpha variant one", "intent_alpha", {}),
+        ("a5", "alpha value delta", "intent_alpha", {"slot_beta": "value delta"}),
+        ("a6", "alpha variant two", "intent_alpha", {}),
     ]
     return [
         _trace(request_id, utterance, intent, slots=slots)

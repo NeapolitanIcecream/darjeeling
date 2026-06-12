@@ -28,11 +28,11 @@ def test_l1_dsl_rule_matches_and_extracts_slots() -> None:
         }
     )
 
-    frame = rule.try_frame("Alpha request for seven tomorrow morning")
+    frame = rule.try_frame("Alpha request for value alpha extended")
 
     assert frame is not None
     assert frame.intent == "intent_alpha"
-    assert frame.slots == {"slot_alpha": "seven tomorrow morning"}
+    assert frame.slots == {"slot_alpha": "value alpha extended"}
     assert "intent_alpha_001" in render_rule(rule)
 
 

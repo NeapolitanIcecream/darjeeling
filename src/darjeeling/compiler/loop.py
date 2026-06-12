@@ -16,7 +16,6 @@ from darjeeling.compiler.guard_optimizer import (
 )
 from darjeeling.compiler.l0_compile import exact_cache_from_teacher_traces
 from darjeeling.compiler.l1_program_compiler import L1CodingAgentError, L4CodingAgentAdapter
-from darjeeling.compiler.l2_coding_agent import L2CodingAgentAdapter, L2CodingAgentError
 from darjeeling.compiler.l2_distiller import (
     L2_CONFIG_PROPOSAL_SCHEMA,
     l2_config_from_proposal,
@@ -454,62 +453,6 @@ def run_compiler_generation(
             candidate_metrics["l2_trained"] = True
             candidate_l2_bundle = l2_bundle
             generated_artifacts = True
-
-    if settings.l2_agent_mode != "disabled":
-        candidate_metrics["l2_agent_mode"] = settings.l2_agent_mode
-        candidate_metrics["l2_agent_harness_role"] = (
-            "legacy_patch_generation_not_target_evolve"
-        )
-        try:
-            l2_agent_result = L2CodingAgentAdapter(settings).run_l2_job(
-                job_dir=generation_dir / "l2_agent",
-                source_repo_dir=Path.cwd(),
-                teacher_train=l2_training_traces,
-                hard_cases=agent_hard_buffer_traces,
-                current_metrics=candidate_metrics,
-                objective={
-                    "accuracy_epsilon": settings.promotion_accuracy_epsilon,
-                    "wrong_accept_limit": settings.l2_max_wrong_accept_rate,
-                    "target": "improve L2 residual coverage without wrong-accept regression",
-                },
-            )
-        except L2CodingAgentError as exc:
-            candidate_metrics["l2_agent_succeeded"] = False
-            candidate_metrics["l2_agent_error"] = str(exc)
-        else:
-            candidate_metrics["l2_agent_succeeded"] = l2_agent_result.succeeded
-            candidate_metrics["l2_agent_return_code"] = l2_agent_result.return_code
-            candidate_metrics["l2_agent_patch_runtime_applied"] = False
-            candidate_metrics["l2_agent_patch_runtime_reason"] = (
-                "Python L2 code changes require outer process apply/restart"
-            )
-            artifact_paths["l2_agent_dir"] = _artifact_relative_path(
-                store.root,
-                l2_agent_result.job_dir,
-            )
-            artifact_paths["l2_agent_diff"] = _artifact_relative_path(
-                store.root,
-                l2_agent_result.diff_path,
-            )
-            artifact_paths["l2_agent_report"] = _artifact_relative_path(
-                store.root,
-                l2_agent_result.report_path,
-            )
-            artifact_paths["l2_agent_commands"] = _artifact_relative_path(
-                store.root,
-                l2_agent_result.commands_path,
-            )
-            artifact_paths["l2_agent_transcript"] = _artifact_relative_path(
-                store.root,
-                l2_agent_result.transcript_path,
-            )
-            artifact_paths["l2_agent_provenance"] = _artifact_relative_path(
-                store.root,
-                l2_agent_result.provenance_path,
-            )
-            generated_artifacts = True
-    else:
-        candidate_metrics["l2_agent_mode"] = "disabled"
 
     if settings.l4_proposal_mode == "live" and split.teacher_train:
         try:

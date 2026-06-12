@@ -12,7 +12,7 @@ from darjeeling.settings import load_settings
 
 
 def _task_schema() -> TaskSchema:
-    return TaskSchema(intent_names=["intent_alpha", "intent_beta"], slot_names=["time"])
+    return TaskSchema(intent_names=["intent_alpha", "intent_beta"], slot_names=["slot_alpha"])
 
 
 def test_teacher_context_keeps_stable_prefix_when_utterance_changes() -> None:
@@ -23,7 +23,7 @@ def test_teacher_context_keeps_stable_prefix_when_utterance_changes() -> None:
         settings=settings,
     )
     second = build_teacher_context(
-        utterance="alpha request for seven",
+        utterance="alpha request value alpha",
         task_schema=_task_schema(),
         settings=settings,
     )
@@ -38,16 +38,16 @@ def test_teacher_context_keeps_stable_prefix_when_utterance_changes() -> None:
 def test_proposal_context_uses_teacher_visible_traces_only() -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="alpha request for seven",
-        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        utterance="alpha request value alpha",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "gold-value-alpha"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
                 latency_ms=1.0,
             )
         ],
@@ -63,8 +63,8 @@ def test_proposal_context_uses_teacher_visible_traces_only() -> None:
 
     assert rendered.source_trace_ids == ["r1"]
     assert "gold_frame" not in rendered.dynamic_tail
-    assert "gold-seven" not in rendered.dynamic_tail
-    assert "seven" in rendered.dynamic_tail
+    assert "gold-value-alpha" not in rendered.dynamic_tail
+    assert "value alpha" in rendered.dynamic_tail
 
 
 def test_context_guard_rejects_gold_payloads() -> None:

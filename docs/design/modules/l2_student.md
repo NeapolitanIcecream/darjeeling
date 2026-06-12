@@ -167,27 +167,6 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 - Proposal 只允许影响白名单字段：`frame_source`、`intent_model_family`、`slot_model_family`、`min_examples`、`max_features`、`max_iter`、`mlp_hidden_layer_sizes`、`mlp_alpha`、`mlp_early_stopping`、`word_ngram_range`、`char_ngram_range`。
 - Proposal 不直接决定 accept threshold；threshold 仍由 deterministic grid search 选择。
 
-L2 coding-agent path：
-
-- `L2_AGENT_MODE=disabled|dry-run|codex-cli` 控制 L4 coding agent 是否为 L2 生成 patch candidate。默认 disabled，不产生 live LLM cost。
-- `dry-run` 应用 fixture patch，只用于 harness 和 artifact 测试。
-- `L2_AGENT_MODE` 是 legacy patch-generation path：它仍能产出可审计 patch，但 patch 指向 Darjeeling core 的 L2-owned 文件，因此不能作为 target-dependent L2 evolve 主线。
-- 用户决策：真正的 L2 evolve 主路径应拆成 Outer Darjeeling loop 和 Inner L2 target-evolution loop。Darjeeling core 必须 dataset-independent；target workspace 内的 L2 runtime code 可以 target-dependent，并由 L4 coding agent 多轮演化。
-- `codex-cli` 使用 GPT-5.5，独立于宿主机个人 config/rules，并使用更长 timeout；auth 仍由 Codex CLI 的 `CODEX_HOME` 机制提供。
-- Legacy `codex-cli` 在隔离 autoresearch-style workspace 中运行 Codex CLI。Agent 只能修改 `candidate/` 中的 L2-owned Python source、tests 和模块设计文档；Darjeeling 宿主仓库不直接暴露为可写目标。
-- Workspace 使用 `program.md + candidate/ + system/darjeeling/ + data/ + tools/`：
-  - `program.md` 是稳定任务说明。
-  - `candidate/` 是可 diff 的 L2 研究代码区。
-  - `system/darjeeling/` 是固定 system copy，用于 overlay candidate 后验证。
-  - `data/` 放 teacher-visible L2 train scope、train-visible hard cases、current metrics、objective、constraints 和命令说明。
-  - `tools/inspect_context.py` 和 `tools/run_checks.py` 是标准本地入口；查看 context 使用 `python3 tools/inspect_context.py`，不需要加载 `system/darjeeling` project env。
-- Prompt stdin 保持稳定短前缀，只要求 agent 读取 `program.md`。动态 context 不进入 prompt，而是作为 `data/` 文件由 agent 自主读取，以减少上下文膨胀并最大化 KV cache 复用机会。
-- `data/slot_error_summary.json` 从 teacher-visible train/hard cases 中汇总 L2 wrong accept，尤其标出 intent 正确但 slot 缺失、多余或值错误的样本。该 summary 用于把下一轮 L2 evolve 的焦点放在 frame exactness，而不是只扩大 coverage。
-- 调参由 Optuna 或本地 deterministic tuner 负责；L4 coding agent 负责真正需要 generalized intelligence 的代码、特征、模型 family、calibration、accept policy、验证协议和 search-space 设计。
-- Agent patch adoption 以 replay/promotion success 为准；提高 raw L2 coverage 但引入 frame exactness regression 的 patch 必须撤回。
-- Dataset-specific intent/slot lexical patch 不能进入 Darjeeling core；但在 isolated target workspace 的 `target/` 内，target-specific lexical/state-machine/feature code 是合法候选，只要它来自 visible target data，不读取 private holdout，并由 target holdout/promotion 指标决定是否采用。
-- 当前 compiler 只记录 agent patch artifact，不在同一 Python 进程中热加载 patch：`candidate_metrics["l2_agent_patch_runtime_applied"] = false`。真实采用 patch 必须由外层开发循环应用、提交 Git、重启实验。
-
 Inner L2 target-evolution path：
 
 - `edge-mvp l2 target-evolve --mode agent-session` 是真实 L2 target evolve 主入口。它准备固定 target snapshot 和隔离 workspace，然后启动一个 long-running L4 agent session；agent 在 session 内自主决定 edit、evaluate、Optuna/search、debug 和 stop 的次数。
@@ -238,7 +217,7 @@ Inner L2 target-evolution path：
 - `edge-mvp l2 replay-target` 是 target artifact 的正式 outer replay gate：candidate 默认取 current manifest，baseline 默认取 parent manifest，在同一批 teacher-labeled traces 上输出 `l2-target-outer-replay-v1`。默认 `accuracy_epsilon=0`，并包含 settings L1 Rust worker，确保 target candidate 不能用 frame exactness regression 换 L4 share。无论 inner 是否 adopted，最终是否采用仍以 3k/10k e2e replay 的 frame exactness、wrong accept 和 L4 share 为准。
 - `promote-target` 不改 Darjeeling core：它写入新的 `l2_student.joblib` 和 `l2_target` module artifact；runtime replay 与 compiler offline replay 加载同一 target wrapper，保持评估/运行语义一致。若普通 compiler generation 重新训练 core L2 bundle，则必须丢弃继承来的 `l2_target`，除非该 generation 明确做了 target-aware adoption；否则会把 target code 和不兼容 bundle 混用。
 - target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/validation-fold 数据推导，不能依赖 hidden dataset knowledge 或外部 dataset 知识。单条 visible row 的 exact utterance exception 或 request-id 记忆化不允许作为泛化机制；agent 应优先写有多个 visible 支持或清晰 schema 语义的 pattern-level lexical/slot-support 规则。是否采用由 holdout/promotion 指标和 outer replay 决定，而不是由 dataset-independent core 规则决定。Summary 和 promoted manifest 必须记录 `target_code_policy`，其中明确 `core_must_remain_dataset_independent=true`、`target_specific_code_is_not_rejected_for_dataset_dependence=true` 和 single-row memorization 禁止规则。
-- 当前实现状态：已支持 baseline-first `agent-session` single-launch 主路径、legacy `dry-run`/`local-search`/`codex-cli` 兼容路径、target workspace evaluator、可见多 fold validation、private holdout gate、visible `tools/search_config.py`、local-search trial report 和机器可读 `evidence_policy`。下一轮真实 L2 实验应优先使用 `agent-session`，让 agent 在一个 session 内自行调用 evaluate/search。
+- 当前实现状态：已支持 baseline-first `agent-session` single-launch 主路径、target workspace evaluator、可见多 fold validation、private holdout gate、visible `tools/search_config.py`、local-search trial report 和机器可读 `evidence_policy`。下一轮真实 L2 实验应优先使用 `agent-session`，让 agent 在一个 session 内自行调用 evaluate/search。
 
 Optuna tuning path：
 

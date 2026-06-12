@@ -30,16 +30,16 @@ class FakeL3Backend:
 def test_l3_prompt_artifact_from_proposal_expands_teacher_visible_examples() -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="alpha request for seven",
-        gold_frame=Frame(intent="intent_alpha", slots={"time": "gold-seven"}),
-        teacher_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        utterance="alpha request value alpha",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "gold-value-alpha"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+        final_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
+                frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
                 latency_ms=1.0,
             )
         ],
@@ -60,15 +60,15 @@ def test_l3_prompt_artifact_from_proposal_expands_teacher_visible_examples() -> 
     assert artifact.few_shot_examples == [
         {
             "trace_id": "r1",
-            "utterance": "alpha request for seven",
+            "utterance": "alpha request value alpha",
             "frame": {
                 "intent": "intent_alpha",
-                "slots": {"time": "seven"},
+                "slots": {"slot_alpha": "value alpha"},
                 "is_abstain": False,
             },
         }
     ]
-    assert "gold-seven" not in artifact.model_dump_json()
+    assert "gold-value-alpha" not in artifact.model_dump_json()
 
 
 def test_l3_prompt_artifact_rejects_unknown_few_shot_trace_id() -> None:

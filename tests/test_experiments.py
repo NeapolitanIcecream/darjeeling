@@ -25,7 +25,6 @@ def test_experiment_settings_apply_l2_ablations() -> None:
     no_l2 = apply_experiment_settings(settings, experiment_spec("no-l2"))
     l2_mlp = apply_experiment_settings(settings, experiment_spec("l2-mlp"))
     l2_tuned = apply_experiment_settings(settings, experiment_spec("l2-tuned"))
-    l2_agent = apply_experiment_settings(settings, experiment_spec("l2-agent"))
     l2_tuned_lower_miss = apply_experiment_settings(
         settings,
         experiment_spec("l2-tuned-lower-miss"),
@@ -44,8 +43,6 @@ def test_experiment_settings_apply_l2_ablations() -> None:
     assert l2_tuned.l2_tuning_min_examples == 200
     assert l2_tuned.l2_tuning_search_space == "compact"
     assert l2_tuned.l2_training_scope == "teacher_train"
-    assert l2_agent.l2_agent_mode == "codex-cli"
-    assert l2_agent.l2_tuning_mode == "optuna"
     assert l2_tuned_lower_miss.l2_training_scope == "lower_miss"
     assert l2_tuned_lower_miss.l2_tuning_mode == "optuna"
     assert settings.l2_guard_mode == "learned"
@@ -167,7 +164,6 @@ def test_experiment_preflight_passes_with_data_cache_and_l1_crate(tmp_path: Path
         "teacher": "pass",
         "l1.rust_crate": "pass",
         "l1.agent": "warn",
-        "l2.agent": "warn",
         "l3.local_slm": "pass",
     }
     l3_check = next(check for check in payload["checks"] if check["name"] == "l3.local_slm")

@@ -33,7 +33,7 @@ class FakeBackend:
 
 
 def _task_schema() -> TaskSchema:
-    return TaskSchema(intent_names=["intent_alpha", "intent_beta"], slot_names=["time"])
+    return TaskSchema(intent_names=["intent_alpha", "intent_beta"], slot_names=["slot_alpha"])
 
 
 def test_l3_disabled_does_not_call_backend() -> None:
@@ -83,16 +83,19 @@ def test_l3_guarded_accepts_valid_high_confidence_frame() -> None:
         config=LocalSLMConfig(mode="guarded", confidence_threshold=0.7),
         task_schema=_task_schema(),
         backend=FakeBackend(
-            output='{"intent": "intent_alpha", "slots": {"time": "seven"}, "confidence": 0.91}'
+            output=(
+                '{"intent": "intent_alpha", "slots": {"slot_alpha": "value alpha"}, '
+                '"confidence": 0.91}'
+            )
         ),
     )
 
-    result = layer.try_answer("alpha request for seven")
+    result = layer.try_answer("alpha request value alpha")
 
     assert result.accepted
     assert result.frame is not None
     assert result.frame.intent == "intent_alpha"
-    assert result.frame.slots == {"time": "seven"}
+    assert result.frame.slots == {"slot_alpha": "value alpha"}
     assert result.metadata["repair_used"] is False
 
 
@@ -118,7 +121,7 @@ def test_l3_shadow_never_accepts_even_when_frame_would_pass_guard() -> None:
 
 def test_l3_parser_repairs_json_and_validates_schema() -> None:
     parsed = parse_l3_output(
-        '{"intent": "intent_alpha", "slots": {"time": "seven",}, "confidence": 0.91}'
+        '{"intent": "intent_alpha", "slots": {"slot_alpha": "value alpha",}, "confidence": 0.91}'
     )
     invalid = parse_l3_output(
         '{"intent": "unknown", "slots": {"unsupported": "x"}, "confidence": 0.91}'
@@ -126,7 +129,7 @@ def test_l3_parser_repairs_json_and_validates_schema() -> None:
 
     assert parsed.repair_used
     assert parsed.frame.intent == "intent_alpha"
-    assert parsed.frame.slots == {"time": "seven"}
+    assert parsed.frame.slots == {"slot_alpha": "value alpha"}
     assert validate_l3_output(parsed, _task_schema()) == []
     assert validate_l3_output(invalid, _task_schema()) == [
         "intent not allowed: unknown",
@@ -139,11 +142,14 @@ def test_l3_benchmark_layer_records_latency_backend_and_parse_stats() -> None:
         config=LocalSLMConfig(mode="shadow", confidence_threshold=0.7),
         task_schema=_task_schema(),
         backend=FakeBackend(
-            output='{"intent": "intent_alpha", "slots": {"time": "seven"}, "confidence": 0.91}'
+            output=(
+                '{"intent": "intent_alpha", "slots": {"slot_alpha": "value alpha"}, '
+                '"confidence": 0.91}'
+            )
         ),
     )
 
-    metrics = benchmark_l3_layer(layer, ["alpha request for seven"])
+    metrics = benchmark_l3_layer(layer, ["alpha request value alpha"])
 
     assert metrics["schema_version"] == "l3-benchmark-v1"
     assert metrics["status"] == "success"

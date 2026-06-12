@@ -5,16 +5,16 @@ from darjeeling.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
 def test_compiler_inputs_do_not_contain_gold_frame() -> None:
     trace = TraceRecord(
         request_id="r1",
-        utterance="alpha request for seven",
-        gold_frame=Frame(intent="intent_alpha", slots={"time": "seven"}),
-        teacher_frame=Frame(intent="intent_alpha", slots={"time": "7:00"}),
+        utterance="alpha request value alpha",
+        gold_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"}),
+        teacher_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value teacher"}),
         chosen_layer="L4",
-        final_frame=Frame(intent="intent_alpha", slots={"time": "7:00"}),
+        final_frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value teacher"}),
         layer_results=[
             LayerResult(
                 layer="L4",
                 accepted=True,
-                frame=Frame(intent="intent_alpha", slots={"time": "7:00"}),
+                frame=Frame(intent="intent_alpha", slots={"slot_alpha": "value teacher"}),
                 latency_ms=10.0,
             )
         ],

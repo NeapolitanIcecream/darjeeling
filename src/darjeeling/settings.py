@@ -124,35 +124,35 @@ class Settings(BaseSettings):
         default="teacher_train",
         validation_alias="L2_TRAINING_SCOPE",
     )
-    l2_agent_mode: Literal["disabled", "dry-run", "codex-cli"] = Field(
-        default="disabled",
-        validation_alias="L2_AGENT_MODE",
+    l2_target_agent_codex_command: str = Field(
+        default="codex",
+        validation_alias="L2_TARGET_AGENT_CODEX_COMMAND",
     )
-    l2_agent_codex_command: str = Field(default="codex", validation_alias="L2_AGENT_CODEX_COMMAND")
-    l2_agent_model: str = Field(default="gpt-5.5", validation_alias="L2_AGENT_MODEL")
-    l2_agent_timeout_s: float = Field(default=7200.0, validation_alias="L2_AGENT_TIMEOUT_S")
-    l2_agent_dry_run_patch: Path | None = Field(
-        default=None,
-        validation_alias="L2_AGENT_DRY_RUN_PATCH",
+    l2_target_agent_model: str = Field(default="gpt-5.5", validation_alias="L2_TARGET_AGENT_MODEL")
+    l2_target_agent_timeout_s: float = Field(
+        default=7200.0,
+        validation_alias="L2_TARGET_AGENT_TIMEOUT_S",
     )
-    l2_agent_sandbox: Literal["workspace-write", "danger-full-access"] = Field(
+    l2_target_agent_sandbox: Literal["workspace-write", "danger-full-access"] = Field(
         default="workspace-write",
-        validation_alias="L2_AGENT_SANDBOX",
+        validation_alias="L2_TARGET_AGENT_SANDBOX",
     )
-    l2_agent_approval_policy: Literal["never", "on-request", "untrusted"] = Field(
+    l2_target_agent_approval_policy: Literal["never", "on-request", "untrusted"] = Field(
         default="never",
-        validation_alias="L2_AGENT_APPROVAL_POLICY",
+        validation_alias="L2_TARGET_AGENT_APPROVAL_POLICY",
     )
-    l2_agent_run_validation: bool = Field(
+    l2_target_agent_ignore_user_config: bool = Field(
         default=True,
-        validation_alias="L2_AGENT_RUN_VALIDATION",
+        validation_alias="L2_TARGET_AGENT_IGNORE_USER_CONFIG",
     )
-    l2_agent_ignore_user_config: bool = Field(
+    l2_target_agent_ignore_rules: bool = Field(
         default=True,
-        validation_alias="L2_AGENT_IGNORE_USER_CONFIG",
+        validation_alias="L2_TARGET_AGENT_IGNORE_RULES",
     )
-    l2_agent_ignore_rules: bool = Field(default=True, validation_alias="L2_AGENT_IGNORE_RULES")
-    l2_agent_ephemeral: bool = Field(default=True, validation_alias="L2_AGENT_EPHEMERAL")
+    l2_target_agent_ephemeral: bool = Field(
+        default=True,
+        validation_alias="L2_TARGET_AGENT_EPHEMERAL",
+    )
     l2_frame_source: Literal["student", "retrieval"] = Field(
         default="retrieval",
         validation_alias="L2_FRAME_SOURCE",

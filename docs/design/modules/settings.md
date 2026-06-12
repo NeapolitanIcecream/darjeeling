@@ -96,17 +96,14 @@ Replay/promotion：
 - `L2_TUNING_LATENCY_WEIGHT`
 - `L2_TRAINING_SCOPE`: `teacher_train | lower_miss`
 - `L2_TUNING_MIN_EXAMPLES`
-- `L2_AGENT_MODE`: `disabled | dry-run | codex-cli`。这是 legacy core-patch harness 的开关；当前 L2 target-evolution 主路径用 CLI `edge-mvp l2 target-evolve --mode agent-session`。
-- `L2_AGENT_CODEX_COMMAND`
-- `L2_AGENT_MODEL`: 默认 `gpt-5.5`，这是用户决策，优先级高于原 proposal。
-- `L2_AGENT_TIMEOUT_S`: 默认 `7200`，给 coding-agent research iteration 留出较长时间。
-- `L2_AGENT_DRY_RUN_PATCH`
-- `L2_AGENT_SANDBOX`
-- `L2_AGENT_APPROVAL_POLICY`
-- `L2_AGENT_RUN_VALIDATION`
-- `L2_AGENT_IGNORE_USER_CONFIG`: 默认 true，对 Codex CLI 传 `--ignore-user-config`，不加载 `$CODEX_HOME/config.toml`；auth 仍使用 `CODEX_HOME`。
-- `L2_AGENT_IGNORE_RULES`: 默认 true，对 Codex CLI 传 `--ignore-rules`，避免宿主规则污染隔离 experiment。
-- `L2_AGENT_EPHEMERAL`: 默认 true，对 Codex CLI 传 `--ephemeral`。
+- `L2_TARGET_AGENT_CODEX_COMMAND`
+- `L2_TARGET_AGENT_MODEL`: 默认 `gpt-5.5`，用于 `edge-mvp l2 target-evolve --mode agent-session`。
+- `L2_TARGET_AGENT_TIMEOUT_S`: 默认 `7200`，给 target-evolution agent session 留出较长时间。
+- `L2_TARGET_AGENT_SANDBOX`
+- `L2_TARGET_AGENT_APPROVAL_POLICY`
+- `L2_TARGET_AGENT_IGNORE_USER_CONFIG`: 默认 true，对 Codex CLI 传 `--ignore-user-config`，不加载 `$CODEX_HOME/config.toml`；auth 仍使用 `CODEX_HOME`。
+- `L2_TARGET_AGENT_IGNORE_RULES`: 默认 true，对 Codex CLI 传 `--ignore-rules`，避免宿主规则污染隔离 target workspace。
+- `L2_TARGET_AGENT_EPHEMERAL`: 默认 true，对 Codex CLI 传 `--ephemeral`。
 - `L2_MIN_RUNTIME_EXAMPLES`
 - objective weights
 - wrong accept limits

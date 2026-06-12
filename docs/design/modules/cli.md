@@ -144,20 +144,15 @@ Core 不从 `visible_slot_cue_summary` 合成应用特定 probes。
 
 `l2-tuned-lower-miss` 是分布对齐诊断实验：它设置 `L2_TRAINING_SCOPE=lower_miss` 和 `L2_TUNING_MODE=optuna`，让 tuning 与训练只看当前 `teacher_train` 中 L0/L1 未接收的样本，并继续使用 residual validation 做目标评估。该实验用于检验 L2 在真实低层 miss 分布上的吸收改善，不取代默认 `teacher_train` 主线。
 
-`l2-agent` 是 legacy L4 coding-agent patch-generation 实验，不是当前 L2 target-evolution 主路径。它设置 `L2_AGENT_MODE=codex-cli` 和 `L2_TUNING_MODE=optuna`。Harness 会创建隔离 `workspace/l2_research/`，用稳定短 prompt 要求 Codex 读取 `program.md`，把动态 teacher-visible context 放入 `data/`，并限制 agent 只改 `candidate/`。当前 harness 只产出可审计 patch artifact，不在同一 Python 进程中热加载；manifest metrics 会写 `l2_agent_harness_role=legacy_patch_generation_not_target_evolve`。要测 patch 的真实效果，需要外层应用 patch、提交 Git、重启实验。主线 target-dependent L2 runtime code 应走 `edge-mvp l2 target-evolve` 和 `promote-target`。
-
 `workload-locality` 会在同一个 experiment root 下分别运行 `uniform`、`zipf-mild` 和 `zipf-heavy` 子目录。
 
 `experiment compare` 不重新执行实验，只读取已有 run dir。输入可以是重复传入的 `--run`，也可以是 `--root` 下递归发现的 `traces.jsonl` 所在目录。输出 `comparison.csv` 和 `comparison.html`。
 
-`experiment preflight` 是实验前只读检查入口，输出 `experiment-preflight-v1` JSON。它检查 processed train split、teacher cache/API key 可用性、L1 Rust crate、L1/L2 agent 配置和 L3 benchmark artifact。默认不下载数据、不调用 OpenAI、不加载本地 SLM；`--check-l1-build` 才会构建 L1。L3 check 会记录 `mode`、model、device policy、benchmark path、readiness、是否 runtime-blocking 和 benchmark latency/device 摘要。`disabled` 是 non-blocking pass；`shadow` 缺成功 benchmark 是 warn；`guarded` 缺成功 benchmark 是 fail。
+`experiment preflight` 是实验前只读检查入口，输出 `experiment-preflight-v1` JSON。它检查 processed train split、teacher cache/API key 可用性、L1 Rust crate、L1 agent 配置和 L3 benchmark artifact。默认不下载数据、不调用 OpenAI、不加载本地 SLM；`--check-l1-build` 才会构建 L1。L3 check 会记录 `mode`、model、device policy、benchmark path、readiness、是否 runtime-blocking 和 benchmark latency/device 摘要。`disabled` 是 non-blocking pass；`shadow` 缺成功 benchmark 是 warn；`guarded` 缺成功 benchmark 是 fail。
 
 `L1_AGENT_MODE=disabled` 在 preflight 中是 warn，不是 fail。它允许用户跑 smoke/replay 实验，但明确说明这不是完整 L1 evolution；真实 L1 evolution 实验必须显式设置 `L1_AGENT_MODE=agent-session` 并保证 `codex` 命令可用。
 
-`L2_AGENT_MODE=disabled` 在 preflight 中也是 warn，但它只覆盖 legacy
-`l2-agent` patch-generation harness。当前 L2 主路径不靠这个环境变量；真实
-target evolution 应显式运行 `edge-mvp l2 target-evolve --mode agent-session`。
-Legacy `dry-run` 仍需要 `L2_AGENT_DRY_RUN_PATCH`。
+L2 target evolution 不属于 `experiment preflight` 的默认检查范围；真实 target evolution 应显式运行 `edge-mvp l2 target-evolve --mode agent-session`，并用 `L2_TARGET_AGENT_*` 配置 Codex 命令、模型、timeout 和隔离选项。
 
 ## Fail-fast 行为
 

@@ -117,10 +117,10 @@ def test_compiler_generation_records_l2_guard_threshold_search(tmp_path: Path) -
         _teacher_trace("m2", "beta request", "intent_beta"),
         _teacher_trace("m3", "beta alternate request", "intent_beta"),
         _teacher_trace("m4", "beta collection request", "intent_beta"),
-        _teacher_trace("a1", "alpha request for seven", "intent_alpha"),
-        _teacher_trace("a2", "alpha at eight", "intent_alpha"),
-        _teacher_trace("a3", "alpha at nine", "intent_alpha"),
-        _teacher_trace("a4", "set morning alpha", "intent_alpha"),
+        _teacher_trace("a1", "alpha request value alpha", "intent_alpha"),
+        _teacher_trace("a2", "alpha variant value beta", "intent_alpha"),
+        _teacher_trace("a3", "alpha variant value gamma", "intent_alpha"),
+        _teacher_trace("a4", "alpha variant one", "intent_alpha"),
     ]
 
     result = run_compiler_generation(
@@ -187,13 +187,13 @@ def test_compiler_generation_uses_optuna_l2_tuning_when_enabled(
     )
     traces = [
         _teacher_trace("m1", "beta request", "intent_beta"),
-        _teacher_trace("a1", "alpha request for seven", "intent_alpha"),
+        _teacher_trace("a1", "alpha request value alpha", "intent_alpha"),
         _teacher_trace("m2", "beta request", "intent_beta"),
-        _teacher_trace("a2", "alpha at eight", "intent_alpha"),
+        _teacher_trace("a2", "alpha variant value beta", "intent_alpha"),
         _teacher_trace("m3", "beta alternate request", "intent_beta"),
-        _teacher_trace("a3", "alpha at nine", "intent_alpha"),
+        _teacher_trace("a3", "alpha variant value gamma", "intent_alpha"),
         _teacher_trace("m4", "beta collection request", "intent_beta"),
-        _teacher_trace("a4", "set morning alpha", "intent_alpha"),
+        _teacher_trace("a4", "alpha variant one", "intent_alpha"),
     ]
 
     result = run_compiler_generation(
@@ -252,10 +252,16 @@ def test_compiler_generation_can_train_l2_on_observed_lower_misses(
         _trace_with_lower_result("a0", "cached alpha", "intent_alpha", lower_layer="L1"),
         _trace_with_lower_result("m1", "beta request", "intent_beta", lower_layer=None),
         _trace_with_lower_result("m2", "beta request", "intent_beta", lower_layer=None),
-        _trace_with_lower_result("a1", "alpha request for seven", "intent_alpha", lower_layer=None),
-        _trace_with_lower_result("a2", "alpha at eight", "intent_alpha", lower_layer=None),
+        _trace_with_lower_result(
+            "a1", "alpha request value alpha", "intent_alpha", lower_layer=None
+        ),
+        _trace_with_lower_result(
+            "a2", "alpha variant value beta", "intent_alpha", lower_layer=None
+        ),
         _trace_with_lower_result("m3", "beta alternate request", "intent_beta", lower_layer=None),
-        _trace_with_lower_result("a3", "alpha at nine", "intent_alpha", lower_layer=None),
+        _trace_with_lower_result(
+            "a3", "alpha variant value gamma", "intent_alpha", lower_layer=None
+        ),
     ]
 
     result = run_compiler_generation(
@@ -327,10 +333,10 @@ def test_compiler_generation_uses_live_l4_l2_proposal_when_enabled(
             _teacher_trace("m2", "beta request", "intent_beta"),
             _teacher_trace("m3", "beta alternate request", "intent_beta"),
             _teacher_trace("m4", "beta collection request", "intent_beta"),
-            _teacher_trace("a1", "alpha request for seven", "intent_alpha"),
-            _teacher_trace("a2", "alpha at eight", "intent_alpha"),
-            _teacher_trace("a3", "alpha at nine", "intent_alpha"),
-            _teacher_trace("a4", "set morning alpha", "intent_alpha"),
+            _teacher_trace("a1", "alpha request value alpha", "intent_alpha"),
+            _teacher_trace("a2", "alpha variant value beta", "intent_alpha"),
+            _teacher_trace("a3", "alpha variant value gamma", "intent_alpha"),
+            _teacher_trace("a4", "alpha variant one", "intent_alpha"),
         ],
         settings=settings,
     )
@@ -433,79 +439,6 @@ def test_compiler_generation_respects_no_guard_ablation(tmp_path: Path) -> None:
     assert metrics["l2_guard_threshold"] == 0.0
     assert metrics["l2_runtime_enabled"] is True
     assert metrics["l2_guard_search"]["mode"] == "always_accept"
-
-
-def test_compiler_generation_records_l2_agent_patch_artifacts(tmp_path: Path) -> None:
-    patch_path = tmp_path / "l2_agent.patch"
-    patch_path.write_text(
-        "\n".join(
-            [
-                "diff --git a/candidate/tests/test_l2_agent_marker.py "
-                "b/candidate/tests/test_l2_agent_marker.py",
-                "new file mode 100644",
-                "--- /dev/null",
-                "+++ b/candidate/tests/test_l2_agent_marker.py",
-                "@@ -0,0 +1 @@",
-                "+MARKER = 'compiler dry run marker'",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    settings = load_settings()
-    settings.l2_agent_mode = "dry-run"
-    settings.l2_agent_dry_run_patch = patch_path
-    settings.l2_agent_run_validation = False
-
-    result = run_compiler_generation(
-        run_dir=tmp_path,
-        traces=_two_intent_traces(),
-        settings=settings,
-    )
-
-    assert result.manifest is not None
-    manifest = result.manifest
-    metrics = manifest.candidate_metrics
-    assert metrics["l2_agent_mode"] == "dry-run"
-    assert metrics["l2_agent_harness_role"] == "legacy_patch_generation_not_target_evolve"
-    assert metrics["l2_agent_succeeded"] is True
-    assert metrics["l2_agent_patch_runtime_applied"] is False
-    assert "outer process apply/restart" in metrics["l2_agent_patch_runtime_reason"]
-    assert "l2_agent_diff" in manifest.artifact_paths
-    assert "l2_agent_transcript" in manifest.artifact_paths
-    assert "l2_agent_provenance" in manifest.artifact_paths
-    l2_agent_dir = tmp_path / "artifacts" / manifest.artifact_paths["l2_agent_dir"]
-    assert (l2_agent_dir / "workspace" / "l2_research" / "program.md").exists()
-    assert (
-        l2_agent_dir
-        / "workspace"
-        / "l2_research"
-        / "candidate"
-        / "tests/test_l2_agent_marker.py"
-    ).exists()
-    workspace_manifest = json.loads(
-        (
-            l2_agent_dir / "workspace" / "l2_research" / "workspace_manifest.json"
-        ).read_text(encoding="utf-8")
-    )
-    assert workspace_manifest["schema_version"] == "l2-research-workspace-v1"
-    assert workspace_manifest["commands"] == {
-        "inspect_context": "python3 tools/inspect_context.py",
-        "run_checks": "python3 tools/run_checks.py",
-    }
-    context_families = json.loads(
-        (l2_agent_dir / "contexts" / "l2_context_families.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert context_families["schema_version"] == "l2-context-families-v1"
-    assert "gold_frame" not in json.dumps(context_families)
-    provenance = json.loads(
-        (tmp_path / "artifacts" / manifest.artifact_paths["l2_agent_provenance"]).read_text(
-            encoding="utf-8"
-        )
-    )
-    assert provenance["runtime_patch_applied"] is False
 
 
 def test_compiler_generation_uses_l2_mlp_settings(tmp_path: Path) -> None:
@@ -840,8 +773,8 @@ def _two_intent_traces() -> list[TraceRecord]:
         _teacher_trace("m2", "beta request", "intent_beta"),
         _teacher_trace("m3", "beta alternate request", "intent_beta"),
         _teacher_trace("m4", "beta collection request", "intent_beta"),
-        _teacher_trace("a1", "alpha request for seven", "intent_alpha"),
-        _teacher_trace("a2", "alpha at eight", "intent_alpha"),
-        _teacher_trace("a3", "alpha at nine", "intent_alpha"),
-        _teacher_trace("a4", "set morning alpha", "intent_alpha"),
+        _teacher_trace("a1", "alpha request value alpha", "intent_alpha"),
+        _teacher_trace("a2", "alpha variant value beta", "intent_alpha"),
+        _teacher_trace("a3", "alpha variant value gamma", "intent_alpha"),
+        _teacher_trace("a4", "alpha variant one", "intent_alpha"),
     ]

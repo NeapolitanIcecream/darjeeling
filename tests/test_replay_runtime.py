@@ -119,11 +119,17 @@ def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:
             teacher_frame=Frame(intent="intent_beta"),
         ),
         L2TrainingExample(
-            utterance="alpha request for seven",
+            utterance="alpha request value alpha",
             teacher_frame=Frame(intent="intent_alpha"),
         ),
-        L2TrainingExample(utterance="alpha at eight", teacher_frame=Frame(intent="intent_alpha")),
-        L2TrainingExample(utterance="alpha at nine", teacher_frame=Frame(intent="intent_alpha")),
+        L2TrainingExample(
+            utterance="alpha variant value beta",
+            teacher_frame=Frame(intent="intent_alpha"),
+        ),
+        L2TrainingExample(
+            utterance="alpha variant value gamma",
+            teacher_frame=Frame(intent="intent_alpha"),
+        ),
     ]
     bundle = train_l2_student(
         examples,
@@ -165,7 +171,7 @@ def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
         DataRecord(
             request_id="r1",
             utterance="beta sample request",
-            gold_frame=Frame(intent="intent_beta", slots={"genre": "jazz"}),
+            gold_frame=Frame(intent="intent_beta", slots={"slot_beta": "value beta"}),
         ).model_dump_json()
         + "\n",
         encoding="utf-8",
@@ -176,7 +182,7 @@ def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
                 "utterance": "beta sample request",
                 "teacher_frame": {
                     "intent": "intent_beta",
-                    "slots": {"genre": "jazz"},
+                    "slots": {"slot_beta": "value beta"},
                 },
             }
         )
@@ -194,11 +200,17 @@ def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
             teacher_frame=Frame(intent="intent_beta"),
         ),
         L2TrainingExample(
-            utterance="alpha request for seven",
+            utterance="alpha request value alpha",
             teacher_frame=Frame(intent="intent_alpha"),
         ),
-        L2TrainingExample(utterance="alpha at eight", teacher_frame=Frame(intent="intent_alpha")),
-        L2TrainingExample(utterance="alpha at nine", teacher_frame=Frame(intent="intent_alpha")),
+        L2TrainingExample(
+            utterance="alpha variant value beta",
+            teacher_frame=Frame(intent="intent_alpha"),
+        ),
+        L2TrainingExample(
+            utterance="alpha variant value gamma",
+            teacher_frame=Frame(intent="intent_alpha"),
+        ),
     ]
     bundle = train_l2_student(
         examples,
@@ -211,7 +223,7 @@ def postprocess_frame(utterance, frame, metadata):
     del metadata
     if utterance == "beta sample request":
         updated = dict(frame)
-        updated["slots"] = {"genre": "jazz"}
+        updated["slots"] = {"slot_beta": "value beta"}
         return updated
     return frame
 """,
@@ -243,7 +255,7 @@ def postprocess_frame(utterance, frame, metadata):
     assert trace["chosen_layer"] == "L2"
     assert trace["final_frame"] == {
         "intent": "intent_beta",
-        "slots": {"genre": "jazz"},
+        "slots": {"slot_beta": "value beta"},
         "is_abstain": False,
     }
     assert trace["layer_results"][2]["metadata"]["target_postprocessed"] is True
