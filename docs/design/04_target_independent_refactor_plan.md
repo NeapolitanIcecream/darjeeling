@@ -595,6 +595,17 @@ NLU 报告都在 NLU target 侧。
   removed the old shared test path plus old compiler source path from the strict
   boundary allowlist.
 
+### 2026-06-12 NLU L2 target evolution ownership
+
+- NLU L2 target module evolution, local search, diagnostics, visible split/cross-audit
+  gates and workspace tools moved whole to
+  `darjeeling.targets.nlu.compiler.l2_target_evolution`; old
+  `darjeeling.compiler.l2_target_evolution` is a compatibility re-export for CLI
+  and generated tool entrypoints.
+- Moved `tests/test_l2_target_evolution.py` into the NLU target test scope and
+  removed the old shared test path plus old compiler source path from the strict
+  boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

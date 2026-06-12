@@ -5,7 +5,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import darjeeling.compiler.l2_target_evolution as l2_target_evolution
+import darjeeling.targets.nlu.compiler.l2_target_evolution as l2_target_evolution
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.cli import (
     _resolve_l2_target_agent_rounds,
@@ -15,7 +15,8 @@ from darjeeling.cli import (
     _resolve_l2_target_visible_validation_folds,
     app,
 )
-from darjeeling.compiler.l2_target_evolution import (
+from darjeeling.schemas import LayerResult, TraceRecord, traces_to_teacher_view
+from darjeeling.targets.nlu.compiler.l2_target_evolution import (
     L2TargetEvolutionConfig,
     _adoption_decision,
     _selection_decision,
@@ -25,7 +26,7 @@ from darjeeling.compiler.l2_target_evolution import (
     run_l2_target_evolution,
     split_l2_target_traces,
 )
-from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
+from darjeeling.targets.nlu.schemas import Frame
 
 
 def _trace(index: int, *, intent: str, slots: dict[str, str]) -> TraceRecord:
@@ -43,6 +44,14 @@ def _trace(index: int, *, intent: str, slots: dict[str, str]) -> TraceRecord:
             LayerResult(layer="L4", accepted=True, frame=frame, latency_ms=1.0),
         ],
     )
+
+
+def test_legacy_l2_target_evolution_module_reexports_nlu_target_runner() -> None:
+    from darjeeling.compiler.l2_target_evolution import (
+        run_l2_target_evolution as legacy_run_l2_target_evolution,
+    )
+
+    assert legacy_run_l2_target_evolution is run_l2_target_evolution
 
 
 def _trace_with_utterance(
