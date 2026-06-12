@@ -2,7 +2,20 @@ import pytest
 from pydantic import ValidationError
 
 from darjeeling.contracts import LayerResult, TeacherTrace, TraceRecord, to_teacher_trace
+from darjeeling.runtime.exact_cache import ExactJsonCacheLayer, exact_cache_from_teacher_traces
 from darjeeling.runtime.router import JsonCascadeRouter
+
+
+class _NeutralTarget:
+    name = "neutral"
+    schema_version = "neutral-v1"
+
+    def normalize_request(self, input: dict) -> str:
+        return str(input["text"]).strip().lower()
+
+    def validate_output(self, output: dict, task_schema: dict) -> None:
+        if output.get("label") not in task_schema["labels"]:
+            raise ValueError("unsupported label")
 
 
 class _RejectLayer:
@@ -100,3 +113,51 @@ def test_json_cascade_router_routes_opaque_payloads() -> None:
     assert [result.layer for result in results] == ["L0", "L1"]
     assert results[0].accepted is False
     assert results[1].output == {"label": "seen:alpha"}
+
+
+def test_exact_json_cache_layer_uses_target_normalization() -> None:
+    layer = ExactJsonCacheLayer(
+        {"alpha": {"label": "A"}},
+        target=_NeutralTarget(),
+    )
+
+    hit = layer.try_answer({"text": "  Alpha  "})
+    miss = layer.try_answer({"text": "Beta"})
+
+    assert hit.accepted is True
+    assert hit.output == {"label": "A"}
+    assert hit.metadata == {"normalized_request": "alpha"}
+    assert miss.accepted is False
+    assert miss.output is None
+    assert miss.metadata == {"normalized_request": "beta"}
+
+
+def test_exact_cache_from_teacher_traces_uses_teacher_labels() -> None:
+    traces = [
+        TeacherTrace(
+            request_id="r1",
+            input={"text": " Alpha "},
+            teacher_label={"label": "A"},
+            chosen_layer="L4",
+            final_output={"label": "A"},
+            layer_results=[],
+            timestamp="2026-06-12T00:00:00+00:00",
+        ),
+        TeacherTrace(
+            request_id="r2",
+            input={"text": "Beta"},
+            teacher_label=None,
+            chosen_layer="L4",
+            final_output={"label": "B"},
+            layer_results=[],
+            timestamp="2026-06-12T00:00:00+00:00",
+        ),
+    ]
+
+    cache = exact_cache_from_teacher_traces(
+        traces,
+        target=_NeutralTarget(),
+        task_schema={"labels": ["A"]},
+    )
+
+    assert cache == {"alpha": {"label": "A"}}

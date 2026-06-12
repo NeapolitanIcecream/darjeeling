@@ -428,6 +428,17 @@ NLU 报告都在 NLU target 侧。
 - 新增 NLU target test scope `tests/targets/nlu/`，覆盖 target registry、
   frame parser、teacher adapter、target spec equality/validation 和 MASSIVE mapping。
 
+### 2026-06-12 Phase 3 exact-cache slice
+
+- 新增 target-neutral `runtime.exact_cache.ExactJsonCacheLayer`，核心存储形状为
+  `target.normalize_request(input) -> output JSON`，返回
+  `contracts.LayerResult(output=...)`。
+- 新增 `exact_cache_from_teacher_traces(...)`，只读取 teacher-visible
+  `TeacherTrace.input` 和 `TeacherTrace.teacher_label`，可选调用
+  `target.validate_output(...)`，不解释 target payload。
+- 旧 `layers/l0_cache.py` NLU 兼容路径暂不删除，后续 runtime/replay 切换时再把
+  manifest 装载格式从 `frames_by_normalized_utterance` 收敛到 generic exact cache。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
