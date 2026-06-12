@@ -487,6 +487,14 @@ NLU 报告都在 NLU target 侧。
 - L4 transport 仍在旧 module 中，prompt context 渲染仍待拆出；本切片只移走
   schema/parser ownership，降低 core 中重复 NLU 类型定义。
 
+### 2026-06-12 Runtime layer base contract alias
+
+- 旧 `layers.base.RuntimeLayer` 不再定义 `try_answer(utterance: str)`，改为兼容
+  re-export `contracts.RuntimeLayer` 的 target-neutral
+  `try_answer(input: JsonObject) -> LayerResult` protocol。
+- 具体 NLU runtime layers 仍保留旧 `utterance -> frame` 兼容实现，后续迁到
+  `targets.nlu.layers` 并通过 NLU runtime builder 包装。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

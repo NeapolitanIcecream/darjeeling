@@ -43,7 +43,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/eval/experiments.py"),
     Path("src/darjeeling/eval/metrics.py"),
     Path("src/darjeeling/eval/reports.py"),
-    Path("src/darjeeling/layers/base.py"),
     Path("src/darjeeling/layers/l0_cache.py"),
     Path("src/darjeeling/layers/l1_program_bank.py"),
     Path("src/darjeeling/layers/l1_rust_programbank.py"),
