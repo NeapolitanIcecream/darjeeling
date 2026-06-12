@@ -135,6 +135,59 @@ def test_legacy_l0_cache_layer_reexports_nlu_target_layer() -> None:
     assert result.frame == Frame(intent="intent_alpha")
 
 
+def test_nlu_l1_dsl_rule_matches_and_extracts_slots() -> None:
+    from darjeeling.targets.nlu.layers.l1_program_bank import ProgramRule, render_rule
+
+    rule = ProgramRule.model_validate(
+        {
+            "rule_id": "intent_alpha_001",
+            "description": "alpha requests with explicit slot value",
+            "condition": {
+                "and": [
+                    {"contains_any": ["alpha request", "alpha wake"]},
+                    {
+                        "regex_extract": {
+                            "pattern": "(?:for|at) (?P<slot_alpha>.+)$",
+                            "slot_map": {"slot_alpha": "slot_alpha"},
+                        }
+                    },
+                ]
+            },
+            "action": {
+                "accept": {
+                    "intent": "intent_alpha",
+                    "slots_from_regex": True,
+                }
+            },
+        }
+    )
+
+    frame = rule.try_frame("Alpha request for value alpha extended")
+
+    assert frame == Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha extended"})
+    assert "intent_alpha_001" in render_rule(rule)
+
+
+def test_nlu_l1_dsl_rejects_unknown_operator() -> None:
+    from darjeeling.targets.nlu.layers.l1_program_bank import ProgramRule
+
+    with pytest.raises(ValueError, match="unsupported L1 operator"):
+        ProgramRule.model_validate(
+            {
+                "rule_id": "bad_001",
+                "condition": {"decision_tree": {"depth": 3}},
+                "action": {"accept": {"intent": "intent_alpha"}},
+            }
+        )
+
+
+def test_legacy_l1_program_bank_reexports_nlu_target_dsl() -> None:
+    from darjeeling.layers.l1_program_bank import ProgramRule as LegacyProgramRule
+    from darjeeling.targets.nlu.layers.l1_program_bank import ProgramRule
+
+    assert LegacyProgramRule is ProgramRule
+
+
 def test_nlu_teacher_adapter_builds_prompt_and_parses_frame() -> None:
     adapter = NluTeacherAdapter(prompt_version="teacher-test")
     task_schema = TaskSchema(

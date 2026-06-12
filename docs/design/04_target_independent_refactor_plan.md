@@ -509,6 +509,15 @@ NLU 报告都在 NLU target 侧。
   is now a compatibility re-export.
 - Removed `src/darjeeling/layers/l0_cache.py` from the strict boundary allowlist.
 
+### 2026-06-12 NLU L1 Python DSL target ownership
+
+- NLU Python `ProgramRule` / `ProgramBankLayer` DSL moved to
+  `darjeeling.targets.nlu.layers.l1_program_bank`; old
+  `darjeeling.layers.l1_program_bank` is now a compatibility re-export.
+- Moved shared `tests/test_l1_dsl.py` coverage into the NLU target test scope and
+  removed the old shared test path plus `src/darjeeling/layers/l1_program_bank.py`
+  from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
