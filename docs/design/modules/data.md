@@ -1,15 +1,16 @@
 # data 模块
 
-模块根：`darjeeling.data`
+模块根：当前 NLU 数据形状在 `darjeeling.targets.nlu.data`。
 
-## `data.records`
+## `targets.nlu.data` records
 
 职责：
 
-- 定义 dataset-independent `DataRecord`。
-- Core runtime/replay 只依赖该记录格式，不依赖具体数据集 loader。
-- 必需字段只表达通用 request、utterance 和 label；adapter-specific annotation
-  或 template 字段只能作为可选兼容字段或 metadata。
+- 定义当前 NLU target 的 `DataRecord`。
+- 当前 replay compatibility path 读取该记录格式；target-neutral core replay
+  应改为读取 target JSON payload，并交给 selected target 解释。
+- NLU 记录可以包含 utterance、gold frame、workload group key、annotation 和
+  template；这些字段不能成为 core 默认 contract。
 
 ## `targets.nlu.adapters.massive`
 
@@ -20,7 +21,7 @@
 - `trust_remote_code=True` 是 target CLI 非交互初始化的一部分，避免
   `edge-mvp-nlu massive prepare` 在脚本型 dataset 安全提示处阻塞。
 - 将 train/dev/test 处理为稳定的本地 parquet/jsonl。
-- 生成通用 `DataRecord`，包含 utterance、gold frame 和可选 workload group key。
+- 生成 NLU `DataRecord`，包含 utterance、gold frame 和可选 workload group key。
   MASSIVE 的 annotated utterance / normalized template 可写入兼容字段，但不是
   core 必需 contract。
 
@@ -31,7 +32,7 @@
 - `prepare` 阶段可以构造 workload group key 和 gold frame，但这些字段不能进入
   compiler context。
 
-## `targets.nlu.data`
+## `targets.nlu.data` frame helpers
 
 职责：
 

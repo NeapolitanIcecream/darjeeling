@@ -3,12 +3,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.data.records import DataRecord
 from darjeeling.runtime.replay import load_l0_layer_from_manifest, run_replay
 from darjeeling.schemas import Frame, LayerResult, TraceRecord
 from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.compiler.l2_tuner import L2TuneResult
 from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
+from darjeeling.targets.nlu.data import DataRecord
 
 
 def test_legacy_compiler_loop_module_reexports_nlu_target_runner() -> None:

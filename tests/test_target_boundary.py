@@ -1,11 +1,8 @@
 from pathlib import Path
 
-from darjeeling.data.records import DataRecord
 from darjeeling.layers.l4_cloud_llm import TaskSchema
 from darjeeling.runtime.replay import load_processed_records
-from darjeeling.schemas import Frame
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
-from darjeeling.targets.nlu.data import DataRecord as NluDataRecord
 
 STRICT_CORE_NLU_VOCABULARY = (
     "Frame",
@@ -74,18 +71,6 @@ def test_core_defaults_are_dataset_independent() -> None:
     assert schema.schema_version == "task-schema-v1"
     assert DEFAULT_PROCESSED_DATA_DIR == Path("data/processed/default")
     assert settings.l1_rust_crate_dir == Path("native/l1_empty_programbank")
-
-
-def test_legacy_data_record_aliases_nlu_target_record() -> None:
-    assert DataRecord is NluDataRecord
-    record = DataRecord(
-        request_id="r1",
-        utterance="alpha request",
-        gold_frame=Frame(intent="intent_alpha"),
-    )
-    assert record.workload_group_key is None
-    assert record.annotated_utterance is None
-    assert record.template is None
 
 
 def test_processed_data_loader_error_is_dataset_independent(tmp_path: Path) -> None:

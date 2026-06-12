@@ -7,8 +7,6 @@ from typing import Any
 
 from darjeeling.artifacts.store import ArtifactStore
 from darjeeling.compiler.loop import run_compiler_generation
-from darjeeling.data.records import DataRecord
-from darjeeling.data.streams import StreamItem, build_uniform_stream, build_zipf_stream
 from darjeeling.layers.l0_cache import ExactCacheLayer
 from darjeeling.layers.l1_rust_programbank import (
     RustL1Worker,
@@ -31,6 +29,8 @@ from darjeeling.layers.l4_cloud_llm import (
 from darjeeling.runtime.trace import TraceWriter, read_traces
 from darjeeling.schemas import Frame, TraceRecord
 from darjeeling.settings import Settings
+from darjeeling.targets.nlu.data import DataRecord
+from darjeeling.targets.nlu.streams import StreamItem, build_uniform_stream, build_zipf_stream
 
 
 @dataclass(frozen=True)

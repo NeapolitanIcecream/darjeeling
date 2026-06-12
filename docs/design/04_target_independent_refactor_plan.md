@@ -460,7 +460,8 @@ NLU 报告都在 NLU target 侧。
 
 - 旧 `darjeeling.data.records` 和 `darjeeling.data.frames` 不再承载
   `DataRecord`、utterance normalization 或 frame annotation parser 的实现；
-  它们只兼容 re-export `darjeeling.targets.nlu.data` 中的 target-owned 实现。
+  该阶段先只兼容 re-export `darjeeling.targets.nlu.data` 中的 target-owned
+  实现，后续收尾阶段已删除这些 wrapper。
 - 旧 `darjeeling.schemas.Frame` 不再定义独立 core model，而是兼容 alias 到
   `darjeeling.targets.nlu.schemas.Frame`，避免 core 和 target 出现两个不同的
   NLU Frame 类型。
@@ -627,8 +628,9 @@ NLU 报告都在 NLU target 侧。
 ### 2026-06-12 NLU stream grouping ownership
 
 - NLU workload stream helpers that group by `gold_frame.intent` moved to
-  `darjeeling.targets.nlu.streams`; old `darjeeling.data.streams` is a
-  compatibility re-export for replay callers.
+  `darjeeling.targets.nlu.streams`; old `darjeeling.data.streams` was initially
+  a compatibility re-export for replay callers and was removed in the later data
+  wrapper cleanup.
 - Removed the old data stream source path from the strict boundary allowlist.
 
 ### 2026-06-12 NLU compiler loop ownership
@@ -675,6 +677,15 @@ NLU 报告都在 NLU target 侧。
   entrypoint.
 - Removed the duplicate shared MASSIVE prepare test; target-scoped MASSIVE
   adapter coverage remains in `tests/targets/nlu/test_nlu_target.py`.
+
+### 2026-06-12 NLU data wrapper ownership
+
+- Removed the legacy core `darjeeling.data.records` and
+  `darjeeling.data.streams` compatibility wrappers. The current NLU replay path
+  imports target-owned `DataRecord` and stream builders directly until replay is
+  replaced by the neutral target-runtime path.
+- Updated replay tests and data module docs to treat this shape as NLU-owned
+  rather than a core data contract.
 
 ## 风险和处理
 
