@@ -115,8 +115,3 @@ def accept_prediction(utterance, frame, metadata, default_accept):
     assert result.accepted is False
     assert result.reason == "guard rejected"
 
-
-def test_legacy_l2_target_module_reexports_nlu_target_layer() -> None:
-    from darjeeling.layers.l2_target import TargetL2Layer as LegacyTargetL2Layer
-
-    assert LegacyTargetL2Layer is TargetL2Layer

@@ -126,12 +126,10 @@ def test_legacy_l0_compiler_wrapper_uses_nlu_target_normalization() -> None:
     assert cache == {"alpha request": frame}
 
 
-def test_legacy_l0_cache_layer_reexports_nlu_target_layer() -> None:
-    from darjeeling.layers.l0_cache import ExactCacheLayer as LegacyExactCacheLayer
+def test_nlu_l0_cache_layer_normalizes_requests() -> None:
     from darjeeling.targets.nlu.layers.l0_cache import ExactCacheLayer
 
-    assert LegacyExactCacheLayer is ExactCacheLayer
-    layer = LegacyExactCacheLayer()
+    layer = ExactCacheLayer()
     layer.add("  Alpha Request  ", Frame(intent="intent_alpha"))
 
     result = layer.try_answer("alpha request")
@@ -184,13 +182,6 @@ def test_nlu_l1_dsl_rejects_unknown_operator() -> None:
                 "action": {"accept": {"intent": "intent_alpha"}},
             }
         )
-
-
-def test_legacy_l1_program_bank_reexports_nlu_target_dsl() -> None:
-    from darjeeling.layers.l1_program_bank import ProgramRule as LegacyProgramRule
-    from darjeeling.targets.nlu.layers.l1_program_bank import ProgramRule
-
-    assert LegacyProgramRule is ProgramRule
 
 
 def test_nlu_teacher_adapter_builds_prompt_and_parses_frame() -> None:

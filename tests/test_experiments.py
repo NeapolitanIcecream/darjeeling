@@ -14,8 +14,8 @@ from darjeeling.cli import (
 )
 from darjeeling.compiler.l3_prompt_optimizer import l3_prompt_artifact_hash
 from darjeeling.eval.experiments import apply_experiment_settings, experiment_spec
-from darjeeling.layers.l3_local_slm import L3PromptArtifact
 from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
 
 
 def test_experiment_settings_apply_l2_ablations() -> None:

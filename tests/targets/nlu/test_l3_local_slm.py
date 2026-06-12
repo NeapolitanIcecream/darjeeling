@@ -159,8 +159,3 @@ def test_l3_benchmark_layer_records_latency_backend_and_parse_stats() -> None:
     assert metrics["backend"]["actual_device"] == "fake-device"
     assert metrics["request_results"][0]["confidence"] == 0.91
 
-
-def test_legacy_l3_module_reexports_nlu_target_layer() -> None:
-    from darjeeling.layers.l3_local_slm import L3LocalSLMLayer as LegacyL3LocalSLMLayer
-
-    assert LegacyL3LocalSLMLayer is L3LocalSLMLayer

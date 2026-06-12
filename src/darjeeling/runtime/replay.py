@@ -7,19 +7,7 @@ from typing import Any
 
 from darjeeling.artifacts.store import ArtifactStore
 from darjeeling.compiler.loop import run_compiler_generation
-from darjeeling.layers.l0_cache import ExactCacheLayer
-from darjeeling.layers.l1_rust_programbank import (
-    RustL1Worker,
-    RustProgramBankLayer,
-    build_l1_binary,
-)
 from darjeeling.layers.l2_student import L2StudentBundle, L2StudentLayer
-from darjeeling.layers.l2_target import TargetL2Layer
-from darjeeling.layers.l3_local_slm import (
-    L3LocalSLMLayer,
-    L3PromptArtifact,
-    build_l3_layer_from_settings,
-)
 from darjeeling.layers.l4_cloud_llm import (
     CachedTeacherLayer,
     MissingTeacherError,
@@ -30,6 +18,18 @@ from darjeeling.runtime.trace import TraceWriter, read_traces
 from darjeeling.schemas import Frame, TraceRecord
 from darjeeling.settings import Settings
 from darjeeling.targets.nlu.data import DataRecord
+from darjeeling.targets.nlu.layers.l0_cache import ExactCacheLayer
+from darjeeling.targets.nlu.layers.l1_rust_programbank import (
+    RustL1Worker,
+    RustProgramBankLayer,
+    build_l1_binary,
+)
+from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
+from darjeeling.targets.nlu.layers.l3_local_slm import (
+    L3LocalSLMLayer,
+    L3PromptArtifact,
+    build_l3_layer_from_settings,
+)
 from darjeeling.targets.nlu.streams import StreamItem, build_uniform_stream, build_zipf_stream
 
 

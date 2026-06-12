@@ -687,6 +687,13 @@ NLU 报告都在 NLU target 侧。
 - Updated replay tests and data module docs to treat this shape as NLU-owned
   rather than a core data contract.
 
+### 2026-06-12 NLU layer wrapper ownership
+
+- Removed legacy core wrappers for NLU L0 cache, L1 program bank, L1 Rust worker,
+  L2 target runtime and L3 local SLM modules. Current NLU-coupled callers import
+  these implementations from `darjeeling.targets.nlu.layers.*` directly.
+- Removed wrapper-only tests while keeping target-owned behavior coverage.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

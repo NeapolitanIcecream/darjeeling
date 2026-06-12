@@ -52,25 +52,10 @@ from darjeeling.eval.reports import (
     generate_experiment_comparison_report,
     generate_run_report,
 )
-from darjeeling.layers.l1_rust_programbank import (
-    DEFAULT_BENCHMARK_UTTERANCES,
-    benchmark_worker,
-    binary_path_for,
-    build_l1_binary,
-)
 from darjeeling.layers.l2_student import (
     L2StudentConfig,
     train_l2_student,
     training_examples_from_teacher_traces,
-)
-from darjeeling.layers.l2_target import load_target_module, target_config_overrides
-from darjeeling.layers.l3_local_slm import (
-    DEFAULT_L3_BENCHMARK_UTTERANCES,
-    L3LocalSLMLayer,
-    L3PromptArtifact,
-    LocalSLMConfig,
-    LocalSLMError,
-    benchmark_l3_layer,
 )
 from darjeeling.layers.l4_cloud_llm import (
     MissingTeacherError,
@@ -88,6 +73,21 @@ from darjeeling.runtime.trace import read_traces
 from darjeeling.schemas import TeacherTrace, traces_to_teacher_view
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 from darjeeling.targets import registry as target_registry
+from darjeeling.targets.nlu.layers.l1_rust_programbank import (
+    DEFAULT_BENCHMARK_UTTERANCES,
+    benchmark_worker,
+    binary_path_for,
+    build_l1_binary,
+)
+from darjeeling.targets.nlu.layers.l2_target import load_target_module, target_config_overrides
+from darjeeling.targets.nlu.layers.l3_local_slm import (
+    DEFAULT_L3_BENCHMARK_UTTERANCES,
+    L3LocalSLMLayer,
+    L3PromptArtifact,
+    LocalSLMConfig,
+    LocalSLMError,
+    benchmark_l3_layer,
+)
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
