@@ -67,11 +67,15 @@ def test_run_settings_payload_records_non_secret_settings_only(tmp_path: Path) -
         compile_every=2,
         teacher="cache",
         data_dir=tmp_path / "data",
+        target_name="nlu",
+        target_schema_version="nlu-target-v1",
         settings=settings,
     )
 
     assert "openai_api_key" not in payload
     assert payload["openai_api_key_present"] is True
+    assert payload["target_name"] == "nlu"
+    assert payload["target_schema_version"] == "nlu-target-v1"
     assert payload["openai_model"] == "model-from-test"
     assert payload["l4_input_usd_per_million"] == 2.0
 

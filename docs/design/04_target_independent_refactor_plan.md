@@ -446,6 +446,16 @@ NLU 报告都在 NLU target 侧。
 - 字段保持可选，旧 manifest 可以继续加载；core 不写入 NLU 默认值，后续由
   target-aware CLI/runtime builder 在选择 target 后显式填充。
 
+### 2026-06-12 CLI target selection compatibility
+
+- `edge-mvp run` 和 `edge-mvp report` 新增 `--target` 参数，默认 `nlu`，通过
+  repo-local static registry 校验 target 名称。
+- `run` 暂时仍调用旧 NLU replay path，但会把 `target_name` 和
+  `target_schema_version` 写入 run settings，给后续 target-aware runtime builder
+  和 manifest 写入打基础。
+- 现有 experiment helpers 暂时显式使用 `target="nlu"`，等 core experiment CLI
+  拆分 target settings 后再暴露 target option。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

@@ -87,6 +87,7 @@ from darjeeling.runtime.replay import (
 from darjeeling.runtime.trace import read_traces
 from darjeeling.schemas import TeacherTrace, traces_to_teacher_view
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
+from darjeeling.targets import registry as target_registry
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -128,6 +129,10 @@ def run(
         Path,
         typer.Option(help="Processed data directory produced by prepare."),
     ] = DEFAULT_PROCESSED_DATA_DIR,
+    target: Annotated[
+        str,
+        typer.Option(help="Target name from the static target registry."),
+    ] = "nlu",
 ) -> None:
     """Run the replay demo.
 
@@ -144,6 +149,7 @@ def run(
             teacher=teacher,
             run_dir=run_dir,
             data_dir=data_dir,
+            target=target,
             settings=settings,
         )
     except (FileNotFoundError, LocalSLMError, MissingTeacherError, ValueError) as exc:
@@ -162,9 +168,14 @@ def report(
         Path,
         typer.Option(help="Run directory to summarize."),
     ] = Path("runs/latest"),
+    target: Annotated[
+        str,
+        typer.Option(help="Target name from the static target registry."),
+    ] = "nlu",
 ) -> None:
     """Generate run report files."""
 
+    target_registry.get_target(target)
     result = generate_run_report(run_dir)
     console.print(f"wrote {result.summary_path}")
 
@@ -177,8 +188,10 @@ def _execute_replay_run(
     teacher: str,
     run_dir: Path,
     data_dir: Path,
+    target: str = "nlu",
     settings,
 ):
+    target_spec = target_registry.get_target(target)
     run_dir.mkdir(parents=True, exist_ok=True)
     require_live_or_cached_teacher(settings, teacher, run_dir / "teacher_cache.jsonl")
     write_run_settings(
@@ -189,6 +202,8 @@ def _execute_replay_run(
             compile_every=compile_every,
             teacher=teacher,
             data_dir=data_dir,
+            target_name=target_spec.name,
+            target_schema_version=target_spec.schema_version,
             settings=settings,
         ),
     )
@@ -210,6 +225,8 @@ def _run_settings_payload(
     compile_every: int,
     teacher: str,
     data_dir: Path,
+    target_name: str,
+    target_schema_version: str,
     settings,
 ) -> dict:
     settings_payload = settings.model_dump(mode="json", exclude={"openai_api_key"})
@@ -221,6 +238,8 @@ def _run_settings_payload(
         "compile_every": compile_every,
         "teacher": teacher,
         "data_dir": str(data_dir),
+        "target_name": target_name,
+        "target_schema_version": target_schema_version,
     }
 
 
@@ -2306,6 +2325,7 @@ def _execute_experiment_run(
             teacher=teacher,
             run_dir=run_dir,
             data_dir=data_dir,
+            target="nlu",
             settings=settings,
         )
         report_result = generate_run_report(run_dir)
