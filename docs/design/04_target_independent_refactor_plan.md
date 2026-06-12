@@ -648,10 +648,9 @@ NLU 报告都在 NLU target 侧。
   old `darjeeling.compiler.*` modules are compatibility re-exports for CLI and
   report callers.
 - Moved `tests/test_hard_buffer.py` and `tests/test_replay_promotion.py` into the
-  NLU target test scope and removed the old shared test paths plus old objective
-  and replay source paths from the strict boundary allowlist. The old mining
-  source path remains allowlisted while it preserves the legacy `hot_intents`
-  export.
+  NLU target test scope and removed the old shared test paths plus old compiler
+  helper source paths from the strict boundary allowlist. The legacy core mining
+  wrapper no longer re-exports target-specific `hot_intents`.
 
 ## 风险和处理
 
