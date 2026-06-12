@@ -536,6 +536,15 @@ NLU 报告都在 NLU target 侧。
   removed the old shared test path plus `src/darjeeling/layers/l1_rust_programbank.py`
   from the strict boundary allowlist.
 
+### 2026-06-12 NLU L3 local SLM target ownership
+
+- NLU `L3LocalSLMLayer`, prompt artifact parsing, validation and benchmarking moved
+  to `darjeeling.targets.nlu.layers.l3_local_slm`; old
+  `darjeeling.layers.l3_local_slm` is now a compatibility re-export.
+- Moved `tests/test_l3_local_slm.py` into the NLU target test scope and removed
+  the old shared test path plus `src/darjeeling/layers/l3_local_slm.py` from the
+  strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

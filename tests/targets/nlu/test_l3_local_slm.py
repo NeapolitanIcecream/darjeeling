@@ -1,6 +1,6 @@
 import pytest
 
-from darjeeling.layers.l3_local_slm import (
+from darjeeling.targets.nlu.layers.l3_local_slm import (
     L3LocalSLMLayer,
     LocalSLMConfig,
     LocalSLMLoadError,
@@ -8,7 +8,7 @@ from darjeeling.layers.l3_local_slm import (
     parse_l3_output,
     validate_l3_output,
 )
-from darjeeling.layers.l4_cloud_llm import TaskSchema
+from darjeeling.targets.nlu.schemas import TaskSchema
 
 
 class FakeBackend:
@@ -158,3 +158,9 @@ def test_l3_benchmark_layer_records_latency_backend_and_parse_stats() -> None:
     assert metrics["parse_failures"] == 0
     assert metrics["backend"]["actual_device"] == "fake-device"
     assert metrics["request_results"][0]["confidence"] == 0.91
+
+
+def test_legacy_l3_module_reexports_nlu_target_layer() -> None:
+    from darjeeling.layers.l3_local_slm import L3LocalSLMLayer as LegacyL3LocalSLMLayer
+
+    assert LegacyL3LocalSLMLayer is L3LocalSLMLayer
