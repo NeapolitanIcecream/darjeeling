@@ -14,12 +14,6 @@ import typer
 from rich.console import Console
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.eval.experiments import (
-    ExperimentSpec,
-    apply_experiment_settings,
-    experiment_metadata,
-    experiment_spec,
-)
 from darjeeling.eval.reports import (
     generate_experiment_comparison_report,
     generate_run_report,
@@ -62,6 +56,12 @@ from darjeeling.targets.nlu.compiler.replay import (
     evaluate_offline_artifact_set,
     layer_deltas,
     load_offline_artifact_set,
+)
+from darjeeling.targets.nlu.experiments import (
+    ExperimentSpec,
+    apply_experiment_settings,
+    experiment_metadata,
+    experiment_spec,
 )
 from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     DEFAULT_BENCHMARK_UTTERANCES,

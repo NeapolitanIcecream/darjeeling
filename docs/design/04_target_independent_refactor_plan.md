@@ -709,6 +709,13 @@ NLU 报告都在 NLU target 侧。
 - Removed wrapper-only compiler re-export tests while keeping target behavior and
   generated-tool coverage.
 
+### 2026-06-12 NLU experiment registry ownership
+
+- Moved the concrete NLU experiment specs and settings override table from
+  `darjeeling.eval.experiments` to `darjeeling.targets.nlu.experiments`.
+- CLI and experiment tests now import the target-owned registry directly, and the
+  old eval experiment source path was removed from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
