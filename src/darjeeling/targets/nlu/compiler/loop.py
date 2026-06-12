@@ -7,24 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore, LayerDelta
-from darjeeling.compiler.mining import (
-    HardCase,
-    build_hard_buffer,
-    hard_case_reason_counts,
-    hard_case_traces,
-    hard_case_visibility_counts,
-    load_hard_buffer_jsonl,
-    merge_hard_buffers,
-    write_hard_buffer_jsonl,
-)
-from darjeeling.compiler.replay import (
-    OfflineArtifactSet,
-    decide_artifact_set_promotion,
-    evaluate_offline_artifact_set,
-    layer_deltas,
-    load_offline_artifact_set,
-    split_teacher_traces,
-)
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.schemas import TeacherTrace, TraceRecord, traces_to_teacher_view
 from darjeeling.settings import Settings
@@ -56,6 +38,24 @@ from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import (
     l3_prompt_artifact_from_proposal,
 )
 from darjeeling.targets.nlu.compiler.l4_proposal import L4ProposalAdapter, ProposalParseError
+from darjeeling.targets.nlu.compiler.mining import (
+    HardCase,
+    build_hard_buffer,
+    hard_case_reason_counts,
+    hard_case_traces,
+    hard_case_visibility_counts,
+    load_hard_buffer_jsonl,
+    merge_hard_buffers,
+    write_hard_buffer_jsonl,
+)
+from darjeeling.targets.nlu.compiler.replay import (
+    OfflineArtifactSet,
+    decide_artifact_set_promotion,
+    evaluate_offline_artifact_set,
+    layer_deltas,
+    load_offline_artifact_set,
+    split_teacher_traces,
+)
 from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     DEFAULT_BENCHMARK_UTTERANCES,
     benchmark_worker,

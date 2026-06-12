@@ -1,16 +1,16 @@
 from pathlib import Path
 
-import darjeeling.compiler.replay as replay_module
+import darjeeling.targets.nlu.compiler.replay as replay_module
 from darjeeling.artifacts.store import LayerDelta
-from darjeeling.compiler.objective import ObjectiveMetrics
-from darjeeling.compiler.replay import (
+from darjeeling.runtime.cost import ReplayCostModel
+from darjeeling.schemas import Frame, LayerResult, TeacherTrace
+from darjeeling.targets.nlu.compiler.objective import ObjectiveMetrics
+from darjeeling.targets.nlu.compiler.replay import (
     OfflineArtifactSet,
     decide_artifact_set_promotion,
     decide_promotion,
     evaluate_offline_artifact_set,
 )
-from darjeeling.runtime.cost import ReplayCostModel
-from darjeeling.schemas import Frame, LayerResult, TeacherTrace
 
 
 def test_replay_promotes_only_when_objective_improves_within_gates() -> None:

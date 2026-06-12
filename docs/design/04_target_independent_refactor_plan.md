@@ -641,6 +641,18 @@ NLU 报告都在 NLU target 侧。
   NLU target test scope and removed the old shared test paths plus old compiler
   loop source path from the strict boundary allowlist.
 
+### 2026-06-12 NLU compiler mining/replay ownership
+
+- NLU hard-buffer mining, objective scoring and offline artifact replay/promotion
+  helpers moved to `darjeeling.targets.nlu.compiler.{mining,objective,replay}`;
+  old `darjeeling.compiler.*` modules are compatibility re-exports for CLI and
+  report callers.
+- Moved `tests/test_hard_buffer.py` and `tests/test_replay_promotion.py` into the
+  NLU target test scope and removed the old shared test paths plus old objective
+  and replay source paths from the strict boundary allowlist. The old mining
+  source path remains allowlisted while it preserves the legacy `hot_intents`
+  export.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
