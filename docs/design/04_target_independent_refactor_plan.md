@@ -606,6 +606,16 @@ NLU 报告都在 NLU target 侧。
   removed the old shared test path plus old compiler source path from the strict
   boundary allowlist.
 
+### 2026-06-12 NLU L1 coding-agent compiler ownership
+
+- NLU L1 coding-agent workspace/context/provenance logic moved to
+  `darjeeling.targets.nlu.compiler.l1_program_compiler`; old
+  `darjeeling.compiler.l1_program_compiler` is a compatibility re-export for the
+  core compiler loop.
+- Moved `tests/test_l1_coding_agent.py` into the NLU target test scope and
+  removed the old shared test path plus old compiler source path from the strict
+  boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

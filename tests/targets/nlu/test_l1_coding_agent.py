@@ -3,14 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from darjeeling.compiler.l1_program_compiler import (
+from darjeeling.schemas import LayerResult, TraceRecord, traces_to_teacher_view
+from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.compiler.l1_program_compiler import (
     L1CodingAgentError,
     L1CodingAgentJobConfig,
     L4CodingAgentAdapter,
     run_l1_coding_agent_job,
 )
-from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
-from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.schemas import Frame
 
 
 def _teacher_trace():
@@ -31,6 +32,14 @@ def _teacher_trace():
         ],
     )
     return traces_to_teacher_view([trace])[0]
+
+
+def test_legacy_l1_program_compiler_module_reexports_nlu_target_adapter() -> None:
+    from darjeeling.compiler.l1_program_compiler import (
+        L4CodingAgentAdapter as LegacyL4CodingAgentAdapter,
+    )
+
+    assert LegacyL4CodingAgentAdapter is L4CodingAgentAdapter
 
 
 def test_l1_coding_agent_dry_run_packages_workspace_and_context(
@@ -120,7 +129,7 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     fake_codex = tmp_path / "fake_codex.py"
     fake_codex.write_text(
         "\n".join(
@@ -187,7 +196,7 @@ def test_l1_agent_session_uses_workspace_root_and_records_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     fake_codex = tmp_path / "fake_codex.py"
     fake_codex.write_text(
         "\n".join(
@@ -258,7 +267,7 @@ def test_l1_agent_session_rejects_protected_workspace_edits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     fake_codex = tmp_path / "fake_codex.py"
     fake_codex.write_text(
         "\n".join(
