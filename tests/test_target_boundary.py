@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from darjeeling.runtime.replay import load_processed_records
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
+from darjeeling.targets.nlu.replay import load_processed_records
 
 STRICT_CORE_NLU_VOCABULARY = (
     "Frame",
@@ -22,7 +22,6 @@ STRICT_CORE_NLU_VOCABULARY = (
 
 CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/cli.py"),
-    Path("src/darjeeling/runtime/replay.py"),
     Path("src/darjeeling/runtime/router.py"),
     Path("src/darjeeling/runtime/trace.py"),
     Path("src/darjeeling/schemas.py"),
@@ -83,8 +82,10 @@ def test_processed_data_loader_error_is_dataset_independent(tmp_path: Path) -> N
     assert "MASSIVE" not in message
 
 
-def test_core_runtime_replay_does_not_import_massive_adapter() -> None:
-    source = Path("src/darjeeling/runtime/replay.py").read_text(encoding="utf-8")
+def test_core_runtime_no_longer_owns_nlu_replay_or_massive_adapter() -> None:
+    assert not Path("src/darjeeling/runtime/replay.py").exists()
+
+    source = Path("src/darjeeling/targets/nlu/replay.py").read_text(encoding="utf-8")
 
     assert "darjeeling.adapters.massive" not in source
     assert "darjeeling.data.massive" not in source

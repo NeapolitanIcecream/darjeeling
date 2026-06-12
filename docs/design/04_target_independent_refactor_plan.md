@@ -725,6 +725,14 @@ NLU 报告都在 NLU target 侧。
 - CLI and report tests import the target report module directly, and the old eval
   report source path was removed from the strict boundary allowlist.
 
+### 2026-06-12 NLU replay ownership
+
+- Moved the concrete NLU replay path from `darjeeling.runtime.replay` to
+  `darjeeling.targets.nlu.replay`. It still uses shared trace/artifact plumbing,
+  but the NLU record, schema, layer and compiler wiring now sits target-side.
+- CLI and replay tests import the target replay module directly, and the old
+  runtime replay source path was removed from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

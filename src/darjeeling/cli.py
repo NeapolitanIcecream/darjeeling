@@ -15,12 +15,6 @@ from rich.console import Console
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.runtime.cost import replay_cost_model_from_settings
-from darjeeling.runtime.replay import (
-    load_processed_records,
-    run_replay,
-    task_schema_from_records,
-    write_run_settings,
-)
 from darjeeling.runtime.trace import read_traces
 from darjeeling.schemas import TeacherTrace, traces_to_teacher_view
 from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
@@ -83,6 +77,12 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     MissingTeacherError,
     TaskSchema,
     require_live_or_cached_teacher,
+)
+from darjeeling.targets.nlu.replay import (
+    load_processed_records,
+    run_replay,
+    task_schema_from_records,
+    write_run_settings,
 )
 from darjeeling.targets.nlu.reports import (
     generate_experiment_comparison_report,

@@ -3,12 +3,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.runtime.replay import load_l0_layer_from_manifest, run_replay
 from darjeeling.schemas import Frame, LayerResult, TraceRecord
 from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.compiler.l2_tuner import L2TuneResult
 from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
 from darjeeling.targets.nlu.data import DataRecord
+from darjeeling.targets.nlu.replay import load_l0_layer_from_manifest, run_replay
 
 
 def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Path) -> None:
