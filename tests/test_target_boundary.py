@@ -27,7 +27,6 @@ CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/cli.py"),
     Path("src/darjeeling/data/frames.py"),
     Path("src/darjeeling/eval/experiments.py"),
-    Path("src/darjeeling/eval/metrics.py"),
     Path("src/darjeeling/eval/reports.py"),
     Path("src/darjeeling/layers/l2_student.py"),
     Path("src/darjeeling/layers/l4_cloud_llm.py"),

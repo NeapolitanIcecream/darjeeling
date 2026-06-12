@@ -652,6 +652,14 @@ NLU 报告都在 NLU target 侧。
   helper source paths from the strict boundary allowlist. The legacy core mining
   wrapper no longer re-exports target-specific `hot_intents`.
 
+### 2026-06-12 NLU eval metric ownership
+
+- NLU frame/intent comparison helpers moved to `darjeeling.targets.nlu.metrics`.
+  The unused core `darjeeling.eval.metrics` module was removed instead of kept as
+  a target-specific compatibility wrapper.
+- Added target-scoped metric coverage and removed the old eval metrics source
+  path from the strict boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

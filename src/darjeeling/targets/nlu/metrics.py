@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from darjeeling.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame
 
 
 def frame_exact_match(predicted: Frame, expected: Frame) -> bool:

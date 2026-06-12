@@ -79,6 +79,19 @@ def test_nlu_frame_parser_extracts_slots_from_bracket_annotation() -> None:
     assert normalized_template(annotated) == "alpha request [slot_alpha]"
 
 
+def test_nlu_metrics_compare_frames_and_intents() -> None:
+    from darjeeling.targets.nlu.metrics import frame_exact_match, intent_matches
+
+    expected = Frame(intent="intent_alpha", slots={"slot_alpha": "value alpha"})
+    same_intent = Frame(intent="intent_alpha", slots={"slot_alpha": "other"})
+    different_intent = Frame(intent="intent_beta", slots={"slot_alpha": "value alpha"})
+
+    assert frame_exact_match(expected, expected) is True
+    assert frame_exact_match(same_intent, expected) is False
+    assert intent_matches(same_intent, expected) is True
+    assert intent_matches(different_intent, expected) is False
+
+
 def test_legacy_frame_parser_module_reexports_target_functions() -> None:
     from darjeeling.data.frames import (
         frame_from_annotated_utterance as legacy_frame_from_annotated_utterance,
