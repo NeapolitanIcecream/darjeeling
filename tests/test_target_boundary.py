@@ -23,11 +23,6 @@ STRICT_CORE_NLU_VOCABULARY = (
 CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/cli.py"),
     Path("src/darjeeling/settings.py"),
-    Path("tests/test_experiment_suite_cli.py"),
-    Path("tests/test_experiments.py"),
-    Path("tests/test_replay_runtime.py"),
-    Path("tests/test_report_l3_summary.py"),
-    Path("tests/test_settings.py"),
     Path("tests/test_target_boundary.py"),
 }
 

@@ -755,6 +755,13 @@ NLU 报告都在 NLU target 侧。
   and the old runtime trace source path was removed from the strict boundary
   allowlist.
 
+### 2026-06-12 NLU test-scope ownership
+
+- Moved root tests for NLU experiment CLI, experiment specs, replay runtime,
+  reports and settings into `tests/targets/nlu/`.
+- Removed those old shared root test paths from the strict boundary allowlist so
+  shared tests are closer to target-neutral fixtures only.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
