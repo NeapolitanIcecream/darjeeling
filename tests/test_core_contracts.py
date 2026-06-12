@@ -3,7 +3,7 @@ from pydantic import ValidationError
 
 from darjeeling.contracts import LayerResult, TeacherTrace, TraceRecord, to_teacher_trace
 from darjeeling.runtime.exact_cache import ExactJsonCacheLayer, exact_cache_from_teacher_traces
-from darjeeling.runtime.router import JsonCascadeRouter
+from darjeeling.runtime.router import CascadeRouter
 
 
 class _NeutralTarget:
@@ -105,7 +105,7 @@ def test_teacher_trace_rejects_private_label_field() -> None:
 
 
 def test_json_cascade_router_routes_opaque_payloads() -> None:
-    router = JsonCascadeRouter([_RejectLayer(), _AcceptLayer()])
+    router = CascadeRouter([_RejectLayer(), _AcceptLayer()])
 
     output, results = router.route({"text": "alpha"})
 

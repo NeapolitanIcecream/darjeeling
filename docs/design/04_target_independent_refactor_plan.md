@@ -495,6 +495,13 @@ NLU 报告都在 NLU target 侧。
 - 具体 NLU runtime layers 仍保留旧 `utterance -> frame` 兼容实现，后续迁到
   `targets.nlu.layers` 并通过 NLU runtime builder 包装。
 
+### 2026-06-12 Runtime router API flip
+
+- `runtime.router.CascadeRouter` 改为 target-neutral 主 API：
+  `route(input: JsonObject) -> (output JSON, layer_results)`。
+- 旧 `utterance -> Frame` cascade 保留为显式 `FrameCascadeRouter`，`JsonCascadeRouter`
+  暂时作为 `CascadeRouter` alias 保持兼容。
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
