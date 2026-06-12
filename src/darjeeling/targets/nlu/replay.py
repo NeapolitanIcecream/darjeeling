@@ -1,35 +1,35 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from darjeeling.artifacts.store import ArtifactStore
-from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
+from darjeeling.contracts import CompileContext
+from darjeeling.contracts import LayerResult as CoreLayerResult
+from darjeeling.contracts import TeacherTrace as CoreTeacherTrace
+from darjeeling.runtime.router import CascadeRouter
 from darjeeling.targets.nlu.data import DataRecord
 from darjeeling.targets.nlu.layers.l0_cache import ExactCacheLayer
 from darjeeling.targets.nlu.layers.l1_rust_programbank import (
-    RustL1Worker,
-    RustProgramBankLayer,
     build_l1_binary,
 )
 from darjeeling.targets.nlu.layers.l2_student import L2StudentBundle, L2StudentLayer
 from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
 from darjeeling.targets.nlu.layers.l3_local_slm import (
-    L3LocalSLMLayer,
     L3PromptArtifact,
-    build_l3_layer_from_settings,
 )
 from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     CachedTeacherLayer,
-    MissingTeacherError,
     TaskSchema,
     TeacherCache,
 )
 from darjeeling.targets.nlu.schemas import Frame, TraceRecord
 from darjeeling.targets.nlu.settings import Settings
 from darjeeling.targets.nlu.streams import StreamItem, build_uniform_stream, build_zipf_stream
+from darjeeling.targets.nlu.target import NluLayerAdapter, NluTarget
 from darjeeling.targets.nlu.trace import TraceWriter, read_traces
 
 
@@ -49,14 +49,15 @@ def run_replay(
     data_dir: Path,
     settings: Settings,
     compile_every: int | None = None,
+    target: NluTarget | None = None,
 ) -> ReplaySummary:
+    target = target or NluTarget()
     records = load_processed_records(data_dir)
     stream_items = select_stream(records, stream=stream, max_requests=max_requests)
     task_schema = task_schema_from_records(records)
 
     teacher_cache_path = run_dir / "teacher_cache.jsonl"
     teacher_cache = TeacherCache.load(teacher_cache_path)
-    l0 = load_l0_layer_from_manifest(run_dir)
     l4 = CachedTeacherLayer(
         teacher_cache,
         allow_live=teacher_mode in {"live", "live-or-cache"},
@@ -64,59 +65,26 @@ def run_replay(
         settings=settings,
         task_schema=task_schema,
     )
-
-    l1_source_dir = load_l1_source_dir_from_manifest(run_dir) or settings.l1_rust_crate_dir
-    binary_path = l1_binary_path_for_source(l1_source_dir, settings=settings)
-    l2_layer = load_l2_layer_from_manifest(run_dir, settings=settings)
-    l3_layer = build_l3_layer_from_settings(
-        settings=settings,
-        task_schema=task_schema,
-        prompt_artifact=load_l3_prompt_artifact_from_manifest(run_dir),
-    )
     traces_path = run_dir / "traces.jsonl"
     trace_writer = TraceWriter(traces_path)
     layer_counts: dict[str, int] = {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0}
 
-    rust_worker = RustL1Worker(binary_path, timeout_s=settings.l1_worker_timeout_s)
+    runtime_layers = _build_runtime_layers(
+        target=target,
+        run_dir=run_dir,
+        settings=settings,
+        task_schema=task_schema,
+        teacher_layer=l4,
+    )
     try:
-        l1 = RustProgramBankLayer(rust_worker)
+        router = _router_from_layers(runtime_layers)
         for index, item in enumerate(stream_items, start=1):
             record = item.record
             utterance = record.utterance
-            layer_results = []
-
-            l0_result = l0.try_answer(utterance)
-            layer_results.append(l0_result)
-            if l0_result.accepted and l0_result.frame is not None:
-                final_frame = l0_result.frame
-                chosen_layer = "L0"
-            else:
-                l1_result = l1.try_answer(utterance)
-                layer_results.append(l1_result)
-                if l1_result.accepted and l1_result.frame is not None:
-                    final_frame = l1_result.frame
-                    chosen_layer = "L1"
-                else:
-                    if l2_layer is not None:
-                        l2_result = l2_layer.try_answer(utterance)
-                        layer_results.append(l2_result)
-                        if l2_result.accepted and l2_result.frame is not None:
-                            final_frame = l2_result.frame
-                            chosen_layer = "L2"
-                        else:
-                            final_frame, chosen_layer = _answer_with_l3_or_l4(
-                                utterance=utterance,
-                                l3_layer=l3_layer,
-                                l4_layer=l4,
-                                layer_results=layer_results,
-                            )
-                    else:
-                        final_frame, chosen_layer = _answer_with_l3_or_l4(
-                            utterance=utterance,
-                            l3_layer=l3_layer,
-                            l4_layer=l4,
-                            layer_results=layer_results,
-                        )
+            output, core_layer_results = router.route({"utterance": utterance})
+            final_frame = Frame.model_validate(output)
+            chosen_layer = core_layer_results[-1].layer
+            layer_results = [_legacy_layer_result(result) for result in core_layer_results]
 
             layer_counts[chosen_layer] += 1
             teacher_frame = teacher_cache.get(utterance)
@@ -132,27 +100,24 @@ def run_replay(
                 )
             )
             if compile_every is not None and index % compile_every == 0:
-                run_compiler_generation(
+                _run_target_compiler(
+                    target=target,
                     run_dir=run_dir,
-                    traces=read_traces(traces_path),
+                    task_schema=task_schema,
                     settings=settings,
+                    traces=read_traces(traces_path),
                 )
-                l0 = load_l0_layer_from_manifest(run_dir)
-                l2_layer = load_l2_layer_from_manifest(run_dir, settings=settings)
-                next_l1_source_dir = (
-                    load_l1_source_dir_from_manifest(run_dir) or settings.l1_rust_crate_dir
+                _close_runtime_layers(runtime_layers)
+                runtime_layers = _build_runtime_layers(
+                    target=target,
+                    run_dir=run_dir,
+                    settings=settings,
+                    task_schema=task_schema,
+                    teacher_layer=l4,
                 )
-                if next_l1_source_dir != l1_source_dir:
-                    rust_worker.close()
-                    l1_source_dir = next_l1_source_dir
-                    binary_path = l1_binary_path_for_source(l1_source_dir, settings=settings)
-                    rust_worker = RustL1Worker(
-                        binary_path,
-                        timeout_s=settings.l1_worker_timeout_s,
-                    )
-                    l1 = RustProgramBankLayer(rust_worker)
+                router = _router_from_layers(runtime_layers)
     finally:
-        rust_worker.close()
+        _close_runtime_layers(runtime_layers)
 
     return ReplaySummary(
         requests=len(stream_items),
@@ -296,20 +261,101 @@ def write_run_settings(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _answer_with_l3_or_l4(
+def _build_runtime_layers(
     *,
-    utterance: str,
-    l3_layer: L3LocalSLMLayer,
-    l4_layer: CachedTeacherLayer,
-    layer_results: list[Any],
-) -> tuple[Frame, str]:
-    l3_result = l3_layer.try_answer(utterance)
-    layer_results.append(l3_result)
-    if l3_result.accepted and l3_result.frame is not None:
-        return l3_result.frame, "L3"
+    target: NluTarget,
+    run_dir: Path,
+    settings: Settings,
+    task_schema: TaskSchema,
+    teacher_layer: CachedTeacherLayer,
+) -> dict[str, Any]:
+    manifest = ArtifactStore(run_dir / "artifacts").load_current_manifest()
+    return dict(
+        target.runtime.build_layers(
+            manifest=manifest,
+            teacher=NluLayerAdapter(teacher_layer, layer_name="L4"),
+            settings={
+                "run_dir": str(run_dir),
+                "artifact_root": str(run_dir / "artifacts"),
+                "task_schema": task_schema.to_payload(),
+                "nlu_settings": settings.model_dump(mode="json"),
+            },
+        )
+    )
 
-    l4_result = l4_layer.try_answer(utterance)
-    layer_results.append(l4_result)
-    if not l4_result.accepted or l4_result.frame is None:
-        raise MissingTeacherError(f"L4 did not produce a frame for {utterance!r}")
-    return l4_result.frame, "L4"
+
+def _router_from_layers(runtime_layers: Mapping[str, Any]) -> CascadeRouter:
+    ordered_layers = [
+        runtime_layers[layer]
+        for layer in ("L0", "L1", "L2", "L3", "L4")
+        if runtime_layers.get(layer) is not None
+    ]
+    return CascadeRouter(ordered_layers)
+
+
+def _close_runtime_layers(runtime_layers: Mapping[str, Any]) -> None:
+    for layer in runtime_layers.values():
+        close = getattr(layer, "close", None)
+        if close is not None:
+            close()
+
+
+def _legacy_layer_result(result: CoreLayerResult):
+    from darjeeling.targets.nlu.schemas import LayerResult
+
+    return LayerResult(
+        layer=result.layer,
+        accepted=result.accepted,
+        frame=Frame.model_validate(result.output) if result.output is not None else None,
+        confidence=result.confidence,
+        reason=result.reason,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        metadata=result.metadata,
+    )
+
+
+def _core_teacher_trace(trace: TraceRecord) -> CoreTeacherTrace:
+    return CoreTeacherTrace(
+        request_id=trace.request_id,
+        input={"utterance": trace.utterance},
+        teacher_label=trace.teacher_frame.model_dump(mode="json")
+        if trace.teacher_frame is not None
+        else None,
+        chosen_layer=trace.chosen_layer,
+        final_output=trace.final_frame.model_dump(mode="json"),
+        layer_results=[
+            CoreLayerResult(
+                layer=result.layer,
+                accepted=result.accepted,
+                output=result.frame.model_dump(mode="json") if result.frame is not None else None,
+                confidence=result.confidence,
+                reason=result.reason,
+                latency_ms=result.latency_ms,
+                cost_usd=result.cost_usd,
+                metadata=result.metadata,
+            )
+            for result in trace.layer_results
+        ],
+        l4_usage=trace.l4_usage,
+        timestamp=trace.timestamp,
+    )
+
+
+def _run_target_compiler(
+    *,
+    target: NluTarget,
+    run_dir: Path,
+    task_schema: TaskSchema,
+    settings: Settings,
+    traces: list[TraceRecord],
+) -> None:
+    target.compiler.propose_artifacts(
+        CompileContext(
+            run_dir=run_dir,
+            task_schema=task_schema.to_payload(),
+            teacher_traces=[_core_teacher_trace(trace) for trace in traces],
+            current_manifest=ArtifactStore(run_dir / "artifacts").load_current_manifest(),
+            settings={"nlu_settings": settings.model_dump(mode="json")},
+        )
+    )

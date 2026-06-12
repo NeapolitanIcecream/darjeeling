@@ -39,8 +39,8 @@ dev = [
 ]
 
 [project.scripts]
-edge-mvp = "darjeeling.targets.nlu.main_cli:app"
-edge-mvp-nlu = "darjeeling.targets.nlu.cli:app"
+edge-mvp = "darjeeling.cli:app"
+edge-mvp-nlu = "darjeeling.targets.nlu.main_cli:app"
 
 [build-system]
 requires = ["hatchling"]

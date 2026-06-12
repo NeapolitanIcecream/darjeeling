@@ -8,10 +8,15 @@ from darjeeling.targets.nlu.target import NluTarget
 _TARGETS: dict[str, Callable[[], TargetSpec]] = {
     "nlu": NluTarget,
 }
+_DEFAULT_TARGET = "nlu"
 
 
 def available_targets() -> tuple[str, ...]:
     return tuple(sorted(_TARGETS))
+
+
+def default_target_name() -> str:
+    return _DEFAULT_TARGET
 
 
 def get_target(name: str) -> TargetSpec:

@@ -11,6 +11,7 @@ from darjeeling.targets.nlu.compiler.replay import (
     evaluate_offline_artifact_set,
 )
 from darjeeling.targets.nlu.schemas import Frame, LayerResult, TeacherTrace
+from darjeeling.targets.nlu.settings import DEFAULT_NLU_L1_CRATE_DIR
 
 
 def test_replay_promotes_only_when_objective_improves_within_gates() -> None:
@@ -266,7 +267,7 @@ def test_offline_replay_uses_artifact_l1_worker_timeout(monkeypatch) -> None:
         ],
         OfflineArtifactSet(
             l0_cache={},
-            l1_crate_dir=Path("native/l1_empty_programbank"),
+            l1_crate_dir=DEFAULT_NLU_L1_CRATE_DIR,
             l1_worker_timeout_s=12.5,
         ),
     )

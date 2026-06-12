@@ -3,28 +3,33 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling.targets.nlu import main_cli as cli
-from darjeeling.targets.nlu.settings import load_settings
+from darjeeling import cli
+from darjeeling.targets import registry
 
 
-def test_execute_replay_run_writes_target_identity(tmp_path: Path, monkeypatch) -> None:
-    captured = {}
+class _FakeTarget:
+    name = "fake"
+    schema_version = "fake-v1"
 
-    def fake_write_run_settings(path: Path, payload: dict) -> None:
-        captured["settings_path"] = path
-        captured["settings_payload"] = payload
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
 
-    def fake_run_replay(**kwargs):
-        captured["run_replay"] = kwargs
+    def load_settings(self, *, settings_path: Path | None = None):
+        self.calls.append({"method": "load_settings", "settings_path": settings_path})
+        return {"settings": "loaded"}
+
+    def run_replay(self, **kwargs):
+        self.calls.append({"method": "run_replay", **kwargs})
         return SimpleNamespace(
             requests=1,
-            traces_path=tmp_path / "run" / "traces.jsonl",
+            traces_path=kwargs["run_dir"] / "traces.jsonl",
             layer_counts={"L4": 1},
         )
 
-    monkeypatch.setattr(cli, "require_live_or_cached_teacher", lambda *args, **kwargs: None)
-    monkeypatch.setattr(cli, "write_run_settings", fake_write_run_settings)
-    monkeypatch.setattr(cli, "run_replay", fake_run_replay)
+
+def test_core_cli_dispatches_run_to_selected_target(tmp_path: Path, monkeypatch) -> None:
+    fake_target = _FakeTarget()
+    monkeypatch.setitem(registry._TARGETS, "fake", lambda: fake_target)
 
     summary = cli._execute_replay_run(
         stream="sequential",
@@ -33,18 +38,26 @@ def test_execute_replay_run_writes_target_identity(tmp_path: Path, monkeypatch) 
         teacher="cache",
         run_dir=tmp_path / "run",
         data_dir=tmp_path / "data",
-        target="nlu",
-        settings=load_settings(),
+        target="fake",
+        settings={"settings": "loaded"},
     )
 
     assert summary.requests == 1
-    assert captured["settings_path"] == tmp_path / "run" / "settings.json"
-    assert captured["settings_payload"]["target_name"] == "nlu"
-    assert captured["settings_payload"]["target_schema_version"] == "nlu-target-v1"
-    assert captured["run_replay"]["run_dir"] == tmp_path / "run"
+    assert fake_target.calls == [
+        {
+            "method": "run_replay",
+            "stream": "sequential",
+            "max_requests": 1,
+            "compile_every": 1,
+            "teacher": "cache",
+            "run_dir": tmp_path / "run",
+            "data_dir": tmp_path / "data",
+            "settings": {"settings": "loaded"},
+        }
+    ]
 
 
-def test_execute_replay_run_rejects_unknown_target(tmp_path: Path) -> None:
+def test_core_cli_rejects_unknown_target(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown target"):
         cli._execute_replay_run(
             stream="sequential",
@@ -54,5 +67,12 @@ def test_execute_replay_run_rejects_unknown_target(tmp_path: Path) -> None:
             run_dir=tmp_path / "run",
             data_dir=tmp_path / "data",
             target="missing",
-            settings=load_settings(),
+            settings={},
         )
+
+
+def test_project_scripts_keep_core_and_nlu_entrypoints_separate() -> None:
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+
+    assert 'edge-mvp = "darjeeling.cli:app"' in pyproject
+    assert 'edge-mvp-nlu = "darjeeling.targets.nlu.main_cli:app"' in pyproject

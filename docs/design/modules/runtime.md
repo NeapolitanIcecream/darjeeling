@@ -5,6 +5,8 @@
 Core runtime 当前只保留 target-independent mechanics：router、exact cache、cost
 和 timing。Concrete NLU replay 和 trace JSONL IO 已移到
 `darjeeling.targets.nlu.replay` 与 `darjeeling.targets.nlu.trace`。
+NLU replay 通过 `NluTargetRuntime.build_layers(...)` 构建 L0/L1/L2/L3/L4 layer
+mapping，再交给 core `CascadeRouter` 执行。
 
 ## `runtime.router`
 

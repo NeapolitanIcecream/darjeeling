@@ -16,6 +16,7 @@ from rich.console import Console
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.targets import registry as target_registry
+from darjeeling.targets.nlu.adapters.massive import prepare_massive_dataset
 from darjeeling.targets.nlu.compiler.l2_distiller import l2_config_from_settings
 from darjeeling.targets.nlu.compiler.l2_target_evolution import (
     DEFAULT_TARGET_EVOLVE_ROUNDS,
@@ -86,7 +87,11 @@ from darjeeling.targets.nlu.reports import (
     generate_run_report,
 )
 from darjeeling.targets.nlu.schemas import TeacherTrace, traces_to_teacher_view
-from darjeeling.targets.nlu.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
+from darjeeling.targets.nlu.settings import (
+    DEFAULT_NLU_L1_CRATE_DIR,
+    DEFAULT_PROCESSED_DATA_DIR,
+    load_settings,
+)
 from darjeeling.targets.nlu.trace import read_traces
 
 app = typer.Typer(no_args_is_help=True)
@@ -255,13 +260,30 @@ app.add_typer(l2_app, name="l2")
 l3_app = typer.Typer(no_args_is_help=True)
 app.add_typer(l3_app, name="l3")
 
+massive_app = typer.Typer(no_args_is_help=True)
+app.add_typer(massive_app, name="massive")
+
+
+@massive_app.command("prepare")
+def prepare_massive(
+    locale: Annotated[str, typer.Option(help="MASSIVE locale/config to prepare.")] = "en-US",
+    out: Annotated[
+        Path,
+        typer.Option(help="Output directory for processed parquet/jsonl files."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+) -> None:
+    """Download and process MASSIVE records for NLU replay."""
+
+    result = prepare_massive_dataset(locale=locale, out_dir=out)
+    console.print(f"prepared {result['records']} records in {out}")
+
 
 @l1_app.command("build")
 def l1_build(
     crate_dir: Annotated[
         Path,
         typer.Option(help="Rust L1 ProgramBank crate directory."),
-    ] = Path("native/l1_empty_programbank"),
+    ] = DEFAULT_NLU_L1_CRATE_DIR,
     release: Annotated[bool, typer.Option(help="Build the release profile.")] = False,
 ) -> None:
     """Build the Rust L1 ProgramBank worker."""
@@ -275,7 +297,7 @@ def l1_bench(
     crate_dir: Annotated[
         Path,
         typer.Option(help="Rust L1 ProgramBank crate directory."),
-    ] = Path("native/l1_empty_programbank"),
+    ] = DEFAULT_NLU_L1_CRATE_DIR,
     release: Annotated[bool, typer.Option(help="Use the release profile binary.")] = False,
     out: Annotated[
         Path | None,

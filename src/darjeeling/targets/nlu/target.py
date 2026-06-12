@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Any
 
 from darjeeling.artifacts.store import ArtifactManifest
 from darjeeling.contracts import (
+    ArtifactCandidate,
+    CompileContext,
     JsonObject,
     LayerName,
     RuntimeLayer,
     TeacherRuntime,
     TeacherTrace,
 )
+from darjeeling.contracts import (
+    LayerResult as CoreLayerResult,
+)
 from darjeeling.targets.nlu.data import normalize_utterance
-from darjeeling.targets.nlu.schemas import Frame, TaskSchema
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TaskSchema, TraceRecord
 from darjeeling.targets.nlu.teacher import NluTeacherAdapter
 
 
@@ -79,15 +87,284 @@ class NluTargetRuntime:
     def build_layers(
         self,
         *,
-        manifest: ArtifactManifest,
+        manifest: ArtifactManifest | None,
         teacher: TeacherRuntime,
         settings: JsonObject,
     ) -> Mapping[LayerName, RuntimeLayer | None]:
-        del manifest, teacher, settings
-        return {}
+        from darjeeling.targets.nlu.layers.l1_rust_programbank import (
+            RustL1Worker,
+            RustProgramBankLayer,
+            build_l1_binary,
+        )
+        from darjeeling.targets.nlu.layers.l2_student import L2StudentBundle, L2StudentLayer
+        from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
+        from darjeeling.targets.nlu.layers.l3_local_slm import (
+            L3PromptArtifact,
+            build_l3_layer_from_settings,
+        )
+        from darjeeling.targets.nlu.settings import Settings
+
+        nlu_settings = Settings.model_validate(settings["nlu_settings"])
+        run_dir = Path(str(settings["run_dir"]))
+        artifact_root = Path(str(settings.get("artifact_root", run_dir / "artifacts")))
+        task_schema = TaskSchema.from_payload(_json_object(settings["task_schema"]))
+
+        l0_layer = NluLayerAdapter(
+            _l0_layer_from_manifest(manifest, artifact_root),
+            layer_name="L0",
+        )
+
+        l1_source_dir = _l1_source_dir_from_manifest(manifest, artifact_root)
+        if l1_source_dir is None:
+            l1_source_dir = nlu_settings.l1_rust_crate_dir
+        if (
+            nlu_settings.l1_rust_binary is not None
+            and l1_source_dir == nlu_settings.l1_rust_crate_dir
+        ):
+            l1_binary = nlu_settings.l1_rust_binary
+        else:
+            l1_binary = build_l1_binary(l1_source_dir)
+        l1_worker = RustL1Worker(l1_binary, timeout_s=nlu_settings.l1_worker_timeout_s)
+        l1_layer = NluLayerAdapter(
+            RustProgramBankLayer(l1_worker),
+            layer_name="L1",
+            close=l1_worker.close,
+        )
+
+        l2_layer: RuntimeLayer | None = None
+        if nlu_settings.l2_enabled:
+            l2_path = _artifact_path(manifest, artifact_root, "l2_student")
+            if l2_path is not None:
+                bundle = L2StudentBundle.load(l2_path)
+                if nlu_settings.l2_guard_mode == "always_accept":
+                    bundle.config.accept_threshold = 0.0
+                target_path = _artifact_path(manifest, artifact_root, "l2_target")
+                legacy_l2_layer = (
+                    TargetL2Layer(bundle, target_path)
+                    if target_path is not None
+                    else L2StudentLayer(bundle)
+                )
+                l2_layer = NluLayerAdapter(legacy_l2_layer, layer_name="L2")
+
+        l3_prompt_path = _artifact_path(manifest, artifact_root, "l3_prompt")
+        prompt_artifact = (
+            L3PromptArtifact.model_validate_json(l3_prompt_path.read_text(encoding="utf-8"))
+            if l3_prompt_path is not None
+            else None
+        )
+        l3_layer = NluLayerAdapter(
+            build_l3_layer_from_settings(
+                settings=nlu_settings,
+                task_schema=task_schema,
+                prompt_artifact=prompt_artifact,
+            ),
+            layer_name="L3",
+        )
+
+        return {
+            "L0": l0_layer,
+            "L1": l1_layer,
+            "L2": l2_layer,
+            "L3": l3_layer,
+            "L4": teacher,
+        }
+
+
+class NluTargetCompiler:
+    def propose_artifacts(
+        self,
+        context: CompileContext,
+    ) -> Sequence[ArtifactCandidate]:
+        from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
+        from darjeeling.targets.nlu.settings import Settings
+
+        settings_payload = context.settings.get("nlu_settings", context.settings)
+        nlu_settings = Settings.model_validate(settings_payload)
+        result = run_compiler_generation(
+            run_dir=context.run_dir,
+            traces=[_legacy_trace_from_teacher_trace(trace) for trace in context.teacher_traces],
+            settings=nlu_settings,
+        )
+        if result.manifest is None:
+            return ()
+        return (
+            ArtifactCandidate(
+                artifact_paths=result.manifest.artifact_paths,
+                metadata={
+                    "generation": result.generation,
+                    "promoted": result.promoted,
+                    "reason": result.reason,
+                },
+            ),
+        )
+
+
+class NluLayerAdapter:
+    def __init__(
+        self,
+        legacy_layer: Any,
+        *,
+        layer_name: LayerName | None = None,
+        close: Any | None = None,
+    ) -> None:
+        self.legacy_layer = legacy_layer
+        self.layer_name = layer_name or getattr(legacy_layer, "layer_name", "L4")
+        self._close = close
+
+    def try_answer(self, input: JsonObject) -> CoreLayerResult:
+        utterance = _request_utterance(input)
+        return _core_layer_result_from_legacy(self.legacy_layer.try_answer(utterance))
+
+    def close(self) -> None:
+        if self._close is not None:
+            self._close()
 
 
 class NluTarget(NluTargetSpec):
     def __init__(self) -> None:
         self.teacher_adapter = NluTeacherAdapter()
         self.runtime = NluTargetRuntime()
+        self.compiler = NluTargetCompiler()
+
+    def load_settings(self, *, settings_path: Path | None = None):
+        from darjeeling.targets.nlu.settings import load_settings
+
+        return load_settings(settings_path)
+
+    def run_replay(
+        self,
+        *,
+        stream: str,
+        max_requests: int,
+        compile_every: int,
+        teacher: str,
+        run_dir: Path,
+        data_dir: Path,
+        settings: Any,
+    ):
+        from darjeeling.targets.nlu.replay import run_replay
+
+        return run_replay(
+            stream=stream,
+            max_requests=max_requests,
+            teacher_mode=teacher,
+            run_dir=run_dir,
+            data_dir=data_dir,
+            settings=settings,
+            compile_every=compile_every,
+            target=self,
+        )
+
+    def generate_report(self, *, run_dir: Path):
+        from darjeeling.targets.nlu.reports import generate_run_report
+
+        return generate_run_report(run_dir)
+
+
+def _request_utterance(input: JsonObject) -> str:
+    utterance = input.get("utterance")
+    if not isinstance(utterance, str):
+        raise ValueError("NLU request requires utterance")
+    return utterance
+
+
+def _json_object(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        raise ValueError("expected JSON object")
+    return value
+
+
+def _artifact_path(
+    manifest: ArtifactManifest | None,
+    artifact_root: Path,
+    key: str,
+) -> Path | None:
+    if manifest is None:
+        return None
+    path_text = manifest.artifact_paths.get(key)
+    if not path_text:
+        return None
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = artifact_root / path
+    if not path.exists():
+        raise FileNotFoundError(f"{key} artifact is missing: {path}")
+    return path
+
+
+def _l0_layer_from_manifest(
+    manifest: ArtifactManifest | None,
+    artifact_root: Path,
+):
+    from darjeeling.targets.nlu.layers.l0_cache import ExactCacheLayer
+
+    l0_path = _artifact_path(manifest, artifact_root, "l0_cache")
+    if l0_path is None:
+        return ExactCacheLayer({})
+    payload = json.loads(l0_path.read_text(encoding="utf-8"))
+    frames = {
+        normalized_utterance: Frame.model_validate(frame_payload)
+        for normalized_utterance, frame_payload in payload.get(
+            "frames_by_normalized_utterance", {}
+        ).items()
+    }
+    return ExactCacheLayer(frames)
+
+
+def _l1_source_dir_from_manifest(
+    manifest: ArtifactManifest | None,
+    artifact_root: Path,
+) -> Path | None:
+    if manifest is None:
+        return None
+    path_text = manifest.artifact_paths.get("l1_crate_dir")
+    if not path_text:
+        return None
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = artifact_root / path
+    if not path.exists():
+        raise FileNotFoundError(f"L1 crate artifact is missing: {path}")
+    return path
+
+
+def _core_layer_result_from_legacy(result: LayerResult) -> CoreLayerResult:
+    return CoreLayerResult(
+        layer=result.layer,
+        accepted=result.accepted,
+        output=result.frame.model_dump(mode="json") if result.frame is not None else None,
+        confidence=result.confidence,
+        reason=result.reason,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        metadata=result.metadata,
+    )
+
+
+def _legacy_layer_result_from_core(result: CoreLayerResult) -> LayerResult:
+    return LayerResult(
+        layer=result.layer,
+        accepted=result.accepted,
+        frame=Frame.model_validate(result.output) if result.output is not None else None,
+        confidence=result.confidence,
+        reason=result.reason,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        metadata=result.metadata,
+    )
+
+
+def _legacy_trace_from_teacher_trace(trace: TeacherTrace) -> TraceRecord:
+    utterance = _request_utterance(trace.input)
+    teacher_frame = Frame.model_validate(trace.teacher_label) if trace.teacher_label else None
+    return TraceRecord(
+        request_id=trace.request_id,
+        utterance=utterance,
+        gold_frame=None,
+        teacher_frame=teacher_frame,
+        chosen_layer=trace.chosen_layer,
+        final_frame=Frame.model_validate(trace.final_output),
+        layer_results=[_legacy_layer_result_from_core(result) for result in trace.layer_results],
+        l4_usage=trace.l4_usage,
+        timestamp=trace.timestamp,
+    )

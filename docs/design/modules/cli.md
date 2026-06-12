@@ -1,6 +1,7 @@
 # CLI 模块
 
-模块：`darjeeling.targets.nlu.main_cli`
+Core 模块：`darjeeling.cli`。NLU workflow CLI 位于
+`darjeeling.targets.nlu.main_cli`。
 
 ## 职责
 
@@ -14,24 +15,24 @@
 edge-mvp-nlu massive prepare --locale en-US --out data/processed/default
 edge-mvp run --stream zipf-heavy --max-requests 3000 --compile-every 500 --teacher live-or-cache
 edge-mvp --settings settings.yaml run --stream zipf-heavy --max-requests 3000 --compile-every 500 --teacher live-or-cache
-edge-mvp experiment preflight --run-dir runs/latest --teacher live-or-cache
-edge-mvp experiment main-evolution --run-dir runs/main
-edge-mvp experiment direct-l4-optimization --run-dir runs/direct-l4-optimization
 edge-mvp report --run-dir runs/main
-edge-mvp experiment compare --run runs/main --run runs/no-l2 --out-dir runs/experiment-comparison
-edge-mvp l1 build --crate-dir native/l1_empty_programbank
-edge-mvp l1 bench --crate-dir native/l1_empty_programbank
-edge-mvp l1 bench --crate-dir native/l1_empty_programbank --out runs/main/reports/l1_benchmark.json
-edge-mvp l2 tune --traces runs/main/traces.jsonl --out runs/main/reports/l2_tuning.json
-edge-mvp l3 bench --out runs/main/reports/l3_benchmark.json
-edge-mvp l3 prompt-evolve --traces runs/main/traces.jsonl --out-dir runs/main/l3-prompt-evolve
-edge-mvp l3 replay-prompt --prompt runs/main/artifacts/generations/gen_001/l3/l3_prompt.candidate.json --traces runs/main/traces.jsonl --out runs/main/reports/l3_prompt_replay.json
-edge-mvp l3 promote-prompt --run-dir runs/main --prompt runs/main/artifacts/generations/gen_001/l3/l3_prompt.candidate.json --replay runs/main/reports/l3_prompt_replay.json
+edge-mvp-nlu experiment preflight --run-dir runs/latest --teacher live-or-cache
+edge-mvp-nlu experiment main-evolution --run-dir runs/main
+edge-mvp-nlu experiment direct-l4-optimization --run-dir runs/direct-l4-optimization
+edge-mvp-nlu experiment compare --run runs/main --run runs/no-l2 --out-dir runs/experiment-comparison
+edge-mvp-nlu l1 build --crate-dir src/darjeeling/targets/nlu/native/l1_empty_programbank
+edge-mvp-nlu l1 bench --crate-dir src/darjeeling/targets/nlu/native/l1_empty_programbank
+edge-mvp-nlu l2 tune --traces runs/main/traces.jsonl --out runs/main/reports/l2_tuning.json
+edge-mvp-nlu l3 bench --out runs/main/reports/l3_benchmark.json
+edge-mvp-nlu l3 prompt-evolve --traces runs/main/traces.jsonl --out-dir runs/main/l3-prompt-evolve
+edge-mvp-nlu l3 replay-prompt --prompt runs/main/artifacts/generations/gen_001/l3/l3_prompt.candidate.json --traces runs/main/traces.jsonl --out runs/main/reports/l3_prompt_replay.json
+edge-mvp-nlu l3 promote-prompt --run-dir runs/main --prompt runs/main/artifacts/generations/gen_001/l3/l3_prompt.candidate.json --replay runs/main/reports/l3_prompt_replay.json
 ```
 
 L1 子命令是 harness/debug 入口，不代表 L1 用 Python 实现。`l1 bench` 输出 `l1-benchmark-v1` JSON，可写入 `--out` 供 report 复用。
 
-`edge-mvp` 当前指向 NLU target workflow CLI，只读取处理后的 `DataRecord` 目录，默认路径是
+`edge-mvp` 是 core CLI，只校验/选择 target 并调用 target object 的 run/report
+entry。NLU target workflow 只读取处理后的 `DataRecord` 目录，默认路径是
 `data/processed/default`。MASSIVE 的下载和转换入口是 NLU target-owned
 `edge-mvp-nlu massive prepare`；它把 MASSIVE 数据处理成 NLU target-owned
 `DataRecord` JSONL/parquet。Runtime/replay 不依赖 MASSIVE loader。

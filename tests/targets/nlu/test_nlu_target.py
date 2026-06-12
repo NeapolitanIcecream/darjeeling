@@ -1,9 +1,14 @@
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from darjeeling.artifacts.store import ArtifactManifest
+from darjeeling.contracts import CompileContext
+from darjeeling.contracts import LayerResult as CoreLayerResult
+from darjeeling.contracts import TeacherTrace as CoreTeacherTrace
 from darjeeling.targets import registry
 from darjeeling.targets.nlu.adapters.massive import prepare_massive_dataset
 from darjeeling.targets.nlu.data import (
@@ -12,7 +17,8 @@ from darjeeling.targets.nlu.data import (
     strip_annotations,
 )
 from darjeeling.targets.nlu.schemas import Frame, TaskSchema
-from darjeeling.targets.nlu.target import NluTargetSpec
+from darjeeling.targets.nlu.settings import Settings
+from darjeeling.targets.nlu.target import NluTarget, NluTargetCompiler, NluTargetRuntime
 from darjeeling.targets.nlu.teacher import NluTeacherAdapter, NluTeacherParseError
 
 
@@ -42,7 +48,7 @@ def test_nlu_target_is_available_from_static_registry() -> None:
 
 
 def test_nlu_target_spec_loads_schema_and_compares_labels() -> None:
-    target = NluTargetSpec()
+    target = NluTarget()
     records = [
         {
             "utterance": "alpha request",
@@ -67,6 +73,100 @@ def test_nlu_target_spec_loads_schema_and_compares_labels() -> None:
         {"intent": "intent_alpha", "slots": {"slot_alpha": "value alpha"}},
         task_schema=task_schema,
     )
+
+
+def test_nlu_runtime_builder_returns_contract_layers(tmp_path: Path) -> None:
+    class FakeTeacher:
+        layer_name = "L4"
+
+        def try_answer(self, input):
+            return CoreLayerResult(
+                layer="L4",
+                accepted=True,
+                output={"intent": "intent_alpha", "slots": {}},
+                latency_ms=0.0,
+            )
+
+    settings = Settings(
+        l1_rust_binary=tmp_path / "worker",
+        local_slm_mode="disabled",
+    )
+    layers = NluTargetRuntime().build_layers(
+        manifest=None,
+        teacher=FakeTeacher(),
+        settings={
+            "run_dir": str(tmp_path),
+            "artifact_root": str(tmp_path / "artifacts"),
+            "task_schema": TaskSchema(intent_names=["intent_alpha"], slot_names=[]).to_payload(),
+            "nlu_settings": settings.model_dump(mode="json"),
+        },
+    )
+
+    assert set(layers) == {"L0", "L1", "L2", "L3", "L4"}
+    assert layers["L0"] is not None
+    assert layers["L1"] is not None
+    assert layers["L2"] is None
+    assert layers["L3"] is not None
+    assert layers["L4"] is not None
+    l0_result = layers["L0"].try_answer({"utterance": "alpha request"})
+    assert l0_result.layer == "L0"
+    assert l0_result.accepted is False
+    assert l0_result.output is None
+
+
+def test_nlu_compiler_single_entry_calls_existing_generation_loop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_run_compiler_generation(*, run_dir, traces, settings):
+        captured["run_dir"] = run_dir
+        captured["traces"] = traces
+        captured["settings"] = settings
+        return SimpleNamespace(
+            generation=7,
+            promoted=True,
+            reason="accepted",
+            manifest=ArtifactManifest(
+                artifact_set_id="artifact-test",
+                generation=7,
+                artifact_paths={"l0_cache": "generations/gen_007/l0_cache.json"},
+            ),
+        )
+
+    import darjeeling.targets.nlu.compiler.loop as loop_module
+
+    monkeypatch.setattr(loop_module, "run_compiler_generation", fake_run_compiler_generation)
+
+    candidates = NluTargetCompiler().propose_artifacts(
+        CompileContext(
+            run_dir=tmp_path,
+            task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=[]).to_payload(),
+            teacher_traces=[
+                CoreTeacherTrace(
+                    request_id="r1",
+                    input={"utterance": "alpha request"},
+                    teacher_label={"intent": "intent_alpha", "slots": {}},
+                    chosen_layer="L4",
+                    final_output={"intent": "intent_alpha", "slots": {}},
+                    layer_results=[],
+                    timestamp="2026-06-12T00:00:00+00:00",
+                )
+            ],
+            settings={"nlu_settings": Settings().model_dump(mode="json")},
+        )
+    )
+
+    assert captured["run_dir"] == tmp_path
+    assert captured["traces"][0].utterance == "alpha request"
+    assert captured["traces"][0].teacher_frame == Frame(intent="intent_alpha")
+    assert candidates[0].artifact_paths == {"l0_cache": "generations/gen_007/l0_cache.json"}
+    assert candidates[0].metadata == {
+        "generation": 7,
+        "promoted": True,
+        "reason": "accepted",
+    }
 
 
 def test_nlu_frame_parser_extracts_slots_from_bracket_annotation() -> None:

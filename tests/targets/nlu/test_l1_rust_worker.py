@@ -7,6 +7,7 @@ from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     RustProgramBankLayer,
     build_l1_binary,
 )
+from darjeeling.targets.nlu.settings import DEFAULT_NLU_L1_CRATE_DIR
 
 
 @pytest.fixture(scope="module")
@@ -16,7 +17,7 @@ def l1_binary() -> Path:
 
 @pytest.fixture(scope="module")
 def empty_l1_binary() -> Path:
-    return build_l1_binary(Path("native/l1_empty_programbank"))
+    return build_l1_binary(DEFAULT_NLU_L1_CRATE_DIR)
 
 
 def test_default_empty_rust_l1_worker_abstains(empty_l1_binary: Path) -> None:
@@ -72,4 +73,3 @@ def test_rust_l1_layer_abstains_on_unknown_request(l1_binary: Path) -> None:
     assert not result.accepted
     assert result.frame is None
     assert "native_latency_us" in result.metadata
-

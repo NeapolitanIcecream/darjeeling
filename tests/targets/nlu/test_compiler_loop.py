@@ -8,7 +8,7 @@ from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
 from darjeeling.targets.nlu.data import DataRecord
 from darjeeling.targets.nlu.replay import load_l0_layer_from_manifest, run_replay
 from darjeeling.targets.nlu.schemas import Frame, LayerResult, TraceRecord
-from darjeeling.targets.nlu.settings import load_settings
+from darjeeling.targets.nlu.settings import DEFAULT_NLU_L1_CRATE_DIR, load_settings
 
 
 def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Path) -> None:
@@ -602,7 +602,7 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
         encoding="utf-8",
     )
     settings = load_settings()
-    settings.l1_rust_crate_dir = Path("native/l1_empty_programbank")
+    settings.l1_rust_crate_dir = DEFAULT_NLU_L1_CRATE_DIR
     settings.l1_agent_mode = "dry-run"
     settings.l1_agent_dry_run_patch = patch_path
     settings.l1_agent_timeout_s = 120.0

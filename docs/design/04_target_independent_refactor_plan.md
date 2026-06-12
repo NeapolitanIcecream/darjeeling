@@ -776,6 +776,22 @@ NLU 报告都在 NLU target 侧。
 - Tests import the target CLI module directly, and the old core CLI source path
   was removed from the strict boundary allowlist.
 
+### 2026-06-12 Core CLI and contract-entry closure
+
+- Restored `darjeeling.cli` as the core `edge-mvp` entrypoint. It selects target
+  objects through the static registry and delegates run/report work to ordinary
+  target methods; NLU workflow commands now live under `edge-mvp-nlu`.
+- Connected NLU replay to `NluTargetRuntime.build_layers(...)`; the target
+  runtime builds L0/L1/L2/L3/L4 layer mapping and core `CascadeRouter` owns the
+  cascade order.
+- Added `NluTargetCompiler.propose_artifacts(...)` as the single target compiler
+  entry for the current NLU generation loop, preserving existing NLU behavior
+  while giving core one target-facing compile call.
+- Moved the old NLU ABI empty Rust worker to
+  `src/darjeeling/targets/nlu/native/l1_empty_programbank` and replaced
+  repo-level `native/l1_empty_programbank` with a target-neutral abstaining JSON
+  worker. Boundary tests now scan the repo-level native worker for NLU terms.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，

@@ -2,7 +2,11 @@ from pathlib import Path
 
 from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
 from darjeeling.targets.nlu.replay import load_processed_records
-from darjeeling.targets.nlu.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
+from darjeeling.targets.nlu.settings import (
+    DEFAULT_NLU_L1_CRATE_DIR,
+    DEFAULT_PROCESSED_DATA_DIR,
+    load_settings,
+)
 
 STRICT_CORE_NLU_VOCABULARY = (
     "Frame",
@@ -55,7 +59,8 @@ def test_core_defaults_are_dataset_independent() -> None:
 
     assert schema.schema_version == "task-schema-v1"
     assert DEFAULT_PROCESSED_DATA_DIR == Path("data/processed/default")
-    assert settings.l1_rust_crate_dir == Path("native/l1_empty_programbank")
+    assert settings.l1_rust_crate_dir == DEFAULT_NLU_L1_CRATE_DIR
+    assert "targets/nlu/native" in settings.l1_rust_crate_dir.as_posix()
 
 
 def test_processed_data_loader_error_is_dataset_independent(tmp_path: Path) -> None:
@@ -212,6 +217,22 @@ def test_tracked_l1_native_fixtures_are_dataset_independent() -> None:
             assert term not in source.lower(), f"{path} contains target fixture {term!r}"
 
 
+def test_repo_level_native_empty_worker_is_target_neutral() -> None:
+    forbidden_terms = STRICT_CORE_NLU_VOCABULARY + (
+        "frame",
+        "teacher",
+        "gold",
+    )
+    for path in Path("native/l1_empty_programbank").rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix not in {".rs", ".toml", ".lock"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for term in forbidden_terms:
+            assert term not in source, f"{path} contains target-native term {term!r}"
+
+
 def test_current_architecture_doc_uses_dataset_independent_gold_label_terms() -> None:
     source = Path("docs/design/01_architecture.md").read_text(encoding="utf-8")
 
@@ -221,6 +242,7 @@ def test_current_architecture_doc_uses_dataset_independent_gold_label_terms() ->
 def test_massive_adapter_uses_nlu_target_cli_entrypoint() -> None:
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
 
-    assert 'edge-mvp-nlu = "darjeeling.targets.nlu.cli:app"' in pyproject
+    assert 'edge-mvp = "darjeeling.cli:app"' in pyproject
+    assert 'edge-mvp-nlu = "darjeeling.targets.nlu.main_cli:app"' in pyproject
     assert "edge-mvp-massive" not in pyproject
     assert "darjeeling.adapters.massive" not in pyproject

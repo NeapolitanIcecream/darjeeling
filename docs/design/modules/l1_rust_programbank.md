@@ -31,9 +31,16 @@ native/l1_empty_programbank/
   src/
     main.rs              # worker / batch CLI
     lib.rs               # try_answer public API; no target programs configured
-    frame.rs             # input/output structs
+    worker.rs            # target-neutral input/output structs
 
-target-specific l1_programbank/
+src/darjeeling/targets/nlu/native/l1_empty_programbank/
+  Cargo.toml
+  src/
+    main.rs              # NLU worker / batch CLI
+    lib.rs               # NLU try_answer public API
+    frame.rs             # NLU utterance/frame ABI
+
+target-specific promoted l1_programbank/
   Cargo.toml
   src/
     main.rs              # worker / batch CLI

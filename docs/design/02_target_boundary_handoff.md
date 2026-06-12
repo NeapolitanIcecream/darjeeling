@@ -167,11 +167,12 @@ defaults and adapter placement:
 - Generic `DataRecord` lives in `darjeeling.data.records`.
 - The MASSIVE loader lives in `darjeeling.adapters.massive`; runtime/replay reads
   processed `DataRecord` rows and does not import the MASSIVE adapter.
-- The core `edge-mvp` CLI no longer owns dataset preparation. The bundled
-  MASSIVE adapter exposes `edge-mvp-massive prepare` for converting that dataset
-  into the shared `DataRecord` format.
-- Core L1 settings and CLI defaults now point to `native/l1_empty_programbank`,
-  a contract-only Rust worker that always abstains.
+- The core `edge-mvp` CLI no longer owns dataset preparation. The NLU target
+  exposes `edge-mvp-nlu massive prepare` for converting MASSIVE into the
+  target-owned record format.
+- Core native defaults now point to `native/l1_empty_programbank`, a
+  target-neutral contract-only Rust worker that always abstains. NLU settings
+  point to `src/darjeeling/targets/nlu/native/l1_empty_programbank`.
 - The repository no longer tracks an application-specific native L1 target
   crate. L1 accept-path tests use a neutral fixture under
   `tests/fixtures/l1_neutral_programbank`; real target crates are produced by

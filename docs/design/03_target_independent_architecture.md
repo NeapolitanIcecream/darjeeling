@@ -460,10 +460,12 @@ edge-mvp-nlu l3 prompt-evolve --traces runs/latest/traces.jsonl --out-dir ...
 Core CLI should not expose NLU-only option names. Target CLI may expose
 intent/slot/frame vocabulary.
 
-Current implementation note: `edge-mvp` is currently packaged as the NLU target
-workflow CLI (`darjeeling.targets.nlu.main_cli`) while the generic core CLI is
-carved back out. `edge-mvp-nlu` owns target preparation commands such as MASSIVE
-prepare.
+Current implementation note: `edge-mvp` is packaged as the core CLI
+(`darjeeling.cli`) and dispatches to a target object from the static registry.
+The NLU target implements runtime building through `NluTargetRuntime` and the
+compiler entry through `NluTargetCompiler`. `edge-mvp-nlu` owns NLU preparation
+and specialized workflow commands such as MASSIVE prepare, L2 target evolve and
+L3 prompt evolve.
 
 ## Boundary Tests
 

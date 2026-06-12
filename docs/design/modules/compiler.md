@@ -1,7 +1,8 @@
 # compiler 模块
 
 模块根：core `darjeeling.compiler` 目前只保留 package boundary；concrete NLU
-compiler 已迁到 `darjeeling.targets.nlu.compiler.*`。
+compiler 已迁到 `darjeeling.targets.nlu.compiler.*`，并通过
+`NluTargetCompiler.propose_artifacts(...)` 接入 target compiler entry。
 
 本页的 L1/L2/L3 训练、intent/slot mining、frame objective 和 prompt evolution
 描述的是 NLU target compiler，不是 target-independent core 默认语义。

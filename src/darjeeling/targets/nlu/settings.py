@@ -12,6 +12,7 @@ from pydantic_settings import (
 )
 
 DEFAULT_PROCESSED_DATA_DIR = Path("data/processed/default")
+DEFAULT_NLU_L1_CRATE_DIR = Path("src/darjeeling/targets/nlu/native/l1_empty_programbank")
 
 
 class Settings(BaseSettings):
@@ -81,7 +82,7 @@ class Settings(BaseSettings):
         validation_alias="L3_AGENT_APPROVAL_POLICY",
     )
     l1_rust_crate_dir: Path = Field(
-        default=Path("native/l1_empty_programbank"),
+        default=DEFAULT_NLU_L1_CRATE_DIR,
         validation_alias="L1_RUST_CRATE_DIR",
     )
     l1_rust_binary: Path | None = Field(default=None, validation_alias="L1_RUST_BINARY")

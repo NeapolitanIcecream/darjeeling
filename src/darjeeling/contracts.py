@@ -125,7 +125,7 @@ class TargetRuntime(Protocol):
     def build_layers(
         self,
         *,
-        manifest: ArtifactManifest,
+        manifest: ArtifactManifest | None,
         teacher: TeacherRuntime,
         settings: JsonObject,
     ) -> Mapping[LayerName, RuntimeLayer | None]: ...
