@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from darjeeling.compiler.l3_prompt_optimizer import (
+from darjeeling.schemas import LayerResult, TraceRecord, traces_to_teacher_view
+from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import (
     L3PromptEvolutionConfig,
     calibrate_l3_confidence_threshold,
     l3_prompt_artifact_from_proposal,
@@ -13,9 +14,8 @@ from darjeeling.compiler.l3_prompt_optimizer import (
     replay_l3_prompt_artifact,
     run_l3_prompt_evolution,
 )
-from darjeeling.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
-from darjeeling.layers.l4_cloud_llm import TaskSchema
-from darjeeling.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
+from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact, LocalSLMConfig
+from darjeeling.targets.nlu.schemas import Frame, TaskSchema
 
 
 class FakeL3Backend:
@@ -333,3 +333,11 @@ def _beta_traces(count: int) -> list[TraceRecord]:
         )
         for index in range(count)
     ]
+
+
+def test_legacy_l3_prompt_optimizer_module_reexports_nlu_target_optimizer() -> None:
+    from darjeeling.compiler.l3_prompt_optimizer import (
+        run_l3_prompt_evolution as legacy_run_l3_prompt_evolution,
+    )
+
+    assert legacy_run_l3_prompt_evolution is run_l3_prompt_evolution

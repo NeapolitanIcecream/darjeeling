@@ -585,6 +585,16 @@ NLU 报告都在 NLU target 侧。
   target test scope and removed the old shared test paths plus the old compiler
   helper source paths from the strict boundary allowlist.
 
+### 2026-06-12 NLU L3 prompt optimizer target ownership
+
+- NLU L3 prompt artifact proposal parsing, workspace preparation, replay gates,
+  calibration and agent-session evolution moved to
+  `darjeeling.targets.nlu.compiler.l3_prompt_optimizer`; old
+  `darjeeling.compiler.l3_prompt_optimizer` is a compatibility re-export.
+- Moved `tests/test_l3_prompt_optimizer.py` into the NLU target test scope and
+  removed the old shared test path plus old compiler source path from the strict
+  boundary allowlist.
+
 ## 风险和处理
 
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
