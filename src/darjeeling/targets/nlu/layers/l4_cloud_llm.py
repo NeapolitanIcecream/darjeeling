@@ -10,10 +10,10 @@ from typing import Any
 
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.runtime.timing import elapsed_ms
-from darjeeling.settings import Settings
 from darjeeling.targets.nlu.compiler.l4_context import build_teacher_context
 from darjeeling.targets.nlu.data import normalize_utterance
 from darjeeling.targets.nlu.schemas import Frame, LayerResult, TaskSchema
+from darjeeling.targets.nlu.settings import Settings
 from darjeeling.targets.nlu.teacher import (
     NluTeacherParseError,
 )

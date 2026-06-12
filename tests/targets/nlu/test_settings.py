@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.settings import load_settings
 
 
 def test_load_settings_reads_yaml_and_env_overrides_it(

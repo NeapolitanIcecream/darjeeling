@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.compiler.l1_program_compiler import (
     L1CodingAgentError,
     L1CodingAgentJobConfig,
@@ -11,6 +10,7 @@ from darjeeling.targets.nlu.compiler.l1_program_compiler import (
     run_l1_coding_agent_job,
 )
 from darjeeling.targets.nlu.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
+from darjeeling.targets.nlu.settings import load_settings
 
 
 def _teacher_trace():

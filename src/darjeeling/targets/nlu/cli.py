@@ -6,8 +6,8 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR
 from darjeeling.targets.nlu.adapters.massive import prepare_massive_dataset
+from darjeeling.targets.nlu.settings import DEFAULT_PROCESSED_DATA_DIR
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()

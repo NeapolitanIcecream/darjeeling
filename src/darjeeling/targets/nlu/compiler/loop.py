@@ -8,7 +8,6 @@ from typing import Any
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore, LayerDelta
 from darjeeling.runtime.cost import replay_cost_model_from_settings
-from darjeeling.settings import Settings
 from darjeeling.targets.nlu.compiler.guard_optimizer import (
     GUARD_PROPOSAL_SCHEMA,
     GuardSearchSpec,
@@ -72,6 +71,7 @@ from darjeeling.targets.nlu.schemas import (
     TraceRecord,
     traces_to_teacher_view,
 )
+from darjeeling.targets.nlu.settings import Settings
 
 
 def compiler_inputs_from_traces(traces: list[TraceRecord]) -> list[TeacherTrace]:

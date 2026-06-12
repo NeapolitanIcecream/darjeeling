@@ -10,10 +10,10 @@ from difflib import unified_diff
 from pathlib import Path
 from typing import Any, Literal
 
-from darjeeling.settings import Settings
 from darjeeling.targets.nlu.compiler.l4_context import assert_no_forbidden_context
 from darjeeling.targets.nlu.layers.l1_program_bank import ProgramRule
 from darjeeling.targets.nlu.schemas import TeacherTrace
+from darjeeling.targets.nlu.settings import Settings
 
 
 def validate_l1_candidates(candidates: list[dict]) -> list[ProgramRule]:

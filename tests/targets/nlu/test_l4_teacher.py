@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     CachedTeacherLayer,
     CloudLLMTeacher,
@@ -13,6 +12,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     TeacherCache,
     parse_teacher_frame,
 )
+from darjeeling.targets.nlu.settings import load_settings
 
 
 class FakeCompletions:

@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from darjeeling.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 from darjeeling.targets.nlu.layers.l4_cloud_llm import TaskSchema
 from darjeeling.targets.nlu.replay import load_processed_records
+from darjeeling.targets.nlu.settings import DEFAULT_PROCESSED_DATA_DIR, load_settings
 
 STRICT_CORE_NLU_VOCABULARY = (
     "Frame",
@@ -22,7 +22,6 @@ STRICT_CORE_NLU_VOCABULARY = (
 
 CURRENT_NLU_COUPLED_PATHS = {
     Path("src/darjeeling/cli.py"),
-    Path("src/darjeeling/settings.py"),
     Path("tests/test_target_boundary.py"),
 }
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from darjeeling import cli
-from darjeeling.settings import load_settings
+from darjeeling.targets.nlu.settings import load_settings
 
 
 def test_execute_replay_run_writes_target_identity(tmp_path: Path, monkeypatch) -> None:

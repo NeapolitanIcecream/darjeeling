@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from darjeeling.settings import load_settings
 from darjeeling.targets.nlu.compiler.l4_proposal import (
     L4ProposalAdapter,
     ProposalParseError,
@@ -17,6 +16,7 @@ from darjeeling.targets.nlu.schemas import (
     TraceRecord,
     traces_to_teacher_view,
 )
+from darjeeling.targets.nlu.settings import load_settings
 
 
 class FakeProposalCompletions:

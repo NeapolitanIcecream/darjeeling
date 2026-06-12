@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from darjeeling.settings import Settings
+from darjeeling.targets.nlu.settings import Settings
 
 
 @dataclass(frozen=True)
