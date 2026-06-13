@@ -294,7 +294,8 @@ they are target-contract leaks where core assumes the NLU task shape.
 2. Make core schemas target-neutral.
    Replace public core references to `Frame`, `utterance`, `teacher_frame`,
    `gold_frame`, and `final_frame` with target-neutral request/output/label
-   payloads. Keep compatibility shims until existing runs and tests migrate.
+   payloads. Migrate repo tests and regenerate or explicitly migrate old run
+   artifacts; do not keep legacy loaders in core.
 3. Extract the current NLU implementation into an explicit target package.
    A likely first location is `darjeeling.targets.nlu`, containing `Frame`,
    `TaskSchema`, NLU teacher, NLU L1 ABI helpers, NLU L2 student, NLU L3 prompt,

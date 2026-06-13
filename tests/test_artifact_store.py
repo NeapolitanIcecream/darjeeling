@@ -1,3 +1,8 @@
+import json
+
+import pytest
+from pydantic import ValidationError
+
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore, LayerDelta
 
 
@@ -32,13 +37,27 @@ def test_artifact_store_returns_none_without_current_manifest(tmp_path) -> None:
     assert ArtifactStore(tmp_path / "artifacts").load_current_manifest() is None
 
 
-def test_artifact_manifest_loads_legacy_payload_without_target_identity() -> None:
-    manifest = ArtifactManifest.model_validate(
-        {
-            "artifact_set_id": "gen_001_legacy",
-            "generation": 1,
-        }
+def test_artifact_manifest_rejects_payload_without_target_identity() -> None:
+    with pytest.raises(ValidationError):
+        ArtifactManifest.model_validate(
+            {
+                "artifact_set_id": "gen_001_missing_target",
+                "generation": 1,
+            }
+        )
+
+
+def test_artifact_store_rejects_current_manifest_without_target_identity(tmp_path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    store.current_manifest_path.write_text(
+        json.dumps(
+            {
+                "artifact_set_id": "gen_001_missing_target",
+                "generation": 1,
+            }
+        ),
+        encoding="utf-8",
     )
 
-    assert manifest.target_name is None
-    assert manifest.target_schema_version is None
+    with pytest.raises(ValidationError):
+        store.load_current_manifest()

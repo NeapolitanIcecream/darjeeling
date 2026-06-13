@@ -441,18 +441,18 @@ NLU 报告都在 NLU target 侧。
 
 ### 2026-06-12 Artifact manifest target identity
 
-- `ArtifactManifest` 新增可选 `target_name` 和 `target_schema_version` 字段，为后续
-  replay/promotion 装载 target-owned artifacts 提供通用身份信息。
-- 字段保持可选，旧 manifest 可以继续加载；core 不写入 NLU 默认值，后续由
-  target-aware CLI/runtime builder 在选择 target 后显式填充。
+- `ArtifactManifest` 必须记录 `target_name` 和 `target_schema_version`。Replay、
+  promotion 和 report 只能装载带有明确 target identity 的 artifacts。
+- 旧 manifest payload 缺少 target identity 时不再属于当前 schema。需要复用旧
+  run directory 时，应在 repo 外显式迁移 manifest 或重新生成 run；core 不保留
+  legacy loader，也不写入 NLU 默认值。
 
 ### 2026-06-12 CLI target selection compatibility
 
 - `edge-mvp run` 和 `edge-mvp report` 新增 `--target` 参数，默认 `nlu`，通过
   repo-local static registry 校验 target 名称。
-- `run` 暂时仍调用旧 NLU replay path，但会把 `target_name` 和
-  `target_schema_version` 写入 run settings，给后续 target-aware runtime builder
-  和 manifest 写入打基础。
+- `run` 通过 target contract 进入 selected target 的 runtime builder；run
+  settings 和 manifest 都必须带 `target_name` 和 `target_schema_version`。
 - 现有 experiment helpers 暂时显式使用 `target="nlu"`，等 core experiment CLI
   拆分 target settings 后再暴露 target option。
 
@@ -797,9 +797,10 @@ NLU 报告都在 NLU target 侧。
 - **大文件迁移风险**：`l2_target_evolution.py` 很大。先整体迁移到 NLU target，
   再在 target 内拆 diagnostics、workspace、evaluation、program text。
 - **测试大面积变更风险**：先建立 neutral core fixtures，再批量迁移 NLU tests。
-- **artifact 兼容风险**：manifest 应显式记录 `target_name`、
-  `target_schema_version` 和 artifact kind。旧 artifacts 可以用一次性转换脚本
-  或仅在实验目录中保留。
+- **artifact 兼容风险**：manifest 必须显式记录 `target_name`、
+  `target_schema_version` 和 artifact kind。缺少 target identity 的旧 artifacts
+  不再由 Darjeeling runtime 直接加载；需要时用 repo 外一次性迁移脚本处理，或
+  重新生成 run artifacts。
 - **CLI 用户体验风险**：保留短期 deprecation message 可以降低切换成本，但
   core 新命令必须以 `--target` 为主路径。
 - **抽象税风险**：target contract 保持普通 Python Protocol，不引入复杂插件、

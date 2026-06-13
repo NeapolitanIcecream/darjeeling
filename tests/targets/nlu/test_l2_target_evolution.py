@@ -2850,6 +2850,8 @@ def postprocess_frame(utterance, frame, metadata):
         ArtifactManifest(
             artifact_set_id="gen_001_baseline",
             generation=1,
+            target_name="nlu",
+            target_schema_version="nlu-target-v1",
             promotion_reason="test fixture",
         )
     )
@@ -2904,6 +2906,8 @@ def test_l2_replay_target_cli_requires_target_artifact(tmp_path: Path) -> None:
         ArtifactManifest(
             artifact_set_id="gen_001_baseline",
             generation=1,
+            target_name="nlu",
+            target_schema_version="nlu-target-v1",
             promotion_reason="test fixture",
         )
     )

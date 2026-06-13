@@ -47,6 +47,8 @@ runs/<id>/artifacts/
 {
   "artifact_set_id": "gen_001_abcd",
   "generation": 1,
+  "target_name": "nlu",
+  "target_schema_version": "nlu-target-v1",
   "parent_artifact_set_id": "gen_000_...",
   "created_at": "...",
   "schema_versions": {},
@@ -59,6 +61,10 @@ runs/<id>/artifacts/
   "promotion_reason": "objective improved within gates"
 }
 ```
+
+`target_name` 和 `target_schema_version` 是必填字段。缺少 target identity 的旧
+manifest payload 不属于当前 artifact schema；Darjeeling runtime 不做隐式 NLU
+回填。
 
 `candidate_metrics["promotion_block_layer_regressions"]` 记录该 generation 是否启用默认 per-layer regression gate。启用时，显著单层 regression 会拒绝整组 promotion，`promotion_reason` 写 `per-layer regression gate failed: ...`，`regressed_layers` 仍保留被阻塞的层用于诊断。
 

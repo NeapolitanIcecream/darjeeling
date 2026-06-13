@@ -13,6 +13,14 @@ from darjeeling.targets.nlu.reports import (
 from darjeeling.targets.nlu.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
 
 
+def _nlu_manifest(**kwargs) -> ArtifactManifest:
+    return ArtifactManifest(
+        target_name="nlu",
+        target_schema_version="nlu-target-v1",
+        **kwargs,
+    )
+
+
 def test_l3_report_section_summarizes_mode_device_and_failures(tmp_path: Path) -> None:
     trace = TraceRecord(
         request_id="r1",
@@ -191,7 +199,7 @@ def test_generate_run_report_writes_hard_cases_jsonl_from_latest_generation(
         generation_dir / "hard_buffer.jsonl",
         build_hard_buffer([teacher_trace]),
     )
-    manifest = ArtifactManifest(
+    manifest = _nlu_manifest(
         artifact_set_id="gen_001_candidate",
         generation=1,
         artifact_paths={"hard_buffer": str(hard_buffer_path.relative_to(tmp_path / "artifacts"))},
@@ -274,7 +282,7 @@ def test_generate_run_report_writes_summary_metrics_artifacts_and_curves(
         encoding="utf-8",
     )
     store = ArtifactStore(tmp_path / "artifacts")
-    manifest = ArtifactManifest(
+    manifest = _nlu_manifest(
         artifact_set_id="gen_001_candidate",
         generation=1,
         artifact_paths={
@@ -485,7 +493,7 @@ def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -
 def test_generate_run_report_includes_l2_tuning_summary(tmp_path: Path) -> None:
     (tmp_path / "traces.jsonl").write_text("", encoding="utf-8")
     (tmp_path / "settings.json").write_text("{}\n", encoding="utf-8")
-    manifest = ArtifactManifest(
+    manifest = _nlu_manifest(
         artifact_set_id="gen_001_candidate",
         generation=1,
         artifact_paths={"l2_tuning": "generations/gen_001/l2/l2_tuning.json"},
@@ -546,7 +554,7 @@ def test_generate_run_report_includes_evolution_and_artifact_summary_tables(
     (tmp_path / "settings.json").write_text("{}\n", encoding="utf-8")
     generation_dir = tmp_path / "artifacts" / "generations" / "gen_001"
     generation_dir.mkdir(parents=True)
-    manifest = ArtifactManifest(
+    manifest = _nlu_manifest(
         artifact_set_id="gen_001_candidate",
         generation=1,
         artifact_paths={"l1_agent_diff": "generations/gen_001/diff.patch"},
@@ -685,7 +693,7 @@ def test_generate_run_report_includes_l1_program_paths_and_diff_snippet(
         encoding="utf-8",
     )
     ArtifactStore(tmp_path / "artifacts").promote(
-        ArtifactManifest(
+        _nlu_manifest(
             artifact_set_id="gen_001_l1",
             generation=1,
             artifact_paths={

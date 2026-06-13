@@ -413,6 +413,8 @@ def test_compiler_generation_drops_l2_target_when_retraining_core_l2(
         ArtifactManifest(
             artifact_set_id="gen_001_l2_target",
             generation=1,
+            target_name="nlu",
+            target_schema_version="nlu-target-v1",
             artifact_paths={
                 "l2_target": "generations/gen_001/l2/target/target_l2.py",
             },
