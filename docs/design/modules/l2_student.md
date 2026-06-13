@@ -174,7 +174,7 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 
 Inner L2 target-evolution path：
 
-- `edge-mvp l2 target-evolve --mode agent-session` 是真实 L2 target evolve 主入口。它准备固定 target snapshot 和隔离 workspace，然后启动一个 long-running L4 agent session；agent 在 session 内自主决定 edit、evaluate、Optuna/search、debug 和 stop 的次数。
+- `edge-mvp-nlu l2 target-evolve --mode agent-session` 是真实 L2 target evolve 主入口。它准备固定 target snapshot 和隔离 workspace，然后启动一个 long-running L4 agent session；agent 在 session 内自主决定 edit、evaluate、Optuna/search、debug 和 stop 的次数。
 - Outer Darjeeling loop 负责 teacher-visible data split、workspace/provenance、outer promotion gate 和 core artifact 管理；不承载 target-specific L2 代码。
 - Inner target workspace 使用 `program.md + target/ + system/darjeeling/ + data/ + tools/`：
   - `target/` 是唯一可写 target-dependent L2 runtime code。
@@ -218,15 +218,15 @@ Inner L2 target-evolution path：
 - Summary 还记录 `private_holdout_evidence`，用于区分 gate 失败原因：例如 `visible_support_gate_failed` 表示 visible validation 过关但 support 太薄，`selection_zero_accepts_for_inner_passing_rounds` 表示 private selection split 没观察到 candidate accepts，而不是观察到了错误。该字段只写 outer summary/promoted manifest，不写入 agent-visible `round_state.json` 或 `target_diagnostics.json`，避免把 private holdout aggregate feedback 泄露给 L4 agent。
 - 每次 agent session 或 legacy round 评估后都必须 snapshot 当时的 `target/` 到 `rounds/round_NNN_target/`，并在 payload 中写入 `target_snapshot`。`best_round` 和 adoption decision 指向的是某次被评估的 target snapshot，因此 promotion 必须复制该 snapshot，而不是盲目复制最终 workspace 的 `target/`。
 - `best_round` 的主排序仍以 private selection split 为准；当 selection 指标完全并列时，使用 visible validation 作为 tie-break，再偏向后续轮次。这允许 non-adopted outer replay stage 到真实改进过的 target snapshot，同时不把可见集优化凌驾于 private holdout gate 之上。
-- 通过 adoption gate 的 target candidate 可由 `edge-mvp l2 promote-target` 转成 runtime artifact。未通过 adoption gate 的 `best_round` 只能在显式 `--allow-non-adopted` 下 stage 到隔离 run，用于外层 replay 诊断；manifest 必须标记 `l2_target_inner_adopted=false`，不能被误读为 inner-adopted artifact。
-- `edge-mvp l2 replay-target` 是 target artifact 的正式 outer replay gate：candidate 默认取 current manifest，baseline 默认取 parent manifest，在同一批 teacher-labeled traces 上输出 `l2-target-outer-replay-v1`。默认 `accuracy_epsilon=0`，并包含 settings L1 Rust worker，确保 target candidate 不能用 frame exactness regression 换 L4 share。无论 inner 是否 adopted，最终是否采用仍以 3k/10k e2e replay 的 frame exactness、wrong accept 和 L4 share 为准。
+- 通过 adoption gate 的 target candidate 可由 `edge-mvp-nlu l2 promote-target` 转成 runtime artifact。未通过 adoption gate 的 `best_round` 只能在显式 `--allow-non-adopted` 下 stage 到隔离 run，用于外层 replay 诊断；manifest 必须标记 `l2_target_inner_adopted=false`，不能被误读为 inner-adopted artifact。
+- `edge-mvp-nlu l2 replay-target` 是 target artifact 的正式 outer replay gate：candidate 默认取 current manifest，baseline 默认取 parent manifest，在同一批 teacher-labeled traces 上输出 `l2-target-outer-replay-v1`。默认 `accuracy_epsilon=0`，并包含 settings L1 Rust worker，确保 target candidate 不能用 frame exactness regression 换 L4 share。无论 inner 是否 adopted，最终是否采用仍以 3k/10k e2e replay 的 frame exactness、wrong accept 和 L4 share 为准。
 - `promote-target` 不改 Darjeeling core：它写入新的 `l2_student.joblib` 和 `l2_target` module artifact；runtime replay 与 compiler offline replay 加载同一 target wrapper，保持评估/运行语义一致。若普通 compiler generation 重新训练 core L2 bundle，则必须丢弃继承来的 `l2_target`，除非该 generation 明确做了 target-aware adoption；否则会把 target code 和不兼容 bundle 混用。
 - target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/validation-fold 数据推导，不能依赖 hidden dataset knowledge 或外部 dataset 知识。单条 visible row 的 exact utterance exception 或 request-id 记忆化不允许作为泛化机制；agent 应优先写有多个 visible 支持或清晰 schema 语义的 pattern-level lexical/slot-support 规则。是否采用由 holdout/promotion 指标和 outer replay 决定，而不是由 dataset-independent core 规则决定。Summary 和 promoted manifest 必须记录 `target_code_policy`，其中明确 `core_must_remain_dataset_independent=true`、`target_specific_code_is_not_rejected_for_dataset_dependence=true` 和 single-row memorization 禁止规则。
 - 当前实现状态：已支持 baseline-first `agent-session` single-launch 主路径、target workspace evaluator、可见多 fold validation、private holdout gate、visible `tools/search_config.py`、local-search trial report 和机器可读 `evidence_policy`。下一轮真实 L2 实验应优先使用 `agent-session`，让 agent 在一个 session 内自行调用 evaluate/search。
 
 Optuna tuning path：
 
-- `edge-mvp l2 tune --traces <trace.jsonl> --out <report.json>` 是 L4 coding agent 可调用的本地工具接口。
+- `edge-mvp-nlu l2 tune --traces <trace.jsonl> --out <report.json>` 是 L4 coding agent 可调用的本地工具接口。
 - `L2_TUNING_MODE=optuna` 时，compiler 在每个 generation 中先对 L2 training scope 做内部 train/validation split，再运行 Optuna search，最后用 best config 训练 runtime candidate。
 - Tuning report 使用 `l2-tune-v1`，记录每个 trial 的 params、最终 `L2StudentConfig`、split policy、validation unguarded/guarded metrics 和 p95 latency。
 - Optuna 不能读取 promotion holdout、hidden gold labels、final eval 或 future stream；它只优化 teacher-visible train window 的内部 residual validation。
@@ -249,7 +249,7 @@ L2 training scope 是显式实验开关：
 MLP 不是替换默认 L2 的硬编码选择，而是一个可复现实验 family：
 
 - `L2_INTENT_MODEL_FAMILY=mlp` 可以直接启用 deterministic MLP candidate。
-- `edge-mvp experiment l2-mlp` 固定开启 MLP intent family，用于与 baseline 同场 replay。
-- `edge-mvp experiment l2-tuned` 开启 Optuna tuning，用于验证本地搜索是否优于 baseline/固定 MLP。
+- `edge-mvp-nlu experiment l2-mlp` 固定开启 MLP intent family，用于与 baseline 同场 replay。
+- `edge-mvp-nlu experiment l2-tuned` 开启 Optuna tuning，用于验证本地搜索是否优于 baseline/固定 MLP。
 - `L4_PROPOSAL_MODE=live` 时，L4 可以在 bounded config 中提议 `intent_model_family=mlp` 及相关参数；更强路径是 L4 coding agent 修改 L2 代码或 search space 后再调用 Optuna。
 - `candidate_metrics["l2_config"]` 记录最终训练配置，避免实验结果只留下自然语言描述。

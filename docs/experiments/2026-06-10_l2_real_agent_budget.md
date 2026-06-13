@@ -38,7 +38,7 @@ the project settings pricing.
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-fixed500-r1 \
   --max-traces 500 \

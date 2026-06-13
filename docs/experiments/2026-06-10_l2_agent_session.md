@@ -8,7 +8,7 @@ rather than as a separate outer evolve phase.
 
 ## Design Change
 
-`edge-mvp l2 target-evolve` now accepts:
+`edge-mvp-nlu l2 target-evolve` now accepts:
 
 ```bash
 --mode agent-session
@@ -33,7 +33,7 @@ Command used a no-op fake Codex command to validate wiring without LLM cost:
 
 ```bash
 mkdir -p runs/l2-agent-session-noop-smoke-r1
-L2_AGENT_CODEX_COMMAND=/usr/bin/true uv run edge-mvp l2 target-evolve \
+L2_AGENT_CODEX_COMMAND=/usr/bin/true uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-agent-session-noop-smoke-r1 \
   --max-traces 80 \
@@ -84,7 +84,7 @@ After tightening the agent-visible state contract, I reran the no-op
 ```bash
 rm -rf runs/l2-agent-session-noop-smoke-r2
 mkdir -p runs/l2-agent-session-noop-smoke-r2
-L2_AGENT_CODEX_COMMAND=/usr/bin/true uv run edge-mvp l2 target-evolve \
+L2_AGENT_CODEX_COMMAND=/usr/bin/true uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-agent-session-noop-smoke-r2 \
   --max-traces 80 \

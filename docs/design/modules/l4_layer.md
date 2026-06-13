@@ -84,10 +84,10 @@ Context：
 - adapter 使用 `build_proposal_context`、OpenAI chat completions、JSON response format、`prompt_cache_key`、`prompt_cache_retention` 和 `PROPOSAL_MAX_TOKENS`。
 - adapter 返回 validated JSON object、raw response、usage、model、context hash、prompt cache key 和 source trace IDs。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded L2 config proposal；这是轻量 proposal path。
-- 用户决策后的 L2 主 evolve path 是 L4 coding agent 在隔离 target workspace 内负责 target code、特征和 search-space 设计，Optuna/search 作为 workspace tool 辅助局部调参。当前已实现本地 Optuna tuner、`L2_TUNING_MODE=optuna` compiler 接入，以及 `edge-mvp l2 target-evolve --mode agent-session`。
+- 用户决策后的 L2 主 evolve path 是 L4 coding agent 在隔离 target workspace 内负责 target code、特征和 search-space 设计，Optuna/search 作为 workspace tool 辅助局部调参。当前已实现本地 Optuna tuner、`L2_TUNING_MODE=optuna` compiler 接入，以及 `edge-mvp-nlu l2 target-evolve --mode agent-session`。
 - L2 proposal 或 Optuna tuning 都不能直接决定 runtime accept；accept threshold 仍由 deterministic grid search 选择，最终仍由 replay gate 决定。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 legacy bounded L3 prompt candidate proposal。
-- L3 prompt proposal 只能引用 teacher-visible trace IDs 作为 few-shot examples；compiler 会展开为 `L3PromptArtifact` 并写入 `l3_prompt_candidate`，但不会在缺少 regenerated/shadow replay 时提升为 runtime `l3_prompt`。真实 L3 prompt evolve 主路径是 `edge-mvp l3 prompt-evolve` 的 agent-session job。
+- L3 prompt proposal 只能引用 teacher-visible trace IDs 作为 few-shot examples；compiler 会展开为 `L3PromptArtifact` 并写入 `l3_prompt_candidate`，但不会在缺少 regenerated/shadow replay 时提升为 runtime `l3_prompt`。真实 L3 prompt evolve 主路径是 `edge-mvp-nlu l3 prompt-evolve` 的 agent-session job。
 - 当前 compiler 已在 `L4_PROPOSAL_MODE=live` 时调用该 adapter 生成 bounded guard search proposal。
 - Guard proposal 只能影响 threshold grid 与 wrong-accept 上限；最终 threshold 仍由 deterministic local search/replay 选择，L4 不能直接决定 runtime accept。
 - 更复杂的 guard family/feature-family proposal 仍是后续增强。
@@ -171,7 +171,7 @@ Outer/Inner loop 分工：
 
 职责：
 
-- 由 `edge-mvp l2 target-evolve --mode agent-session` 启动 Codex CLI。
+- 由 `edge-mvp-nlu l2 target-evolve --mode agent-session` 启动 Codex CLI。
 - 向 agent 提供隔离 target workspace、teacher-visible L2 data files、当前 metrics、objective、constraints、diagnostics 和命令说明。
 - L2 context files 暴露 visible validation、visible train-audit、visible cross-audit、slot-risk、intent-confusion 和 slot cue diagnostics，使 agent 在扩大 coverage 前优先处理 frame exactness 风险。
 - 允许 agent 修改 `target/` 中的 target-dependent runtime code，并调用 workspace 内的 evaluate/search tools。
@@ -233,16 +233,16 @@ Agent 权限：
 当前实现状态：
 
 - 已实现 `darjeeling.targets.nlu.compiler.l2_target_evolution` 和
-  `edge-mvp l2 target-evolve --mode agent-session`，用于 target-dependent
+  `edge-mvp-nlu l2 target-evolve --mode agent-session`，用于 target-dependent
   single-session inner job。该路径当前支持 baseline-first evaluation、one-session
   Codex launch、fixed split evaluator、target workspace scope gate、
   private selection/promotion gates 和 target snapshot promotion。
 - Codex CLI 配置由 `L2_TARGET_AGENT_*` settings 控制，包括命令、模型、timeout、sandbox、approval policy、config/rules/session persistence 隔离选项。
-- 普通 replay/tuning 不会产生 live LLM cost；真实 target evolution 必须显式运行 `edge-mvp l2 target-evolve --mode agent-session`。
+- 普通 replay/tuning 不会产生 live LLM cost；真实 target evolution 必须显式运行 `edge-mvp-nlu l2 target-evolve --mode agent-session`。
 - `tools/search_config.py` 不消耗 LLM tokens；它只优化可见 train/validation folds，并把 best visible config 写入 `target/config.json`。L4 coding agent 可在同一个 session 内调用它，但 search 结果不能自证 adoption。若 visible support 已经达标，agent 不应仅为了提高 raw accepts 降低 `accept_threshold`；这种 config 覆盖扩张容易绕过 target-local veto 的安全意图，必须由 visible train-audit、cross-audit 和 cue probes 共同证明必要且安全。
 - Target workspace 暴露 `accept_prediction(...)` veto hook。L4 agent 可以用它实现 slot-risk、low-support、pattern-mismatch 等 abstain 规则；该 hook 不能 force accept，只能减少 core guard accepts，因此是控制 frame exactness regression 的优先机制。
 - Target workspace 也暴露 `postprocess_frame(...)`。当 visible target data 支持稳定解析时，L4 agent 应优先用 postprocess 补全 slot 或修正 frame；这类 target-specific code 只能留在 `target/`，不能进入 Darjeeling core。
-- Adopted target workspace 通过 `edge-mvp l2 promote-target` 进入 manifest，写入 `l2_student` 和 `l2_target` artifacts。Runtime replay 与 compiler offline replay 都加载 target wrapper，避免 target-loop evaluator 与系统 replay 语义分叉。
+- Adopted target workspace 通过 `edge-mvp-nlu l2 promote-target` 进入 manifest，写入 `l2_student` 和 `l2_target` artifacts。Runtime replay 与 compiler offline replay 都加载 target wrapper，避免 target-loop evaluator 与系统 replay 语义分叉。
 - Target evaluator 在 visible validation 上暴露 `near_miss_examples`，帮助 L4 agent 找到高 guard probability 但被拒绝的 coverage 机会。它同时写入 `target_diagnostics.json`，按 teacher intent family 汇总 rejected-correct、vetoed-correct、accepted-wrong 和 intent-correct-slot-wrong，并把 validation accepted-wrong families 提升成 `latest_safety_backlog`，避免 agent 只凭少量样本或 raw coverage 做选择。当 backlog 非空时，agent round 的目标顺序是先修 visible wrong accepts，再考虑 near-miss coverage。若 validation backlog 已清空但 private selection 仍失败，agent 可以读取 `latest_visible_cross_audit_safety_backlog` 和 `latest_train_audit_safety_backlog`，从 visible held-out retraining 和 visible train rows 中寻找更宽的 target safety pattern；slot-risk backlog 还提供 `high_guard_items`，把低频但 guard probability 高的 visible slot/schema mismatch 单独排出来，避免它们被大 family 的数量排序淹没。每个 slot-risk item 同时列出 `missing_slot_keys`、`extra_slot_keys` 和 `changed_slot_keys`，让 L4 agent 能直接按 schema 差异设计 postprocess 或 veto。Slot-risk 之后，intent-confusion backlog 用 teacher intent / predicted intent pair 暴露高 guard wrong-intent examples。`visible_slot_cue_summary` 提供跨 intent 的 visible slot cue 索引；其中 `slot_key_terms`、top values 和 examples 是 slotless/missing-slot accepted frame 停止前必须检查的可见依据。若 target workspace 提供 `data/slot_cue_probes.json`，core evaluator 会执行这些 target-supplied visible-only probes；core 不合成应用特定 mandatory cue checks。这些诊断都是 diagnostic-only，不参与 selection/adoption。Private selection/promotion 的 near-miss、family diagnostics 和 holdout evidence 只能留在 outer artifact 中用于人类/outer harness 分析，不进入 agent workspace。
 
 ## Direct API session 策略

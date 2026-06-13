@@ -72,6 +72,7 @@ from darjeeling.targets.nlu.schemas import (
     traces_to_teacher_view,
 )
 from darjeeling.targets.nlu.settings import Settings
+from darjeeling.targets.nlu.target import NluTargetSpec
 
 
 def compiler_inputs_from_traces(traces: list[TraceRecord]) -> list[TeacherTrace]:
@@ -669,6 +670,8 @@ def run_compiler_generation(
         parent_artifact_set_id=(
             current_manifest.artifact_set_id if current_manifest is not None else None
         ),
+        target_name=NluTargetSpec.name,
+        target_schema_version=NluTargetSpec.schema_version,
         schema_versions={
             "artifact_manifest": "artifact-manifest-v1",
             "l0_cache": "l0-exact-v1",

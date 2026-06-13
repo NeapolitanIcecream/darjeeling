@@ -137,7 +137,7 @@ L2 的演化不应让 L4 模型手工猜超参。L4 coding agent 负责需要 ge
 设计含义：
 
 - 调参是本地、可复现、可审计的工具调用，不消耗 L4 token 做人工搜索。
-- L4 coding agent 可以自由调用 `edge-mvp l2 tune`、target workspace
+- L4 coding agent 可以自由调用 `edge-mvp-nlu l2 tune`、target workspace
   `tools/search_config.py` 或等价 Python API，并读取 tuning report。
 - Optuna 不能直接优化最终 e2e test；compiler 中的 tuning 只使用 `teacher_train` 内部切分出的 validation，不读取 promotion holdout、gold eval 或 future stream。
 - `L2_TUNING_MODE=optuna` 是显式开关，默认关闭，避免普通 replay 默认变慢。

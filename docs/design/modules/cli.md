@@ -88,9 +88,9 @@ Experiment 子命令不是 metadata 占位；它们会执行 replay 并生成 re
 - `workload-locality`
 - `hard-buffer`
 
-`edge-mvp l2 tune` 支持 `--split-policy chronological|stratified_random`。默认 `chronological`，用于让 tuning validation 更接近后续 stream；`stratified_random` 仅用于 ablation 或小样本诊断。
+`edge-mvp-nlu l2 tune` 支持 `--split-policy chronological|stratified_random`。默认 `chronological`，用于让 tuning validation 更接近后续 stream；`stratified_random` 仅用于 ablation 或小样本诊断。
 
-`edge-mvp l2 target-evolve` 是新的 Inner L2 target-evolution loop 入口。它从一个 trace JSONL 中切出 `train`、agent-visible validation folds、私有 `selection_holdout` 和私有 `promotion_holdout`，创建 `workspace/l2_target/`，并在同一个 target workspace 内跑多轮快速 train/evaluate。`target/` 是唯一可写 target-dependent code；`runs/` 只是 scratch output；`system/darjeeling/`、`data/`、`tools/` 和 `program.md` 是 protected surface。每轮 mutating command 或 agent session 后、candidate evaluation 前会执行 workspace scope check，越界修改以 `workspace_scope_violation` 停止 job。agent workspace 只包含 train、visible validation 和 visible diagnostics；selection/promotion holdout 留在 outer job 私有目录，只由 outer harness 读取，private gate 派生 pass/fail 也不写入 agent-visible state。该命令用于解耦 L2 evolve 轮数与 outer replay `compile_every` cadence。
+`edge-mvp-nlu l2 target-evolve` 是新的 Inner L2 target-evolution loop 入口。它从一个 trace JSONL 中切出 `train`、agent-visible validation folds、私有 `selection_holdout` 和私有 `promotion_holdout`，创建 `workspace/l2_target/`，并在同一个 target workspace 内跑多轮快速 train/evaluate。`target/` 是唯一可写 target-dependent code；`runs/` 只是 scratch output；`system/darjeeling/`、`data/`、`tools/` 和 `program.md` 是 protected surface。每轮 mutating command 或 agent session 后、candidate evaluation 前会执行 workspace scope check，越界修改以 `workspace_scope_violation` 停止 job。agent workspace 只包含 train、visible validation 和 visible diagnostics；selection/promotion holdout 留在 outer job 私有目录，只由 outer harness 读取，private gate 派生 pass/fail 也不写入 agent-visible state。该命令用于解耦 L2 evolve 轮数与 outer replay `compile_every` cadence。
 
 `target-evolve` 先评估 unmodified baseline，再根据 `--mode` 执行 target
 evolution。真实主路径是 `--mode agent-session`：harness 启动一个
@@ -133,9 +133,9 @@ Core 不从 `visible_slot_cue_summary` 合成应用特定 probes。
 
 `target-evolve` 还会在 summary、`data/round_state.json` 和 `data/objective.json` 写入 `evidence_policy`。`standard` 结果标为 `cost_capped_probe`，`smoke` 标为 `connectivity_smoke`，即使失败也不能解释成 L2 evolve 已耗尽。只有足够预算、足够 teacher-labeled snapshot size 且至少完成一次 scoped candidate evaluation 的 `fixed-inner` run 才会标为 `fixed_snapshot_research`，且仍需通过 private selection/promotion gates 和 outer e2e replay 后，才可作为 L2 target-evolution 质量证据。显式把 `fixed-inner` 的 `--rounds` 或 `--max-agent-rounds` 压得过低时，evidence policy 会降级为 short/budget-capped probe；teacher-labeled traces 少于 500 时会降级为 small-snapshot probe；`agent-session` 未启动、命令失败或 workspace scope violation 会降级为 no-launch/incomplete probe。
 
-`edge-mvp l2 promote-target --target-run <target-run> --run-dir <run>` 将一个 `adoption_decision.adopted=true` 的 target-evolve run 提升为 replay runtime artifact。该命令继承 `<run>/artifacts/manifest.current.json` 中已有 artifact paths，重新用 target workspace 的 visible train split 训练 `l2_student.joblib`，复制 selected round 的 `target_snapshot` 到 generation 目录，并写入 `artifact_paths["l2_target"]`。如果历史 summary 没有 `target_snapshot`，才回退到 workspace 当前 `target/`。默认未通过 adoption gate 的 target run 会被拒绝；传 `--allow-non-adopted` 时只把 `best_round` 显式 stage 到 run manifest，用于外层 e2e replay 诊断，manifest 会记录 `l2_target_inner_adopted=false`、`l2_target_staged_for_outer_replay=true`、`l2_target_data_split_policy`、`l2_target_workspace_scope_policy` 和 `l2_target_private_holdout_evidence`。promotion 后普通 `edge-mvp run --compile-every <large>` 会自动加载 target wrapper。
+`edge-mvp-nlu l2 promote-target --target-run <target-run> --run-dir <run>` 将一个 `adoption_decision.adopted=true` 的 target-evolve run 提升为 replay runtime artifact。该命令继承 `<run>/artifacts/manifest.current.json` 中已有 artifact paths，重新用 target workspace 的 visible train split 训练 `l2_student.joblib`，复制 selected round 的 `target_snapshot` 到 generation 目录，并写入 `artifact_paths["l2_target"]`。如果历史 summary 没有 `target_snapshot`，才回退到 workspace 当前 `target/`。默认未通过 adoption gate 的 target run 会被拒绝；传 `--allow-non-adopted` 时只把 `best_round` 显式 stage 到 run manifest，用于外层 e2e replay 诊断，manifest 会记录 `l2_target_inner_adopted=false`、`l2_target_staged_for_outer_replay=true`、`l2_target_data_split_policy`、`l2_target_workspace_scope_policy` 和 `l2_target_private_holdout_evidence`。promotion 后普通 `edge-mvp run --compile-every <large>` 会自动加载 target wrapper。
 
-`edge-mvp l2 replay-target --run-dir <run> --traces <traces.jsonl> --out <report.json>` 是 target artifact 的正式 outer replay gate。它默认用 current manifest 作为 candidate、candidate 的 parent manifest 作为 baseline，在同一批 teacher-labeled traces 上跑 compiler offline replay，并输出 `l2-target-outer-replay-v1` JSON：baseline/candidate objective、layer counts、per-layer deltas 和 promotion decision。默认 `accuracy_epsilon=0`，因此 target candidate 不能用 frame exactness regression 换覆盖率；默认包含 settings 中的 L1 Rust worker，`--no-include-default-l1` 只用于轻量测试或隔离诊断。
+`edge-mvp-nlu l2 replay-target --run-dir <run> --traces <traces.jsonl> --out <report.json>` 是 target artifact 的正式 outer replay gate。它默认用 current manifest 作为 candidate、candidate 的 parent manifest 作为 baseline，在同一批 teacher-labeled traces 上跑 compiler offline replay，并输出 `l2-target-outer-replay-v1` JSON：baseline/candidate objective、layer counts、per-layer deltas 和 promotion decision。默认 `accuracy_epsilon=0`，因此 target candidate 不能用 frame exactness regression 换覆盖率；默认包含 settings 中的 L1 Rust worker，`--no-include-default-l1` 只用于轻量测试或隔离诊断。
 
 `no-guard` 是诊断性 ablation：它设置 `L2_GUARD_MODE=always_accept` 和 `FORCE_PROMOTE_ARTIFACTS=true`，使无 guard 的 L2 artifact 能进入该隔离 experiment runtime，报告 threshold 移除后的真实错误率和时延。该配置不用于主线 evolution。
 
@@ -153,7 +153,7 @@ Core 不从 `visible_slot_cue_summary` 合成应用特定 probes。
 
 `L1_AGENT_MODE=disabled` 在 preflight 中是 warn，不是 fail。它允许用户跑 smoke/replay 实验，但明确说明这不是完整 L1 evolution；真实 L1 evolution 实验必须显式设置 `L1_AGENT_MODE=agent-session` 并保证 `codex` 命令可用。
 
-L2 target evolution 不属于 `experiment preflight` 的默认检查范围；真实 target evolution 应显式运行 `edge-mvp l2 target-evolve --mode agent-session`，并用 `L2_TARGET_AGENT_*` 配置 Codex 命令、模型、timeout 和隔离选项。
+L2 target evolution 不属于 `experiment preflight` 的默认检查范围；真实 target evolution 应显式运行 `edge-mvp-nlu l2 target-evolve --mode agent-session`，并用 `L2_TARGET_AGENT_*` 配置 Codex 命令、模型、timeout 和隔离选项。
 
 ## Fail-fast 行为
 

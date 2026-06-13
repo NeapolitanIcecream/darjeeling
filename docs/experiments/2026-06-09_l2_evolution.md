@@ -163,7 +163,7 @@ but it still mixed two concerns:
 - It treated dataset-specific L2 code as if it were a Darjeeling-core patch,
   which incorrectly applied dataset-independence rules to target runtime code.
 
-The corrected design is now implemented as `edge-mvp l2 target-evolve`:
+The corrected design is now implemented as `edge-mvp-nlu l2 target-evolve`:
 
 - Outer Darjeeling creates a fixed target split and owns provenance, private
   promotion holdout, artifact adoption, and core invariants.
@@ -178,7 +178,7 @@ The corrected design is now implemented as `edge-mvp l2 target-evolve`:
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-inner-smoke-r2 \
   --rounds 5 \
@@ -221,7 +221,7 @@ The next iteration added baseline-first evaluation and an outer budget policy:
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-budget-smoke-r1 \
   --rounds 5 \
@@ -281,7 +281,7 @@ explicitly documented override.
 Validation smoke:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-profile-intent-smoke-r2 \
   --mode local-search \
@@ -315,7 +315,7 @@ Result:
 A one-round live Codex target-evolution job was run with GPT-5.5:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-codex-smoke-r1 \
   --rounds 1 \
@@ -370,7 +370,7 @@ only train/inner-validation rows and inner-validation aggregates.
 Dry-run smoke:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-split-smoke-r1 \
   --rounds 3 \
@@ -387,7 +387,7 @@ Dry-run result:
 Live Codex smoke:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-selection-codex-smoke-r1 \
   --rounds 1 \
@@ -426,7 +426,7 @@ Interpretation:
 ## Target local-search tuning smoke
 
 The next design iteration added a non-LLM `local-search` mode to
-`edge-mvp l2 target-evolve`. It runs Optuna over target-owned
+`edge-mvp-nlu l2 target-evolve`. It runs Optuna over target-owned
 `L2StudentConfig` overrides using only visible `train` and `inner_validation`,
 writes the selected visible config to `target/config.json`, and then lets the
 outer harness privately evaluate selection/promotion holdouts.
@@ -434,7 +434,7 @@ outer harness privately evaluate selection/promotion holdouts.
 First run:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-local-search-r1 \
   --rounds 1 \
@@ -471,7 +471,7 @@ Design correction from this run:
 Second run after tightening `compact`:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-local-search-r2 \
   --rounds 1 \
@@ -528,7 +528,7 @@ slot evidence.
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-accept-veto-r4 \
   --rounds 1 \
@@ -582,7 +582,7 @@ docs/experiments/patches/l2_target_email_from_veto_r1.patch
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-email-from-veto-r1 \
   --rounds 1 \
@@ -622,7 +622,7 @@ the predicted frame would have exactly matched the teacher frame.
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-near-miss-r1 \
   --rounds 1 \
@@ -669,7 +669,7 @@ docs/experiments/patches/l2_target_slotless_threshold075_r1.patch
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-slotless-threshold075-r2 \
   --rounds 1 \
@@ -731,7 +731,7 @@ Implementation changes:
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-budget-policy-r1 \
   --max-traces 500
@@ -767,7 +767,7 @@ Interpretation:
 A quality-bearing `local-search` run used the corrected 96-trial default:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-local-search-r3 \
   --mode local-search \
@@ -805,7 +805,7 @@ docs/experiments/patches/l2_target_email_from_postprocess_r1.patch
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-email-from-postprocess-r2 \
   --rounds 1 \
@@ -844,7 +844,7 @@ The adopted email-from target was wired into runtime artifacts:
 - `l2_target` is now a manifest artifact path next to `l2_student`.
 - Runtime replay and compiler offline replay load `TargetL2Layer` whenever
   `artifact_paths["l2_target"]` exists.
-- `edge-mvp l2 promote-target` copies `target/`, retrains the target L2 bundle
+- `edge-mvp-nlu l2 promote-target` copies `target/`, retrains the target L2 bundle
   from the target workspace train split, and writes a new generation.
 - If a normal compiler generation retrains core L2 without target-aware
   adoption, it drops inherited `l2_target` and records
@@ -863,7 +863,7 @@ only as bug evidence:
 The fair target-only replay used `--compile-every 999999`:
 
 ```bash
-uv run edge-mvp l2 promote-target \
+uv run edge-mvp-nlu l2 promote-target \
   --target-run runs/l2-target-evolve-email-from-postprocess-r2 \
   --run-dir runs/l2-target-postprocess-3k-r2
 
@@ -912,7 +912,7 @@ docs/experiments/patches/l2_target_email_query_postprocess_veto_r2.patch
 500-row target-evolve command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-email-query-postprocess-veto-r3 \
   --rounds 1 \
@@ -937,7 +937,7 @@ guard threshold are a coupled artifact, not independent knobs.
 For outer replay diagnosis, `promote-target` now supports explicit staging:
 
 ```bash
-uv run edge-mvp l2 promote-target \
+uv run edge-mvp-nlu l2 promote-target \
   --target-run runs/l2-target-evolve-email-query-postprocess-veto-r3 \
   --run-dir runs/l2-target-postprocess-veto-3k-r1 \
   --allow-non-adopted
@@ -985,7 +985,7 @@ Interpretation:
 The hand analysis above was converted into a reusable CLI gate:
 
 ```bash
-uv run edge-mvp l2 replay-target \
+uv run edge-mvp-nlu l2 replay-target \
   --run-dir <target-run-dir> \
   --traces <target-run-dir>/traces.jsonl \
   --out <target-run-dir>/reports/l2_target_outer_replay.json
@@ -998,7 +998,7 @@ worker by default, and uses `accuracy_epsilon=0` unless overridden.
 Old adopted email-from target:
 
 ```bash
-uv run edge-mvp l2 replay-target \
+uv run edge-mvp-nlu l2 replay-target \
   --run-dir runs/l2-target-postprocess-3k-r2 \
   --traces runs/l2-target-postprocess-3k-r2/traces.jsonl \
   --out runs/l2-target-postprocess-3k-r2/reports/l2_target_outer_replay.json
@@ -1015,7 +1015,7 @@ Result:
 Veto target:
 
 ```bash
-uv run edge-mvp l2 replay-target \
+uv run edge-mvp-nlu l2 replay-target \
   --run-dir runs/l2-target-postprocess-veto-3k-r1 \
   --traces runs/l2-target-postprocess-veto-3k-r1/traces.jsonl \
   --out runs/l2-target-postprocess-veto-3k-r1/reports/l2_target_outer_replay.json
@@ -1065,7 +1065,7 @@ docs/experiments/patches/l2_target_email_audio_veto_r3.patch
 500-row fixed-inner target-evolve command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-email-audio-veto-r2 \
   --budget-profile fixed-inner \
@@ -1092,7 +1092,7 @@ collecting another stream prefix or waiting for outer replay.
 The non-adopted best round was staged for an isolated 3k outer replay:
 
 ```bash
-uv run edge-mvp l2 promote-target \
+uv run edge-mvp-nlu l2 promote-target \
   --target-run runs/l2-target-evolve-email-audio-veto-r2 \
   --run-dir runs/l2-target-email-audio-veto-3k-r1 \
   --allow-non-adopted
@@ -1104,7 +1104,7 @@ uv run edge-mvp run \
   --teacher cache \
   --data-dir data/processed/massive_en_us
 
-uv run edge-mvp l2 replay-target \
+uv run edge-mvp-nlu l2 replay-target \
   --run-dir runs/l2-target-email-audio-veto-3k-r1 \
   --traces runs/l2-target-email-audio-veto-3k-r1/traces.jsonl \
   --out runs/l2-target-email-audio-veto-3k-r1/reports/l2_target_outer_replay.json
@@ -1152,7 +1152,7 @@ inner validation:
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-diagnostics-smoke-r1 \
   --budget-profile smoke \
@@ -1209,7 +1209,7 @@ result: multi-round target-evolve selected a `best_round`, but
 The fixed 500-row inner run:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evolve-weather-veto-r2 \
   --budget-profile fixed-inner \
@@ -1230,7 +1230,7 @@ Inner result:
 The candidate was explicitly staged for outer replay, not inner-adopted:
 
 ```bash
-uv run edge-mvp l2 promote-target \
+uv run edge-mvp-nlu l2 promote-target \
   --target-run runs/l2-target-evolve-weather-veto-r2 \
   --run-dir runs/l2-target-weather-veto-3k-r2 \
   --allow-non-adopted
@@ -1242,7 +1242,7 @@ uv run edge-mvp run \
   --teacher cache \
   --data-dir data/processed/massive_en_us
 
-uv run edge-mvp l2 replay-target \
+uv run edge-mvp-nlu l2 replay-target \
   --run-dir runs/l2-target-weather-veto-3k-r2 \
   --traces runs/l2-target-weather-veto-3k-r2/traces.jsonl \
   --out runs/l2-target-weather-veto-3k-r2/reports/l2_target_outer_replay.json
@@ -1297,7 +1297,7 @@ Default live agent caps:
 No-launch smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-agent-budget-smoke-r1 \
   --mode codex-cli \
@@ -1339,7 +1339,7 @@ writing it back into the agent workspace.
 Rerun command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-holdout-evidence-weather-r1 \
   --budget-profile fixed-inner \
@@ -1399,7 +1399,7 @@ We also hardened the isolated target workspace boundary:
 Intent-stratified weather command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-intent-stratified-weather-r2 \
   --budget-profile fixed-inner \
@@ -1494,7 +1494,7 @@ Design change:
 3k rerun:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-folds-weather-3k-r2 \
   --budget-profile fixed-inner \
@@ -1559,7 +1559,7 @@ predicted: qa_currency({})
 3-fold command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-currency-slotless-veto-3k-r2 \
   --budget-profile fixed-inner \
@@ -1641,7 +1641,7 @@ Design change:
 Validation command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-safety-backlog-currency-3k-r1 \
   --budget-profile fixed-inner \
@@ -1691,7 +1691,7 @@ It adds conservative `accept_prediction` vetoes for:
 Validation command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-safety-backlog-veto-3k-r3 \
   --budget-profile fixed-inner \
@@ -1760,7 +1760,7 @@ It adds target-only vetoes for visible train-audit patterns:
 Validation command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-train-audit-slot-risk-veto-3k-r1 \
   --budget-profile fixed-inner \
@@ -1813,7 +1813,7 @@ It adds two structural checks:
 Validation command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-slot-support-policy-3k-r1 \
   --budget-profile fixed-inner \
@@ -1850,7 +1850,7 @@ Interpretation:
 ## Visible cross-audit diagnostics
 
 The next implementation added a diagnostic-only `visible_cross_audit` split to
-`edge-mvp l2 target-evolve`. When enabled, the harness uses only visible
+`edge-mvp-nlu l2 target-evolve`. When enabled, the harness uses only visible
 train+validation rows, splits them into intent-stratified held-out folds,
 re-trains an L2 bundle per fold, and evaluates the current target code on the
 held-out visible fold. The result is written into `round_state.json` and
@@ -1863,7 +1863,7 @@ folds are clean but private selection still finds wrong accepts.
 Validation command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-cross-audit-3k-r1 \
   --budget-profile fixed-inner \
@@ -1919,7 +1919,7 @@ fixed-inner default was set to `local_search_trials=32` and
 An attempted larger run was intentionally stopped:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-local-search-cross-audit-3k-r1 \
   --budget-profile fixed-inner \
@@ -1938,7 +1938,7 @@ The bounded validation run used 12 trials, top-2 cross-audit re-rank, and a
 180-second local-search timeout:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-local-search-cross-audit-3k-r2 \
   --budget-profile fixed-inner \
@@ -1990,7 +1990,7 @@ It adds:
 Validation command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-local-search-config-safety-veto-3k-r3 \
   --budget-profile fixed-inner \
@@ -2017,11 +2017,11 @@ Outer replay command:
 cp -R runs/l2-list-fallback-tuned-3k-r1 \
   runs/l2-target-local-search-config-safety-veto-outer-3k-r1
 
-uv run edge-mvp l2 promote-target \
+uv run edge-mvp-nlu l2 promote-target \
   --target-run runs/l2-target-local-search-config-safety-veto-3k-r3 \
   --run-dir runs/l2-target-local-search-config-safety-veto-outer-3k-r1
 
-uv run edge-mvp l2 replay-target \
+uv run edge-mvp-nlu l2 replay-target \
   --run-dir runs/l2-target-local-search-config-safety-veto-outer-3k-r1 \
   --traces runs/l2-target-local-search-config-safety-veto-outer-3k-r1/traces.jsonl \
   --out runs/l2-target-local-search-config-safety-veto-outer-3k-r1/reports/l2_target_outer_replay.json
@@ -2042,11 +2042,11 @@ Outer replay result:
 cp -R runs/l2-scale-tuned-10k-r1 \
   runs/l2-target-local-search-config-safety-veto-outer-10k-r1
 
-uv run edge-mvp l2 promote-target \
+uv run edge-mvp-nlu l2 promote-target \
   --target-run runs/l2-target-local-search-config-safety-veto-3k-r3 \
   --run-dir runs/l2-target-local-search-config-safety-veto-outer-10k-r1
 
-uv run edge-mvp l2 replay-target \
+uv run edge-mvp-nlu l2 replay-target \
   --run-dir runs/l2-target-local-search-config-safety-veto-outer-10k-r1 \
   --traces runs/l2-target-local-search-config-safety-veto-outer-10k-r1/traces.jsonl \
   --out runs/l2-target-local-search-config-safety-veto-outer-10k-r1/reports/l2_target_outer_replay.json
@@ -2105,7 +2105,7 @@ The target workspace manifest now records standard tool commands, including a
 plain-Python context inspector:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-tooling-isolation-smoke-r1 \
   --budget-profile smoke \

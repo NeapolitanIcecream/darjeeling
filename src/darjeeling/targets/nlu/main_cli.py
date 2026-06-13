@@ -92,6 +92,7 @@ from darjeeling.targets.nlu.settings import (
     DEFAULT_PROCESSED_DATA_DIR,
     load_settings,
 )
+from darjeeling.targets.nlu.target import NluTargetSpec
 from darjeeling.targets.nlu.trace import read_traces
 
 app = typer.Typer(no_args_is_help=True)
@@ -615,6 +616,8 @@ def _promote_l3_prompt_artifact(
         artifact_set_id=f"gen_{generation:03d}_l3_prompt",
         generation=generation,
         parent_artifact_set_id=current_manifest.artifact_set_id if current_manifest else None,
+        target_name=NluTargetSpec.name,
+        target_schema_version=NluTargetSpec.schema_version,
         artifact_paths=artifact_paths,
         candidate_metrics=candidate_metrics,
         promotion_reason="explicit L3 prompt replay passed gates",
@@ -1071,7 +1074,7 @@ def _resolve_l2_target_local_search_cross_audit_top_k(
 def l2_promote_target(
     target_run: Annotated[
         Path,
-        typer.Option(help="Output directory from `edge-mvp l2 target-evolve`."),
+        typer.Option(help="Output directory from `edge-mvp-nlu l2 target-evolve`."),
     ],
     run_dir: Annotated[
         Path,
@@ -1263,6 +1266,8 @@ def _promote_l2_target_run(
         artifact_set_id=f"gen_{generation:03d}_l2_target",
         generation=generation,
         parent_artifact_set_id=current_manifest.artifact_set_id if current_manifest else None,
+        target_name=NluTargetSpec.name,
+        target_schema_version=NluTargetSpec.schema_version,
         schema_versions={
             "artifact_manifest": "artifact-manifest-v1",
             "l2_target": "l2-target-runtime-v1",
@@ -2105,7 +2110,7 @@ def _preflight_l3_check(*, run_dir: Path, settings) -> dict:
         return {
             **base,
             "status": status,
-            "message": f"run `edge-mvp l3 bench --out {benchmark_path}` before relying on L3",
+            "message": f"run `edge-mvp-nlu l3 bench --out {benchmark_path}` before relying on L3",
             "readiness": "benchmark_missing",
             "benchmark_required": True,
             "benchmark_status": "missing",

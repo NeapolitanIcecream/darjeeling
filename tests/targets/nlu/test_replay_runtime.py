@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.targets.nlu.data import DataRecord
 from darjeeling.targets.nlu.layers.l2_student import (
@@ -12,6 +14,14 @@ from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
 from darjeeling.targets.nlu.replay import run_replay
 from darjeeling.targets.nlu.schemas import Frame
 from darjeeling.targets.nlu.settings import load_settings
+
+
+def _nlu_manifest(**kwargs) -> ArtifactManifest:
+    return ArtifactManifest(
+        target_name="nlu",
+        target_schema_version="nlu-target-v1",
+        **kwargs,
+    )
 
 
 def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> None:
@@ -141,7 +151,7 @@ def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:
     )
     bundle.save(l2_dir / "l2_student.joblib")
     ArtifactStore(run_dir / "artifacts").promote(
-        ArtifactManifest(
+        _nlu_manifest(
             artifact_set_id="gen_001_l2",
             generation=1,
             artifact_paths={"l2_student": "generations/gen_001/l2/l2_student.joblib"},
@@ -162,6 +172,42 @@ def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:
     trace = json.loads((run_dir / "traces.jsonl").read_text(encoding="utf-8"))
     assert trace["chosen_layer"] == "L2"
     assert trace["final_frame"]["intent"] == "intent_beta"
+
+
+def test_run_replay_rejects_current_manifest_for_wrong_target(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    data_dir.mkdir()
+    run_dir.mkdir()
+    (data_dir / "train.jsonl").write_text(
+        DataRecord(
+            request_id="r1",
+            utterance="beta sample request",
+            gold_frame=Frame(intent="intent_beta"),
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+    ArtifactStore(run_dir / "artifacts").promote(
+        ArtifactManifest(
+            artifact_set_id="gen_001_other",
+            generation=1,
+            target_name="other",
+            target_schema_version="other-v1",
+            artifact_paths={},
+            promotion_reason="test fixture",
+        )
+    )
+
+    with pytest.raises(ValueError, match="artifact manifest target mismatch"):
+        run_replay(
+            stream="sequential",
+            max_requests=1,
+            teacher_mode="cache",
+            run_dir=run_dir,
+            data_dir=data_dir,
+            settings=load_settings(),
+        )
 
 
 def test_run_replay_uses_l2_target_artifact(tmp_path: Path) -> None:
@@ -234,7 +280,7 @@ def postprocess_frame(utterance, frame, metadata):
         encoding="utf-8",
     )
     ArtifactStore(run_dir / "artifacts").promote(
-        ArtifactManifest(
+        _nlu_manifest(
             artifact_set_id="gen_001_l2_target",
             generation=1,
             artifact_paths={
@@ -298,7 +344,7 @@ def test_run_replay_loads_promoted_l3_prompt_artifact(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     ArtifactStore(run_dir / "artifacts").promote(
-        ArtifactManifest(
+        _nlu_manifest(
             artifact_set_id="gen_001_l3",
             generation=1,
             artifact_paths={"l3_prompt": "generations/gen_001/l3/l3_prompt.json"},

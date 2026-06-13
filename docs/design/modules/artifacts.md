@@ -73,7 +73,7 @@ runs/<id>/artifacts/
 
 ## L2 target artifact
 
-当 `edge-mvp l2 promote-target` 提升一个通过 target-evolve adoption gate 的候选时，manifest 同时记录：
+当 `edge-mvp-nlu l2 promote-target` 提升一个通过 target-evolve adoption gate 的候选时，manifest 同时记录：
 
 - `artifact_paths["l2_student"]`: 用 target workspace 的 visible train split 和 target config 重新训练得到的 L2 bundle。
 - `artifact_paths["l2_target"]`: copied target runtime module，通常是 `generations/gen_*/l2/target/target_l2.py`。
@@ -111,7 +111,7 @@ L1 coding-agent artifact 中的 `provenance.json` 使用 `l1-agent-provenance-v1
 
 当 L1 coding-agent 成功产出 candidate crate 时，compiler 会在 generation 目录写 `l1/l1_benchmark.json` 并在 manifest 中记录 `artifact_paths["l1_benchmark"]`。这是跨 generation L1 worker benchmark 表格的数据源。
 
-`reports/l3_benchmark.json` 是显式 preflight 观测产物，由 `edge-mvp l3 bench --out ...` 写入。它记录本地 SLM 单配置 benchmark 的 status/error、backend、actual device、load/generation latency、parse/repair、would-accept 和 throughput。Report 只读取该文件，不自动加载本地模型。
+`reports/l3_benchmark.json` 是显式 preflight 观测产物，由 `edge-mvp-nlu l3 bench --out ...` 写入。它记录本地 SLM 单配置 benchmark 的 status/error、backend、actual device、load/generation latency、parse/repair、would-accept 和 throughput。Report 只读取该文件，不自动加载本地模型。
 
 ## L3 mode artifact
 
@@ -127,6 +127,6 @@ disabled | shadow | guarded
 
 `artifact_paths["l3_prompt_candidate"]` 只表示 legacy L4 direct API 生成的候选 prompt artifact，不能被 runtime 自动加载。Compiler 只有在 L3 prompt candidate 能被 regenerated replay 或 shadow replay 评估后，才应把它提升为 runtime `l3_prompt`。
 
-`edge-mvp l3 prompt-evolve` 生成的 prompt candidate snapshot 存在该 job 的 `candidates/candidate_l3_prompt.json` 中。它同样不能绕过 replay/promotion；只有 outer harness 的 visible validation、private selection、private promotion 和后续显式 promotion 通过后，runtime manifest 才能记录为 `artifact_paths["l3_prompt"]`。
+`edge-mvp-nlu l3 prompt-evolve` 生成的 prompt candidate snapshot 存在该 job 的 `candidates/candidate_l3_prompt.json` 中。它同样不能绕过 replay/promotion；只有 outer harness 的 visible validation、private selection、private promotion 和后续显式 promotion 通过后，runtime manifest 才能记录为 `artifact_paths["l3_prompt"]`。
 
-`artifact_paths["l3_prompt_replay"]` 保存 `l3-prompt-replay-v1` promotion 证据。该 artifact 由显式 `edge-mvp l3 replay-prompt` 生成，并由 `edge-mvp l3 promote-prompt` 校验后归档到 generation 目录。Replay artifact 必须包含 `prompt_version` 和 prompt canonical JSON 的 `prompt_sha256`，promotion 时必须与待提升的 `L3PromptArtifact` 匹配。Promotion manifest 必须把 replay 聚合指标写入 `candidate_metrics`，但不应把 replay request 明细塞进后续 L4 candidate-generation context。
+`artifact_paths["l3_prompt_replay"]` 保存 `l3-prompt-replay-v1` promotion 证据。该 artifact 由显式 `edge-mvp-nlu l3 replay-prompt` 生成，并由 `edge-mvp-nlu l3 promote-prompt` 校验后归档到 generation 目录。Replay artifact 必须包含 `prompt_version` 和 prompt canonical JSON 的 `prompt_sha256`，promotion 时必须与待提升的 `L3PromptArtifact` 匹配。Promotion manifest 必须把 replay 聚合指标写入 `candidate_metrics`，但不应把 replay request 明细塞进后续 L4 candidate-generation context。

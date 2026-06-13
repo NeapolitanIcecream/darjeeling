@@ -1364,10 +1364,10 @@ No mode named `fake` or `mock` for the main demo.
 ### 14.3 Run experiments
 
 ```bash
-uv run edge-mvp experiment main-evolution --run-dir runs/main
-uv run edge-mvp experiment l2-family --run-dir runs/l2-family
-uv run edge-mvp experiment no-guard --run-dir runs/no-guard
-uv run edge-mvp experiment workload-locality --run-dir runs/workload-locality
+uv run edge-mvp-nlu experiment main-evolution --run-dir runs/main
+uv run edge-mvp-nlu experiment l2-family --run-dir runs/l2-family
+uv run edge-mvp-nlu experiment no-guard --run-dir runs/no-guard
+uv run edge-mvp-nlu experiment workload-locality --run-dir runs/workload-locality
 ```
 
 ### 14.4 Generate report

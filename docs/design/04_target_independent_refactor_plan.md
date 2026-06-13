@@ -328,7 +328,7 @@ NLU 报告都在 NLU target 侧。
 - Core CLI：
   - `edge-mvp run --target nlu ...`
   - `edge-mvp report --target nlu ...`
-  - `edge-mvp experiment ... --target nlu ...`
+  - `edge-mvp-nlu experiment ...`
 - Target CLI：
   - `edge-mvp-nlu massive prepare ...`
   - `edge-mvp-nlu l2 train ...`

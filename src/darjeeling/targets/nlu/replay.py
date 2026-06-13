@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from darjeeling.artifacts.store import ArtifactStore
+from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.contracts import CompileContext
 from darjeeling.contracts import LayerResult as CoreLayerResult
 from darjeeling.contracts import TeacherTrace as CoreTeacherTrace
@@ -270,6 +270,7 @@ def _build_runtime_layers(
     teacher_layer: CachedTeacherLayer,
 ) -> dict[str, Any]:
     manifest = ArtifactStore(run_dir / "artifacts").load_current_manifest()
+    _validate_manifest_target_identity(manifest, target=target)
     return dict(
         target.runtime.build_layers(
             manifest=manifest,
@@ -281,6 +282,27 @@ def _build_runtime_layers(
                 "nlu_settings": settings.model_dump(mode="json"),
             },
         )
+    )
+
+
+def _validate_manifest_target_identity(
+    manifest: ArtifactManifest | None,
+    *,
+    target: NluTarget,
+) -> None:
+    if manifest is None:
+        return
+    if (
+        manifest.target_name == target.name
+        and manifest.target_schema_version == target.schema_version
+    ):
+        return
+    actual_name = manifest.target_name or "<missing>"
+    actual_version = manifest.target_schema_version or "<missing>"
+    raise ValueError(
+        "artifact manifest target mismatch: "
+        f"expected {target.name}/{target.schema_version}, "
+        f"got {actual_name}/{actual_version}"
     )
 
 

@@ -2070,7 +2070,8 @@ def _l3_benchmark_section(l3_benchmark: dict[str, Any] | None) -> str:
     lines = ["## L3 Hardware Benchmark", ""]
     if l3_benchmark is None:
         lines.append(
-            "No `reports/l3_benchmark.json` found. Run `edge-mvp l3 bench --out ...` to record one."
+            "No `reports/l3_benchmark.json` found. "
+            "Run `edge-mvp-nlu l3 bench --out ...` to record one."
         )
         return "\n".join(lines)
     if l3_benchmark.get("status") != "success":

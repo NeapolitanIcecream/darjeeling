@@ -24,7 +24,7 @@ artifacts.
 Default disabled preflight:
 
 ```bash
-uv run edge-mvp experiment preflight \
+uv run edge-mvp-nlu experiment preflight \
   --run-dir runs/l2-list-fallback-tuned-3k-r1 \
   --teacher cache \
   --out runs/l3-preflight-disabled-smoke-r1.json
@@ -41,7 +41,7 @@ Result:
 Shadow without benchmark:
 
 ```bash
-LOCAL_SLM_MODE=shadow uv run edge-mvp experiment preflight \
+LOCAL_SLM_MODE=shadow uv run edge-mvp-nlu experiment preflight \
   --run-dir runs/l2-list-fallback-tuned-3k-r1 \
   --teacher cache \
   --out runs/l3-preflight-shadow-missing-smoke-r1.json
@@ -66,5 +66,5 @@ Result: 18 passed.
 ## Conclusion
 
 L3 remains non-blocking by default, but guarded-mode experiments now require
-evidence from `edge-mvp l3 bench --out ...`. This keeps hardware adaptation
+evidence from `edge-mvp-nlu l3 bench --out ...`. This keeps hardware adaptation
 explicit and avoids hidden model loads in experiment preflight.

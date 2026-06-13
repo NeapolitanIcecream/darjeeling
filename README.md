@@ -32,7 +32,7 @@ Optional run settings can live in `settings.yaml`. Environment variables and
 before the subcommand:
 
 ```bash
-uv run edge-mvp --settings settings.yaml experiment preflight --run-dir runs/latest
+uv run edge-mvp-nlu --settings settings.yaml experiment preflight --run-dir runs/latest
 ```
 
 ## Smoke run
@@ -40,7 +40,7 @@ uv run edge-mvp --settings settings.yaml experiment preflight --run-dir runs/lat
 ```bash
 uv sync --extra dev --extra massive
 uv run edge-mvp-nlu massive prepare --locale en-US
-uv run edge-mvp experiment preflight --run-dir runs/latest --teacher live-or-cache
+uv run edge-mvp-nlu experiment preflight --run-dir runs/latest --teacher live-or-cache
 uv run edge-mvp run --stream zipf-heavy --max-requests 3000 --compile-every 500 --teacher live-or-cache
 uv run edge-mvp report --run-dir runs/latest
 uv run pytest
@@ -53,7 +53,7 @@ Codex CLI. For a real L1 evolution experiment, enable the coding-agent harness:
 
 ```bash
 L1_AGENT_MODE=codex-cli L4_PROPOSAL_MODE=live \
-  uv run edge-mvp experiment main-evolution --run-dir runs/main --teacher live-or-cache
+  uv run edge-mvp-nlu experiment main-evolution --run-dir runs/main --teacher live-or-cache
 ```
 
 Run preflight first. If `l1.agent` is `warn`, L1 evolution is still disabled; if

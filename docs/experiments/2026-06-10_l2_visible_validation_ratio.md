@@ -9,7 +9,7 @@ exposing private holdout rows or private gate aggregates.
 
 ## Design Change
 
-`edge-mvp l2 target-evolve` now accepts:
+`edge-mvp-nlu l2 target-evolve` now accepts:
 
 ```bash
 --visible-validation-ratio FLOAT
@@ -36,7 +36,7 @@ private selection/promotion `safety_backlog` entries now use
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-ratio40-smoke-r2 \
   --max-traces 1000 \
@@ -89,7 +89,7 @@ instead of iterating from private promotion failures.
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-stratified2000-r1/job \
   --max-traces 2000 \
@@ -145,7 +145,7 @@ After adding the train-audit safety gate, I reran the short deterministic
 local-search probe:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-ratio40-trainaudit-smoke-r1/job \
   --max-traces 1000 \
@@ -185,7 +185,7 @@ With the train-audit safety gate in place, I reran the live agent-session on the
 same 2000-row lower-miss fixed snapshot:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-trainaudit-r2/job \
   --max-traces 2000 \
@@ -268,7 +268,7 @@ docs/experiments/patches/l2_target_ratio40_trainaudit_conservative_r2.patch
 Then I reran it under the updated harness:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-visible-support-r6/job \
   --max-traces 2000 \
@@ -320,7 +320,7 @@ After committing the visible support gate, I reran the live agent-session on the
 same fixed snapshot:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-visible-support-live-r1/job \
   --max-traces 2000 \
@@ -391,7 +391,7 @@ private rows or private aggregate feedback.
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-slot-risk-diagnostics-smoke-r1/job \
   --max-traces 1000 \
@@ -430,7 +430,7 @@ wrongs are gone if high-priority visible slot-risk families remain unaddressed.
 Run:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-slot-risk-live-r1/job \
   --max-traces 2000 \
@@ -491,7 +491,7 @@ Follow-up implementation:
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-slot-risk-high-guard-smoke-r1/job \
   --max-traces 1000 \
@@ -527,7 +527,7 @@ Smoke result:
 Run:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-high-guard-slot-risk-live-r1/job \
   --max-traces 2000 \
@@ -583,7 +583,7 @@ Follow-up implementation:
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-slot-key-deltas-smoke-r1/job \
   --max-traces 1000 \
@@ -618,7 +618,7 @@ Smoke result:
 Run:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-slot-key-deltas-live-r1/job \
   --max-traces 2000 \
@@ -676,7 +676,7 @@ Follow-up implementation:
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-intent-confusion-smoke-r1/job \
   --max-traces 1000 \
@@ -709,7 +709,7 @@ Smoke result:
 Run:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-intent-confusion-live-r1/job \
   --max-traces 2000 \
@@ -781,7 +781,7 @@ diagnostic-only and does not change selection/adoption gates.
 Smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-slot-cue-budget40-smoke-r1/job \
   --max-traces 1000 \
@@ -817,7 +817,7 @@ Smoke result:
 Live command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-visible-slot-cue-live-r1/job \
   --max-traces 2000 \
@@ -865,7 +865,7 @@ Interpretation:
 Budget-40 live command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-slot-cue-budget40-live-r1/job \
   --max-traces 2000 \
@@ -913,7 +913,7 @@ Interpretation:
 Slot-key-terms smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-slot-cue-terms-smoke-r1/job \
   --max-traces 1000 \
@@ -946,7 +946,7 @@ Slot-key-terms smoke result:
 Slot-key-terms live command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-slot-cue-terms-live-r1/job \
   --max-traces 2000 \
@@ -992,7 +992,7 @@ Interpretation:
 Budget-64 smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-slot-cue-budget64-smoke-r1/job \
   --max-traces 1000 \
@@ -1023,7 +1023,7 @@ Budget-64 smoke result:
 Budget-64 live command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-slot-cue-budget64-live-r1/job \
   --max-traces 2000 \
@@ -1072,7 +1072,7 @@ Interpretation:
 Slot-cue-probes smoke command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-visible-slot-cue-probes-smoke-r1/job \
   --max-traces 1000 \
@@ -1112,7 +1112,7 @@ Slot-cue-probes smoke result:
 Slot-cue-probes live command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-slot-cue-probes-live-r1/job \
   --max-traces 2000 \
@@ -1165,11 +1165,11 @@ Outer replay command:
 cp -R runs/l2-list-fallback-tuned-3k-r1 \
   runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1
 
-uv run edge-mvp l2 promote-target \
+uv run edge-mvp-nlu l2 promote-target \
   --target-run runs/l2-real-agent-ratio40-slot-cue-probes-live-r1/job \
   --run-dir runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1
 
-uv run edge-mvp l2 replay-target \
+uv run edge-mvp-nlu l2 replay-target \
   --run-dir runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1 \
   --traces runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1/traces.jsonl \
   --out runs/l2-real-agent-ratio40-slot-cue-probes-outer-3k-r1/reports/l2_target_outer_replay.json
@@ -1222,7 +1222,7 @@ Interpretation:
 Expanded-probes live command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-slot-cue-probes-expanded-live-r1/job \
   --max-traces 2000 \
@@ -1289,7 +1289,7 @@ Interpretation:
 Expanded2-probes live command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-real-agent-ratio40-slot-cue-probes-expanded2-live-r1/job \
   --max-traces 2000 \

@@ -305,7 +305,10 @@ def _write_l1_workspace_manifest(
         "tools": {
             "compile": "cargo check --manifest-path l1_programbank/Cargo.toml",
             "unit_test": "cargo test --manifest-path l1_programbank/Cargo.toml",
-            "bench": "edge-mvp l1 bench --out runs/l1_benchmark.json",
+            "bench": (
+                "edge-mvp-nlu l1 bench "
+                "--crate-dir l1_programbank --out runs/l1_benchmark.json"
+            ),
             "replay": "edge-mvp run ...",
         },
         "agent_session_policy": _l1_agent_session_policy(mode),

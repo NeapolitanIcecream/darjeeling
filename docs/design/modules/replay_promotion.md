@@ -70,7 +70,7 @@ candidate replay covers teacher_promotion_holdout + hard_buffer + teacher_regres
 - correctness 以 teacher label 为准，不读取 hidden gold labels。
 - objective、wrong accept gate、accuracy epsilon 和 per-layer regression gate 都会进入 promotion decision。
 - rejected candidate 写 generation manifest，但不更新 `manifest.current.json`。
-- L3 prompt candidate 已有显式 regenerated replay/promotion 路径：`edge-mvp l3 replay-prompt` 生成 `l3-prompt-replay-v1`，`edge-mvp l3 promote-prompt` 校验 prompt hash、accepted accuracy、wrong accept rate 和非空 coverage gate 后创建新的 promoted generation。
+- L3 prompt candidate 已有显式 regenerated replay/promotion 路径：`edge-mvp-nlu l3 replay-prompt` 生成 `l3-prompt-replay-v1`，`edge-mvp-nlu l3 promote-prompt` 校验 prompt hash、accepted accuracy、wrong accept rate 和非空 coverage gate 后创建新的 promoted generation。
 
 当前 evaluator 覆盖范围：
 

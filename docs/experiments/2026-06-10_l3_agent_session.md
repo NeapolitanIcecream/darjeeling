@@ -10,7 +10,7 @@ harness.
 
 ## Design Change
 
-`edge-mvp l3 prompt-evolve` is now the L3 prompt evolution entry point. It:
+`edge-mvp-nlu l3 prompt-evolve` is now the L3 prompt evolution entry point. It:
 
 - creates `workspace/l3_prompt/`
 - exposes editable `prompt/l3_prompt.json`, `prompt/context_packing.json`, and
@@ -39,7 +39,7 @@ Command used a fake Codex command and skipped local SLM replay:
 rm -rf runs/l3-agent-session-smoke-r3
 mkdir -p runs/l3-agent-session-smoke-r3
 L3_AGENT_CODEX_COMMAND=$(pwd)/runs/l3-agent-session-smoke-r1/fake_codex.py \
-  uv run edge-mvp l3 prompt-evolve \
+  uv run edge-mvp-nlu l3 prompt-evolve \
     --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
     --out-dir runs/l3-agent-session-smoke-r3/job \
     --max-traces 40 \

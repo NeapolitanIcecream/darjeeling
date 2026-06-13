@@ -131,6 +131,8 @@ def test_nlu_compiler_single_entry_calls_existing_generation_loop(
             manifest=ArtifactManifest(
                 artifact_set_id="artifact-test",
                 generation=7,
+                target_name="nlu",
+                target_schema_version="nlu-target-v1",
                 artifact_paths={"l0_cache": "generations/gen_007/l0_cache.json"},
             ),
         )

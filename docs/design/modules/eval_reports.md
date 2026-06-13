@@ -40,13 +40,13 @@ NLU target reports 可以追加：
 
 - `edge-mvp report` 当前指向 NLU target workflow CLI，并调用
   `darjeeling.targets.nlu.reports.generate_run_report`。
-- `edge-mvp experiment ...` 会执行 replay 并生成 NLU target report，不再只是初始化
+- `edge-mvp-nlu experiment ...` 会执行 replay 并生成 NLU target report，不再只是初始化
   metadata。
 - Report 输出 `summary.md`、`metrics.csv`、`artifacts.csv`、`curves.html` 和
   `hard_cases.jsonl`。
 - `metrics.csv` 可以包含 target-specific NLU metrics，但 shared core code 不能
   import NLU schema 来计算它们。
-- `generate_experiment_comparison_report` / `edge-mvp experiment compare` 当前属于
+- `generate_experiment_comparison_report` / `edge-mvp-nlu experiment compare` 当前属于
   NLU target report path。
 
 ## `eval.plots`

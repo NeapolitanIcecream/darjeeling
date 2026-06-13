@@ -9,7 +9,7 @@ been tested.
 
 ## Design Change
 
-`edge-mvp l2 target-evolve` now writes `evidence_policy` in:
+`edge-mvp-nlu l2 target-evolve` now writes `evidence_policy` in:
 
 - `summary.json`
 - `workspace/l2_target/data/round_state.json`
@@ -36,7 +36,7 @@ artifact cannot be confused with the main target-dependent runtime path.
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-evidence-policy-smoke-r1 \
   --max-traces 80 \

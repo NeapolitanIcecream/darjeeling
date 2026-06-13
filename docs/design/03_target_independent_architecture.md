@@ -445,7 +445,7 @@ Core CLI selects a target and delegates target-specific subcommands:
 ```text
 edge-mvp run --target nlu --data-dir data/processed/default
 edge-mvp report --target nlu --run-dir runs/latest
-edge-mvp experiment preflight --target nlu --run-dir runs/latest
+edge-mvp-nlu experiment preflight --run-dir runs/latest
 ```
 
 Target CLIs own preparation and specialized training/evolution commands:

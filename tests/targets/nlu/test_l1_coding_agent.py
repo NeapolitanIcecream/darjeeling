@@ -251,6 +251,10 @@ def test_l1_agent_session_uses_workspace_root_and_records_policy(
         "l1_programbank/"
     ]
     assert manifest["agent_session_policy"]["applies_to_mode"] is True
+    assert manifest["tools"]["bench"] == (
+        "edge-mvp-nlu l1 bench "
+        "--crate-dir l1_programbank --out runs/l1_benchmark.json"
+    )
     assert "AGENT_SESSION_MARKER" in result.diff_path.read_text(encoding="utf-8")
 
 

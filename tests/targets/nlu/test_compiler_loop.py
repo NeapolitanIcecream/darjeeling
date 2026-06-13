@@ -39,6 +39,8 @@ def test_compiler_generation_promotes_l0_cache_without_gold_leakage(tmp_path: Pa
     assert result.promoted
     manifest = ArtifactStore(tmp_path / "artifacts").load_current_manifest()
     assert manifest is not None
+    assert manifest.target_name == "nlu"
+    assert manifest.target_schema_version == "nlu-target-v1"
     l0_path = tmp_path / "artifacts" / manifest.artifact_paths["l0_cache"]
     hard_buffer_path = tmp_path / "artifacts" / manifest.artifact_paths["hard_buffer"]
     metrics_path = tmp_path / "artifacts" / manifest.artifact_paths["candidate_metrics_csv"]

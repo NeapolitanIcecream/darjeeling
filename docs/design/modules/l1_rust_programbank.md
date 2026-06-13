@@ -86,7 +86,7 @@ replay，而不是 Optuna 或 prompt eval。
 - L1 candidate 成功后写入 artifact manifest，并进入 `L0 -> L1 -> L2 -> teacher fallback` 离线 replay gate。
 - runtime 在 promotion 后会重新加载 promoted L1 crate，使下一窗口使用新的 Rust worker。
 - `benchmark_worker` 已输出独立 worker benchmark 指标：requests、accepted share、native/integration p50/p95、throughput 和 program path counts。
-- `edge-mvp l1 bench --out <path>` 可写出 `l1-benchmark-v1` JSON。
+- `edge-mvp-nlu l1 bench --out <path>` 可写出 `l1-benchmark-v1` JSON。
 - `edge-mvp report` 在 run settings 或 manifest 提供 L1 crate/binary 时，会生成或复用 `reports/l1_benchmark.json`，并在 summary、metrics 和 curves 中展示。
 - L1 coding-agent 成功生成 candidate crate 时，compiler 会写 generation-scoped `l1/l1_benchmark.json`，并把 `l1_benchmark` 放入 artifact manifest。
 - `curves.html` 会汇总 generation-scoped L1 benchmark，展示每代 status、native p95、integration p95 和 throughput。

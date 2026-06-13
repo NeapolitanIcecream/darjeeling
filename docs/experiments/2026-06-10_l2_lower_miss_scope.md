@@ -7,7 +7,7 @@ that actually reaches L2, rather than on the full teacher-labeled trace stream.
 
 ## Design Change
 
-`edge-mvp l2 target-evolve` now accepts:
+`edge-mvp-nlu l2 target-evolve` now accepts:
 
 ```bash
 --target-scope teacher_train|lower_miss
@@ -36,7 +36,7 @@ cross-audit, it is not written to `target/config.json`.
 Command:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-lower-miss-scope-veto-smoke-r1 \
   --max-traces 3000 \
@@ -91,7 +91,7 @@ configs only for reranked trials.
 Follow-up smoke:
 
 ```bash
-uv run edge-mvp l2 target-evolve \
+uv run edge-mvp-nlu l2 target-evolve \
   --traces runs/l2-list-fallback-tuned-3k-r1/traces.jsonl \
   --out-dir runs/l2-target-lower-miss-scope-veto-smoke-r2 \
   --max-traces 3000 \
