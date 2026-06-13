@@ -66,6 +66,7 @@ def test_default_prompt_cache_retention_matches_live_provider_requirement() -> N
     assert settings.l2_tuning_min_examples == 200
     assert settings.l2_tuning_split_policy == "chronological"
     assert settings.l2_tuning_search_space == "compact"
+    assert settings.local_slm_max_new_tokens == 64
     assert settings.promotion_block_layer_regressions is True
 
 

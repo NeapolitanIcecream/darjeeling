@@ -195,3 +195,20 @@ Context builder 只能接收 `TeacherTrace` 或更窄结构。生成后的 conte
 - teacher context 在 utterance 改变时 stable prefix 不变、dynamic tail 改变。
 - proposal context 只含 teacher-visible trace，不含 `gold_frame` 或 gold slot value。
 - forbidden context scanner 遇到 gold 字段会失败。
+
+## 2026-06-13 Focus Task Update
+
+Proposal context no longer uses chronological first-N traces as the main dynamic signal.
+`build_proposal_context(...)` now writes a `focus_tasks` block first, with ranked tasks
+derived from teacher-visible hard cases, lower misses, wrong accepts, audit disagreement,
+L4 pressure, and current layer behavior. Raw traces are still present as
+`supporting_teacher_traces`, but they are supporting evidence rather than the proposal
+driver.
+
+L1 coding-agent workspaces also receive `contexts/focus_tasks.json` and the agent prompt
+directs the agent to start there. `context_families.json` remains available for backward
+compatible family summaries and examples.
+
+Focus tasks contain a goal, positive examples, near negatives, current failures, current
+layer behavior, precision floor, and source trace IDs. They are built from `TeacherTrace`
+only and pass the same forbidden-context scan as other L4 payloads.

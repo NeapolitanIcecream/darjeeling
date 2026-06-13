@@ -127,3 +127,21 @@ bounded path，只能产出 `l3_prompt_candidate` artifact，不代表目标 L3 
 `l3 replay-prompt`，再由 `l3 promote-prompt` 写入 manifest。Runtime 是否实际
 调用 L3 仍由 settings 中的 L3 mode 决定；manifest 中的 `l3_prompt` 只提供
 prompt artifact。
+
+## 2026-06-13 Residual Gate Update
+
+The default local decode budget is now bounded at `LOCAL_SLM_MAX_NEW_TOKENS=64`.
+
+Guarded runtime L3 is no longer treated as useful merely because a prompt artifact exists.
+During compiler generation, an inherited runtime `l3_prompt` is kept only if recorded
+residual evidence passes `l3-residual-value-gate-v1`:
+
+- nonempty L2-residual request set;
+- nonzero L3 accepts on that residual;
+- accepted accuracy within the promotion accuracy epsilon;
+- wrong-accept rate within the configured weak-layer limit;
+- positive expected cost or latency value versus skipping L3 and going to L4.
+
+If the gate fails, the compiler removes `l3_prompt` from the candidate manifest, records
+the reason, and writes effective `l3_mode=disabled`. This is a deliberate runtime skip,
+not unfinished L3 work.

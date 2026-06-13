@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from darjeeling.targets.nlu.compiler.l4_context import (
@@ -70,9 +72,14 @@ def test_proposal_context_uses_teacher_visible_traces_only() -> None:
     assert "gold_frame" not in rendered.dynamic_tail
     assert "gold-value-alpha" not in rendered.dynamic_tail
     assert "value alpha" in rendered.dynamic_tail
+    payload = json.loads(rendered.dynamic_tail)
+    assert payload["focus_tasks"]["schema_version"] == "nlu-focus-tasks-v1"
+    assert payload["focus_tasks"]["tasks"][0]["positive_examples"][0]["request_id"] == "r1"
+    assert "supporting_teacher_traces" in payload
+    assert "teacher_traces" not in payload
+    assert rendered.context_layout_version == "proposal-layout-v2-focus-tasks"
 
 
 def test_context_guard_rejects_gold_payloads() -> None:
     with pytest.raises(L4ContextError):
         assert_no_forbidden_context({"gold_frame": {"intent": "intent_alpha"}})
-

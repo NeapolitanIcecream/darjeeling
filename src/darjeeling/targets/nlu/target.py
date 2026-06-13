@@ -19,6 +19,10 @@ from darjeeling.contracts import (
     LayerResult as CoreLayerResult,
 )
 from darjeeling.targets.nlu.data import normalize_utterance
+from darjeeling.targets.nlu.patches import (
+    core_layer_result_from_legacy,
+    legacy_layer_result_from_core,
+)
 from darjeeling.targets.nlu.schemas import Frame, LayerResult, TaskSchema, TraceRecord
 from darjeeling.targets.nlu.teacher import NluTeacherAdapter
 
@@ -96,6 +100,7 @@ class NluTargetRuntime:
             RustProgramBankLayer,
             build_l1_binary,
         )
+        from darjeeling.targets.nlu.layers.l2_experts import L2ExpertBank, L2ExpertBankLayer
         from darjeeling.targets.nlu.layers.l2_student import L2StudentBundle, L2StudentLayer
         from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
         from darjeeling.targets.nlu.layers.l3_local_slm import (
@@ -144,6 +149,12 @@ class NluTargetRuntime:
                     if target_path is not None
                     else L2StudentLayer(bundle)
                 )
+                expert_bank_path = _artifact_path(manifest, artifact_root, "l2_expert_bank")
+                if expert_bank_path is not None:
+                    legacy_l2_layer = L2ExpertBankLayer(
+                        L2ExpertBank.load(expert_bank_path),
+                        legacy_l2_layer,
+                    )
                 l2_layer = NluLayerAdapter(legacy_l2_layer, layer_name="L2")
 
         l3_prompt_path = _artifact_path(manifest, artifact_root, "l3_prompt")
@@ -329,29 +340,11 @@ def _l1_source_dir_from_manifest(
 
 
 def _core_layer_result_from_legacy(result: LayerResult) -> CoreLayerResult:
-    return CoreLayerResult(
-        layer=result.layer,
-        accepted=result.accepted,
-        output=result.frame.model_dump(mode="json") if result.frame is not None else None,
-        confidence=result.confidence,
-        reason=result.reason,
-        latency_ms=result.latency_ms,
-        cost_usd=result.cost_usd,
-        metadata=result.metadata,
-    )
+    return core_layer_result_from_legacy(result)
 
 
 def _legacy_layer_result_from_core(result: CoreLayerResult) -> LayerResult:
-    return LayerResult(
-        layer=result.layer,
-        accepted=result.accepted,
-        frame=Frame.model_validate(result.output) if result.output is not None else None,
-        confidence=result.confidence,
-        reason=result.reason,
-        latency_ms=result.latency_ms,
-        cost_usd=result.cost_usd,
-        metadata=result.metadata,
-    )
+    return legacy_layer_result_from_core(result)
 
 
 def _legacy_trace_from_teacher_trace(trace: TeacherTrace) -> TraceRecord:

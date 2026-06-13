@@ -58,3 +58,14 @@ NLU target reports 可以追加：
 - artifact CSV
 
 Plot 输入来自 metrics 文件，不从 trace 中临时推导未记录字段。
+
+## 2026-06-13 Field Metrics Update
+
+NLU reports now include a field summary in addition to full-frame metrics. The target
+report writes weak accepted field count, weak field coverage, weak field accuracy, wrong
+accepted field rate, and per-layer field accepted accuracy/wrong-field rate. These values
+come from NLU `FramePatch` traces and remain target-specific diagnostics.
+
+Lower-layer teacher audit metadata is also reflected in hard cases: audit disagreement can
+be mined as `teacher_audit_disagreement`, making accepted lower-layer mistakes visible to
+compiler focus tasks and reports.

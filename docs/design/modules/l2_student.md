@@ -218,6 +218,27 @@ Inner L2 target-evolution path：
 - Summary 还记录 `private_holdout_evidence`，用于区分 gate 失败原因：例如 `visible_support_gate_failed` 表示 visible validation 过关但 support 太薄，`selection_zero_accepts_for_inner_passing_rounds` 表示 private selection split 没观察到 candidate accepts，而不是观察到了错误。该字段只写 outer summary/promoted manifest，不写入 agent-visible `round_state.json` 或 `target_diagnostics.json`，避免把 private holdout aggregate feedback 泄露给 L4 agent。
 - 每次 agent session 或 legacy round 评估后都必须 snapshot 当时的 `target/` 到 `rounds/round_NNN_target/`，并在 payload 中写入 `target_snapshot`。`best_round` 和 adoption decision 指向的是某次被评估的 target snapshot，因此 promotion 必须复制该 snapshot，而不是盲目复制最终 workspace 的 `target/`。
 - `best_round` 的主排序仍以 private selection split 为准；当 selection 指标完全并列时，使用 visible validation 作为 tie-break，再偏向后续轮次。这允许 non-adopted outer replay stage 到真实改进过的 target snapshot，同时不把可见集优化凌驾于 private holdout gate 之上。
+
+## 2026-06-13 L2 Runtime Update
+
+The main compiler loop now treats L2 target evolution as a candidate source. When enabled,
+it runs the existing target-evolution harness, copies the adopted `target_l2.py` snapshot
+into the generation, and evaluates it together with the newly trained L2 bundle. Existing
+target code is no longer dropped just because L2 was retrained; it is preserved when it
+loads and runs with the new bundle, and dropped only with an explicit compatibility reason.
+
+L2 also has a small expert bank:
+
+- intent binary experts for selected teacher-visible intent families;
+- slot value extractor/canonicalizer experts for selected slot keys;
+- each expert records support, threshold, validation coverage, accepted accuracy, and
+  wrong accepts in `l2_expert_bank.json`;
+- runtime experts emit incomplete `FramePatch` objects, leaving the composer and L4
+  residual fill to produce the final complete frame;
+- the existing global L2 student and optional target wrapper remain the fallback path.
+
+Expert selection is based on workload support and validation accuracy, then the complete
+artifact set is still accepted or rejected by outer replay/promotion gates.
 - 通过 adoption gate 的 target candidate 可由 `edge-mvp-nlu l2 promote-target` 转成 runtime artifact。未通过 adoption gate 的 `best_round` 只能在显式 `--allow-non-adopted` 下 stage 到隔离 run，用于外层 replay 诊断；manifest 必须标记 `l2_target_inner_adopted=false`，不能被误读为 inner-adopted artifact。
 - `edge-mvp-nlu l2 replay-target` 是 target artifact 的正式 outer replay gate：candidate 默认取 current manifest，baseline 默认取 parent manifest，在同一批 teacher-labeled traces 上输出 `l2-target-outer-replay-v1`。默认 `accuracy_epsilon=0`，并包含 settings L1 Rust worker，确保 target candidate 不能用 frame exactness regression 换 L4 share。无论 inner 是否 adopted，最终是否采用仍以 3k/10k e2e replay 的 frame exactness、wrong accept 和 L4 share 为准。
 - `promote-target` 不改 Darjeeling core：它写入新的 `l2_student.joblib` 和 `l2_target` module artifact；runtime replay 与 compiler offline replay 加载同一 target wrapper，保持评估/运行语义一致。若普通 compiler generation 重新训练 core L2 bundle，则必须丢弃继承来的 `l2_target`，除非该 generation 明确做了 target-aware adoption；否则会把 target code 和不兼容 bundle 混用。

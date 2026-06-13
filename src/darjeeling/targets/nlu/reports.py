@@ -20,6 +20,10 @@ from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     binary_path_for,
     build_l1_binary,
 )
+from darjeeling.targets.nlu.patches import (
+    frame_field_values,
+    frame_patch_from_layer_result,
+)
 from darjeeling.targets.nlu.schemas import Frame, LayerName, TraceRecord
 from darjeeling.targets.nlu.trace import read_traces
 
@@ -379,6 +383,7 @@ def _write_summary_md(
         "- `curves.html`\n"
         "- `hard_cases.jsonl`\n\n"
         f"{_layer_summary_section(traces)}\n\n"
+        f"{_field_summary_section(traces)}\n\n"
         f"{_l2_unguarded_section(traces)}\n\n"
         f"{_l2_tuning_section(current_manifest)}\n\n"
         f"{_evolution_summary_section(promotion_records)}\n\n"
@@ -466,6 +471,7 @@ def _metrics_rows(
         rows.append(_metric_row("run", "", layer, "chosen_count", count))
         rows.append(_metric_row("run", "", layer, "chosen_share", round(share, 6)))
     rows.extend(_layer_summary_metric_rows(traces))
+    rows.extend(_field_summary_metric_rows(traces))
     rows.extend(_evolution_summary_metric_rows(promotion_records))
 
     gold_labeled = [trace for trace in traces if trace.gold_frame is not None]
@@ -574,6 +580,132 @@ def _layer_summary_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]
                 )
             )
     return rows
+
+
+def _field_summary_section(traces: list[TraceRecord]) -> str:
+    stats = _field_summary_stats(traces)
+    lines = [
+        "## Field Summary",
+        "",
+        f"- labeled expected fields: {int(stats['total_expected_fields'])}",
+        f"- weak accepted fields: {int(stats['weak_accepted_fields'])}",
+        "- weak field coverage: "
+        f"{_format_layer_summary_value('coverage', stats['weak_field_coverage'])}",
+        "- weak field accuracy: "
+        f"{_format_layer_summary_value('accepted_accuracy', stats['weak_field_accuracy'])}",
+        "- wrong accepted field rate: "
+        f"{_format_layer_summary_value('wrong_accept_rate', stats['wrong_accepted_field_rate'])}",
+        "",
+        "| layer | accepted_fields | field_accuracy | wrong_field_rate |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for layer in ["L0", "L1", "L2", "L3", "L4"]:
+        layer_stats = stats["layers"][layer]
+        lines.append(
+            "| {layer} | {accepted} | {accuracy} | {wrong_rate} |".format(
+                layer=layer,
+                accepted=int(layer_stats["accepted"]),
+                accuracy=_format_layer_summary_value(
+                    "accepted_accuracy",
+                    layer_stats["accuracy"],
+                ),
+                wrong_rate=_format_layer_summary_value(
+                    "wrong_accept_rate",
+                    layer_stats["wrong_rate"],
+                ),
+            )
+        )
+    return "\n".join(lines)
+
+
+def _field_summary_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]]:
+    stats = _field_summary_stats(traces)
+    rows = [
+        _metric_row("field_summary", "", "", key, round(float(stats[key]), 6))
+        for key in [
+            "total_expected_fields",
+            "weak_accepted_fields",
+            "weak_correct_fields",
+            "weak_wrong_fields",
+            "weak_field_coverage",
+            "weak_field_accuracy",
+            "wrong_accepted_field_rate",
+        ]
+    ]
+    for layer, layer_stats in stats["layers"].items():
+        for key, value in layer_stats.items():
+            rows.append(
+                _metric_row(
+                    "field_summary",
+                    "",
+                    layer,
+                    key,
+                    round(float(value), 6),
+                )
+            )
+    return rows
+
+
+def _field_summary_stats(traces: list[TraceRecord]) -> dict[str, Any]:
+    layers = {
+        layer: {"accepted": 0.0, "correct": 0.0, "wrong": 0.0}
+        for layer in ["L0", "L1", "L2", "L3", "L4"]
+    }
+    total_expected_fields = 0
+    weak_accepted_fields = 0
+    weak_correct_fields = 0
+    weak_wrong_fields = 0
+    for trace in traces:
+        expected = _evaluation_label(trace)
+        if expected is None:
+            continue
+        expected_fields = frame_field_values(expected)
+        total_expected_fields += len(expected_fields)
+        for result in trace.layer_results:
+            patch = frame_patch_from_layer_result(result)
+            if patch is None:
+                continue
+            patch_values: dict[str, str] = {}
+            if patch.accepted_intent is not None:
+                patch_values["intent"] = patch.accepted_intent
+            patch_values.update(
+                {
+                    f"slots.{slot_key}": slot_value
+                    for slot_key, slot_value in patch.accepted_slots.items()
+                }
+            )
+            layer_stats = layers[patch.source_layer]
+            layer_stats["accepted"] += len(patch_values)
+            for field_key, field_value in patch_values.items():
+                is_correct = expected_fields.get(field_key) == field_value
+                layer_stats["correct"] += int(is_correct)
+                layer_stats["wrong"] += int(not is_correct)
+                if patch.source_layer != "L4":
+                    weak_accepted_fields += 1
+                    weak_correct_fields += int(is_correct)
+                    weak_wrong_fields += int(not is_correct)
+    for layer_stats in layers.values():
+        accepted = layer_stats["accepted"]
+        layer_stats["accuracy"] = layer_stats["correct"] / accepted if accepted else 1.0
+        layer_stats["wrong_rate"] = (
+            layer_stats["wrong"] / total_expected_fields if total_expected_fields else 0.0
+        )
+    return {
+        "total_expected_fields": float(total_expected_fields),
+        "weak_accepted_fields": float(weak_accepted_fields),
+        "weak_correct_fields": float(weak_correct_fields),
+        "weak_wrong_fields": float(weak_wrong_fields),
+        "weak_field_coverage": (
+            weak_accepted_fields / total_expected_fields if total_expected_fields else 0.0
+        ),
+        "weak_field_accuracy": (
+            weak_correct_fields / weak_accepted_fields if weak_accepted_fields else 1.0
+        ),
+        "wrong_accepted_field_rate": (
+            weak_wrong_fields / total_expected_fields if total_expected_fields else 0.0
+        ),
+        "layers": layers,
+    }
 
 
 def _l2_unguarded_section(traces: list[TraceRecord]) -> str:

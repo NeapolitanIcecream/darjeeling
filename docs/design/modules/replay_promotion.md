@@ -127,3 +127,22 @@ regressed_layers = [...]
 - multi-objective promotion
 
 这些不阻塞 MVP，但需要在 report 中保留足够信息支持后续设计。
+
+## 2026-06-13 Patch Replay Update
+
+Offline replay now mirrors the NLU patch runtime. Legacy accepted full-frame results become
+complete patches, patch-aware L2 experts can contribute only intent or slot fields, and
+L4 fills residual fields for final-frame completeness. Full-frame exact match and weak
+wrong-accept gates remain in place.
+
+Replay result payloads also include field-level metrics:
+
+- total expected fields
+- weak accepted fields
+- weak field coverage
+- weak field accuracy
+- wrong accepted field rate
+- per-layer field accepted accuracy and wrong-field rate
+
+These metrics are target-owned NLU diagnostics. They are written to candidate metrics and
+reports, but they do not teach Darjeeling core what intent or slot fields mean.

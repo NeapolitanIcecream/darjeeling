@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -10,12 +11,12 @@ from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.contracts import CompileContext
 from darjeeling.contracts import LayerResult as CoreLayerResult
 from darjeeling.contracts import TeacherTrace as CoreTeacherTrace
-from darjeeling.runtime.router import CascadeRouter
 from darjeeling.targets.nlu.data import DataRecord
 from darjeeling.targets.nlu.layers.l0_cache import ExactCacheLayer
 from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     build_l1_binary,
 )
+from darjeeling.targets.nlu.layers.l2_experts import L2ExpertBank, L2ExpertBankLayer
 from darjeeling.targets.nlu.layers.l2_student import L2StudentBundle, L2StudentLayer
 from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
 from darjeeling.targets.nlu.layers.l3_local_slm import (
@@ -23,9 +24,11 @@ from darjeeling.targets.nlu.layers.l3_local_slm import (
 )
 from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     CachedTeacherLayer,
+    MissingTeacherError,
     TaskSchema,
     TeacherCache,
 )
+from darjeeling.targets.nlu.patches import legacy_layer_result_from_core, route_nlu_layers
 from darjeeling.targets.nlu.schemas import Frame, TraceRecord
 from darjeeling.targets.nlu.settings import Settings
 from darjeeling.targets.nlu.streams import StreamItem, build_uniform_stream, build_zipf_stream
@@ -77,17 +80,24 @@ def run_replay(
         teacher_layer=l4,
     )
     try:
-        router = _router_from_layers(runtime_layers)
         for index, item in enumerate(stream_items, start=1):
             record = item.record
             utterance = record.utterance
-            output, core_layer_results = router.route({"utterance": utterance})
-            final_frame = Frame.model_validate(output)
-            chosen_layer = core_layer_results[-1].layer
-            layer_results = [_legacy_layer_result(result) for result in core_layer_results]
+            route_result = route_nlu_layers(runtime_layers, utterance=utterance)
+            final_frame = route_result.final_frame
+            chosen_layer = route_result.chosen_layer
+            layer_results = route_result.layer_results
 
             layer_counts[chosen_layer] += 1
-            teacher_frame = teacher_cache.get(utterance)
+            teacher_frame, audit_metadata = _lower_layer_audit(
+                l4,
+                request_id=record.request_id,
+                utterance=utterance,
+                chosen_layer=chosen_layer,
+                final_frame=final_frame,
+                settings=settings,
+                teacher_mode=teacher_mode,
+            )
             trace_writer.append(
                 TraceRecord(
                     request_id=record.request_id,
@@ -97,6 +107,11 @@ def run_replay(
                     chosen_layer=chosen_layer,
                     final_frame=final_frame,
                     layer_results=layer_results,
+                    l4_usage=route_result.l4_usage,
+                    metadata={
+                        **audit_metadata,
+                        "composer_field_sources": route_result.composer.field_sources,
+                    },
                 )
             )
             if compile_every is not None and index % compile_every == 0:
@@ -115,7 +130,6 @@ def run_replay(
                     task_schema=task_schema,
                     teacher_layer=l4,
                 )
-                router = _router_from_layers(runtime_layers)
     finally:
         _close_runtime_layers(runtime_layers)
 
@@ -173,8 +187,18 @@ def load_l2_layer_from_manifest(
             target_path = run_dir / "artifacts" / target_path
         if not target_path.exists():
             raise FileNotFoundError(f"L2 target artifact is missing: {target_path}")
-        return TargetL2Layer(bundle, target_path)
-    return L2StudentLayer(bundle)
+        fallback_layer = TargetL2Layer(bundle, target_path)
+    else:
+        fallback_layer = L2StudentLayer(bundle)
+    expert_bank_path_text = manifest.artifact_paths.get("l2_expert_bank")
+    if expert_bank_path_text:
+        expert_bank_path = Path(expert_bank_path_text)
+        if not expert_bank_path.is_absolute():
+            expert_bank_path = run_dir / "artifacts" / expert_bank_path
+        if not expert_bank_path.exists():
+            raise FileNotFoundError(f"L2 expert bank artifact is missing: {expert_bank_path}")
+        return L2ExpertBankLayer(L2ExpertBank.load(expert_bank_path), fallback_layer)
+    return fallback_layer
 
 
 def load_l1_source_dir_from_manifest(run_dir: Path) -> Path | None:
@@ -306,15 +330,6 @@ def _validate_manifest_target_identity(
     )
 
 
-def _router_from_layers(runtime_layers: Mapping[str, Any]) -> CascadeRouter:
-    ordered_layers = [
-        runtime_layers[layer]
-        for layer in ("L0", "L1", "L2", "L3", "L4")
-        if runtime_layers.get(layer) is not None
-    ]
-    return CascadeRouter(ordered_layers)
-
-
 def _close_runtime_layers(runtime_layers: Mapping[str, Any]) -> None:
     for layer in runtime_layers.values():
         close = getattr(layer, "close", None)
@@ -323,18 +338,81 @@ def _close_runtime_layers(runtime_layers: Mapping[str, Any]) -> None:
 
 
 def _legacy_layer_result(result: CoreLayerResult):
-    from darjeeling.targets.nlu.schemas import LayerResult
+    return legacy_layer_result_from_core(result)
 
-    return LayerResult(
-        layer=result.layer,
-        accepted=result.accepted,
-        frame=Frame.model_validate(result.output) if result.output is not None else None,
-        confidence=result.confidence,
-        reason=result.reason,
-        latency_ms=result.latency_ms,
-        cost_usd=result.cost_usd,
-        metadata=result.metadata,
-    )
+
+def _lower_layer_audit(
+    teacher_layer: CachedTeacherLayer,
+    *,
+    request_id: str,
+    utterance: str,
+    chosen_layer: str,
+    final_frame: Frame,
+    settings: Settings,
+    teacher_mode: str,
+) -> tuple[Frame | None, dict[str, Any]]:
+    lower_layer_accepted = chosen_layer in {"L0", "L1", "L2", "L3"}
+    teacher_frame = teacher_layer.cache.get(utterance)
+    metadata: dict[str, Any] = {
+        "lower_layer_accepted": lower_layer_accepted,
+        "lower_layer_accepted_layer": chosen_layer if lower_layer_accepted else None,
+        "teacher_audit_mode": settings.lower_layer_audit_mode,
+        "teacher_audited": False,
+        "teacher_audit_source": None,
+        "teacher_audit_skipped_reason": None,
+        "teacher_disagreed": False,
+    }
+    if not lower_layer_accepted:
+        return teacher_frame, metadata
+    if teacher_frame is not None:
+        metadata["teacher_audited"] = True
+        metadata["teacher_audit_source"] = "cache"
+        metadata["teacher_disagreed"] = teacher_frame != final_frame
+        return teacher_frame, metadata
+    if not _should_audit_lower_accept(
+        request_id=request_id,
+        utterance=utterance,
+        settings=settings,
+    ):
+        metadata["teacher_audit_skipped_reason"] = "sampling"
+        return None, metadata
+    if teacher_mode not in {"live", "live-or-cache"}:
+        metadata["teacher_audit_skipped_reason"] = "teacher_live_disabled"
+        return None, metadata
+    try:
+        audit_result = teacher_layer.try_answer(utterance)
+    except MissingTeacherError as exc:
+        metadata["teacher_audit_skipped_reason"] = str(exc)
+        return None, metadata
+    if audit_result.frame is None:
+        metadata["teacher_audit_skipped_reason"] = "teacher_returned_no_frame"
+        return None, metadata
+    teacher_frame = audit_result.frame
+    metadata["teacher_audited"] = True
+    metadata["teacher_audit_source"] = audit_result.metadata.get("teacher_source", "live")
+    metadata["teacher_disagreed"] = teacher_frame != final_frame
+    metadata["teacher_audit_latency_ms"] = audit_result.latency_ms
+    metadata["teacher_audit_cost_usd"] = audit_result.cost_usd
+    return teacher_frame, metadata
+
+
+def _should_audit_lower_accept(
+    *,
+    request_id: str,
+    utterance: str,
+    settings: Settings,
+) -> bool:
+    if settings.lower_layer_audit_mode == "disabled":
+        return False
+    if settings.lower_layer_audit_mode == "always":
+        return True
+    if settings.lower_layer_audit_sample_rate <= 0.0:
+        return False
+    if settings.lower_layer_audit_sample_rate >= 1.0:
+        return True
+    digest = sha256(f"{request_id}\0{utterance}".encode()).digest()
+    value = int.from_bytes(digest[:8], "big") / float(2**64 - 1)
+    return value <= settings.lower_layer_audit_sample_rate
 
 
 def _core_teacher_trace(trace: TraceRecord) -> CoreTeacherTrace:

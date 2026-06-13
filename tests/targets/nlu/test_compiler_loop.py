@@ -402,7 +402,7 @@ def test_compiler_generation_respects_no_l2_ablation(tmp_path: Path) -> None:
     assert "l2_student" not in result.manifest.artifact_paths
 
 
-def test_compiler_generation_drops_l2_target_when_retraining_core_l2(
+def test_compiler_generation_preserves_compatible_l2_target_when_retraining_core_l2(
     tmp_path: Path,
 ) -> None:
     store = ArtifactStore(tmp_path / "artifacts")
@@ -430,9 +430,143 @@ def test_compiler_generation_drops_l2_target_when_retraining_core_l2(
 
     assert result.manifest is not None
     assert "l2_student" in result.manifest.artifact_paths
-    assert "l2_target" not in result.manifest.artifact_paths
-    assert result.manifest.candidate_metrics["l2_target_dropped_reason"] == (
-        "compiler retrained L2 bundle without target-aware adoption"
+    assert result.manifest.artifact_paths["l2_target"] == (
+        "generations/gen_001/l2/target/target_l2.py"
+    )
+    assert result.manifest.candidate_metrics["l2_target_candidate_source"] == (
+        "existing_compatible"
+    )
+    assert result.manifest.candidate_metrics["l2_target_preserved"] is True
+
+
+def test_compiler_generation_stages_adopted_l2_target_evolution_candidate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fake_run_l2_target_evolution(*, config, traces):
+        del traces
+        snapshot = config.job_dir / "rounds" / "round_001_target"
+        snapshot.mkdir(parents=True)
+        (snapshot / "target_l2.py").write_text(
+            """
+def postprocess_frame(utterance, frame, metadata):
+    del utterance, metadata
+    updated = dict(frame)
+    updated["slots"] = {"slot_beta": "target value"}
+    return updated
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        summary = {
+            "schema_version": "l2-target-evolution-v1",
+            "mode": config.mode,
+            "rounds_completed": 1,
+            "stop_reason": "selection_gate_passed",
+            "target_scope": {"scope": config.target_scope},
+            "data_split": {"train": 8},
+            "selection_decision": {"selected": True, "round": 1},
+            "adoption_decision": {"adopted": True, "round": 1},
+            "rounds": [
+                {
+                    "round": 1,
+                    "target_snapshot": "rounds/round_001_target",
+                    "promotion_holdout": {"passes_gate": True},
+                }
+            ],
+        }
+        (config.job_dir / "summary.json").write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return summary
+
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.compiler.loop.run_l2_target_evolution",
+        fake_run_l2_target_evolution,
+    )
+    settings = load_settings().model_copy(
+        update={
+            "l2_target_evolution_mode": "dry-run",
+            "force_promote_artifacts": True,
+        }
+    )
+
+    result = run_compiler_generation(
+        run_dir=tmp_path,
+        traces=_two_intent_traces(),
+        settings=settings,
+    )
+
+    assert result.manifest is not None
+    assert result.manifest.artifact_paths["l2_target"] == (
+        "generations/gen_001/l2/target/target_l2.py"
+    )
+    target_path = tmp_path / "artifacts" / result.manifest.artifact_paths["l2_target"]
+    assert "slot_beta" in target_path.read_text(encoding="utf-8")
+    metrics = result.manifest.candidate_metrics
+    assert metrics["l2_target_candidate_source"] == "target_evolution"
+    assert metrics["l2_target_adopted"] is True
+    assert metrics["l2_target_evolution_succeeded"] is True
+    assert metrics["l2_target_evolution_summary"]["adoption_decision"] == {
+        "adopted": True,
+        "round": 1,
+    }
+
+
+def test_compiler_generation_disables_l3_prompt_when_residual_gate_fails(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    l3_path = store.generation_dir(1) / "l3" / "l3_prompt.json"
+    l3_path.parent.mkdir(parents=True)
+    l3_path.write_text(
+        json.dumps(
+            {
+                "prompt_version": "fixture-l3",
+                "system_prompt": "Return JSON only.",
+                "confidence_threshold": 0.8,
+                "few_shot_examples": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    store.promote(
+        ArtifactManifest(
+            artifact_set_id="gen_001_l3",
+            generation=1,
+            target_name="nlu",
+            target_schema_version="nlu-target-v1",
+            artifact_paths={"l3_prompt": "generations/gen_001/l3/l3_prompt.json"},
+            promotion_reason="test fixture",
+            l3_mode="guarded",
+        )
+    )
+    settings = load_settings().model_copy(update={"local_slm_mode": "guarded"})
+    traces = [
+        _trace_with_l3_shadow(
+            request_id=f"r{index}",
+            utterance=f"beta request {index}",
+            intent="intent_beta" if index < 4 else "intent_alpha",
+            l3_accepted=False,
+        )
+        for index in range(8)
+    ]
+
+    result = run_compiler_generation(
+        run_dir=tmp_path,
+        traces=traces,
+        settings=settings,
+    )
+
+    assert result.manifest is not None
+    assert "l3_prompt" not in result.manifest.artifact_paths
+    assert result.manifest.l3_mode == "disabled"
+    gate = result.manifest.candidate_metrics["l3_residual_gate"]
+    assert gate["passes_gate"] is False
+    assert result.manifest.candidate_metrics["l3_runtime_disabled_reason"] == (
+        "L3 accepted no residual requests"
     )
 
 
@@ -645,10 +779,17 @@ def test_run_replay_promotes_l1_agent_candidate_for_next_window(
     context_families = json.loads(
         (l1_agent_dir / "contexts" / "context_families.json").read_text(encoding="utf-8")
     )
+    focus_tasks = json.loads(
+        (l1_agent_dir / "contexts" / "focus_tasks.json").read_text(encoding="utf-8")
+    )
     assert context_families["schema_version"] == "l1-context-families-v1"
     assert context_families["family_count"] >= 1
     assert context_families["families"][0]["intent"] == "intent_beta"
+    assert focus_tasks["schema_version"] == "nlu-focus-tasks-v1"
+    assert focus_tasks["task_count"] >= 1
+    assert focus_tasks["tasks"][0]["goal"].startswith("improve intent_beta")
     assert "gold_frame" not in json.dumps(context_families)
+    assert "gold_frame" not in json.dumps(focus_tasks)
     l1_agent_hard_cases = (l1_agent_dir / "contexts" / "hard_cases.jsonl").read_text(
         encoding="utf-8"
     )
@@ -776,6 +917,36 @@ def _teacher_trace(request_id: str, utterance: str, intent: str) -> TraceRecord:
                 frame=frame,
                 latency_ms=1.0,
             )
+        ],
+    )
+
+
+def _trace_with_l3_shadow(
+    *,
+    request_id: str,
+    utterance: str,
+    intent: str,
+    l3_accepted: bool,
+) -> TraceRecord:
+    frame = Frame(intent=intent)
+    return TraceRecord(
+        request_id=request_id,
+        utterance=utterance,
+        gold_frame=frame,
+        teacher_frame=frame,
+        chosen_layer="L3" if l3_accepted else "L4",
+        final_frame=frame,
+        layer_results=[
+            LayerResult(layer="L0", accepted=False, frame=None, latency_ms=0.1),
+            LayerResult(layer="L1", accepted=False, frame=None, latency_ms=1.0),
+            LayerResult(layer="L2", accepted=False, frame=None, latency_ms=5.0),
+            LayerResult(
+                layer="L3",
+                accepted=l3_accepted,
+                frame=frame if l3_accepted else None,
+                latency_ms=40.0,
+            ),
+            LayerResult(layer="L4", accepted=True, frame=frame, latency_ms=900.0),
         ],
     )
 

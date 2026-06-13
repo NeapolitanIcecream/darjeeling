@@ -13,6 +13,7 @@ HardCaseVisibility = Literal["train_visible", "replay_only"]
 
 HardCaseReason = Literal[
     "weak_wrong_accept",
+    "teacher_audit_disagreement",
     "teacher_final_mismatch",
     "fallback_after_weak_abstain",
     "l4_fallback",
@@ -23,6 +24,7 @@ HARD_BUFFER_SCHEMA_VERSION = "hard-buffer-v1"
 WEAK_LAYERS = {"L0", "L1", "L2", "L3"}
 REASON_WEIGHTS: dict[HardCaseReason, float] = {
     "weak_wrong_accept": 100.0,
+    "teacher_audit_disagreement": 95.0,
     "teacher_final_mismatch": 90.0,
     "fallback_after_weak_abstain": 70.0,
     "l4_fallback": 60.0,
@@ -155,6 +157,8 @@ def _hard_case_from_trace(
 
     if trace.chosen_layer in WEAK_LAYERS and trace.final_frame != trace.teacher_frame:
         reasons.append("weak_wrong_accept")
+    if trace.metadata.get("teacher_disagreed") is True:
+        reasons.append("teacher_audit_disagreement")
     elif trace.final_frame != trace.teacher_frame:
         reasons.append("teacher_final_mismatch")
 

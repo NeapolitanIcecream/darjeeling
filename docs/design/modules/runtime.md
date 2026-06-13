@@ -71,3 +71,15 @@ workflow 仍使用 legacy NLU trace schema，因此 reader/writer 位于 target 
 - 提供 monotonic timing helper。
 - 记录每层 wall-clock latency。
 - 允许 target layer 在 metadata 中追加 native/backend latency。
+
+## 2026-06-13 NLU Patch Runtime Update
+
+Core `CascadeRouter` remains target-neutral and whole-output based. NLU replay now uses
+`darjeeling.targets.nlu.patches.route_nlu_layers(...)` behind the NLU target boundary.
+That route path adapts legacy full-frame layer outputs into `FramePatch` objects, applies
+patches in layer order, and lets L4 fill only missing residual fields before producing the
+final full NLU `Frame`.
+
+The target-owned patch path records `patch_accepted_fields`, patch completeness, and
+composer field sources in NLU traces. Core contracts still carry opaque JSON only; core
+does not know about frames, intents, slots, field coverage, or residuals.

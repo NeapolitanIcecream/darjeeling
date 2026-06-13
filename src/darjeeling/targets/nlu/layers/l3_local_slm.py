@@ -45,7 +45,7 @@ class LocalSLMConfig(BaseModel):
     model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
     mode: LocalSLMMode = "disabled"
     device_policy: LocalSLMDevicePolicy = "auto"
-    max_new_tokens: int = 256
+    max_new_tokens: int = 64
     confidence_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
     prompt_version: str = "l3-prompt-v1"
 

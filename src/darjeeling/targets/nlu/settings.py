@@ -37,6 +37,16 @@ class Settings(BaseSettings):
         validation_alias="TEACHER_PROMPT_VERSION",
     )
     teacher_max_tokens: int = Field(default=256, validation_alias="TEACHER_MAX_TOKENS")
+    lower_layer_audit_mode: Literal["disabled", "sample", "always"] = Field(
+        default="always",
+        validation_alias="LOWER_LAYER_AUDIT_MODE",
+    )
+    lower_layer_audit_sample_rate: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        validation_alias="LOWER_LAYER_AUDIT_SAMPLE_RATE",
+    )
     l4_proposal_mode: Literal["disabled", "live"] = Field(
         default="disabled",
         validation_alias="L4_PROPOSAL_MODE",
@@ -59,7 +69,7 @@ class Settings(BaseSettings):
         validation_alias="LOCAL_SLM_DEVICE_POLICY",
     )
     local_slm_max_new_tokens: int = Field(
-        default=256,
+        default=64,
         validation_alias="LOCAL_SLM_MAX_NEW_TOKENS",
     )
     local_slm_confidence_threshold: float = Field(
@@ -128,6 +138,26 @@ class Settings(BaseSettings):
     l2_target_agent_codex_command: str = Field(
         default="codex",
         validation_alias="L2_TARGET_AGENT_CODEX_COMMAND",
+    )
+    l2_target_evolution_mode: Literal[
+        "disabled",
+        "dry-run",
+        "local-search",
+        "codex-cli",
+        "agent-session",
+    ] = Field(default="disabled", validation_alias="L2_TARGET_EVOLUTION_MODE")
+    l2_target_evolution_rounds: int = Field(
+        default=1,
+        ge=1,
+        validation_alias="L2_TARGET_EVOLUTION_ROUNDS",
+    )
+    l2_target_evolution_scope: Literal["teacher_train", "lower_miss"] = Field(
+        default="lower_miss",
+        validation_alias="L2_TARGET_EVOLUTION_SCOPE",
+    )
+    l2_target_evolution_split_policy: Literal["chronological", "intent-stratified"] = Field(
+        default="chronological",
+        validation_alias="L2_TARGET_EVOLUTION_SPLIT_POLICY",
     )
     l2_target_agent_model: str = Field(default="gpt-5.5", validation_alias="L2_TARGET_AGENT_MODEL")
     l2_target_agent_timeout_s: float = Field(
@@ -201,6 +231,11 @@ class Settings(BaseSettings):
     l2_min_guarded_accuracy: float = 0.93
     l2_max_wrong_accept_rate: float = 0.05
     l2_min_runtime_examples: int = Field(default=30, validation_alias="L2_MIN_RUNTIME_EXAMPLES")
+    l2_expert_bank_enabled: bool = Field(default=True, validation_alias="L2_EXPERT_BANK_ENABLED")
+    l2_expert_min_examples: int = Field(default=4, validation_alias="L2_EXPERT_MIN_EXAMPLES")
+    l2_expert_max_intents: int = Field(default=4, validation_alias="L2_EXPERT_MAX_INTENTS")
+    l2_expert_max_slots: int = Field(default=4, validation_alias="L2_EXPERT_MAX_SLOTS")
+    l2_expert_min_accuracy: float = Field(default=0.95, validation_alias="L2_EXPERT_MIN_ACCURACY")
     promotion_accuracy_epsilon: float = 0.02
     promotion_block_layer_regressions: bool = Field(
         default=True,

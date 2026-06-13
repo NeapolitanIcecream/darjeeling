@@ -6,6 +6,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from darjeeling.targets.nlu.compiler.focus_tasks import (
+    build_focus_tasks,
+    focus_task_document,
+)
 from darjeeling.targets.nlu.schemas import TeacherTrace
 
 FORBIDDEN_CONTEXT_TERMS = (
@@ -122,10 +126,17 @@ def build_proposal_context(
         (trace for trace in traces if trace.teacher_frame is not None),
         key=lambda trace: trace.request_id,
     )[:max_dynamic_traces]
+    focus_tasks = focus_task_document(
+        build_focus_tasks(
+            [trace for trace in traces if trace.teacher_frame is not None],
+            max_tasks=min(8, max_dynamic_traces),
+        )
+    )
     dynamic_payload = {
         "current_artifact_summary": current_artifact_summary or {},
+        "focus_tasks": focus_tasks,
         "metrics": metrics or {},
-        "teacher_traces": [
+        "supporting_teacher_traces": [
             trace.model_dump(mode="json", exclude_none=True) for trace in sorted_traces
         ],
     }
@@ -135,13 +146,15 @@ def build_proposal_context(
         {"role": "user", "content": dynamic_tail},
     ]
     assert_no_forbidden_context(messages)
-    source_trace_ids = [trace.request_id for trace in sorted_traces]
+    source_trace_ids = focus_tasks["source_trace_ids"] or [
+        trace.request_id for trace in sorted_traces
+    ]
     prompt_version = f"{role}-proposal-v1"
     schema_version = getattr(task_schema, "schema_version", "schema-unknown")
     return L4RenderedContext(
         kind="proposal",
         prompt_version=prompt_version,
-        context_layout_version="proposal-layout-v1",
+        context_layout_version="proposal-layout-v2-focus-tasks",
         messages=messages,
         context_hash=context_hash(messages),
         source_trace_ids=source_trace_ids,

@@ -11,9 +11,15 @@ from darjeeling.runtime.cost import ReplayCostModel
 from darjeeling.targets.nlu.compiler.objective import ObjectiveMetrics, objective_score
 from darjeeling.targets.nlu.data import normalize_utterance
 from darjeeling.targets.nlu.layers.l1_rust_programbank import RustL1Worker, build_l1_binary
+from darjeeling.targets.nlu.layers.l2_experts import L2ExpertBank, L2ExpertBankLayer
 from darjeeling.targets.nlu.layers.l2_student import L2StudentBundle, L2StudentLayer
 from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
-from darjeeling.targets.nlu.schemas import Frame, TeacherTrace
+from darjeeling.targets.nlu.patches import (
+    FrameComposer,
+    frame_field_values,
+    frame_patch_from_layer_result,
+)
+from darjeeling.targets.nlu.schemas import Frame, FramePatch, LayerResult, TeacherTrace
 
 LAYER_LATENCY_MS = {
     "L0": 0.1,
@@ -60,6 +66,7 @@ class OfflineArtifactSet:
     l1_worker_timeout_s: float = 5.0
     l2_bundle: L2StudentBundle | None = None
     l2_target_path: Path | None = None
+    l2_expert_bank: L2ExpertBank | None = None
 
     @property
     def artifact_complexity(self) -> float:
@@ -68,6 +75,7 @@ class OfflineArtifactSet:
             + (1 if self.l1_crate_dir is not None else 0)
             + (1 if self.l2_bundle is not None else 0)
             + (1 if self.l2_target_path is not None else 0)
+            + (1 if self.l2_expert_bank is not None else 0)
         )
 
 
@@ -76,7 +84,16 @@ class OfflineReplayResult:
     objective: ObjectiveMetrics
     layer_metrics: dict[str, dict[str, float]]
     layer_counts: dict[str, int]
+    field_metrics: dict[str, float]
     requests: int
+
+
+@dataclass(frozen=True)
+class OfflineRouteResult:
+    chosen_layer: str
+    frame: Frame
+    weak_accepted: bool
+    patches: list[FramePatch]
 
 
 def decide_promotion(
@@ -183,6 +200,10 @@ def load_offline_artifact_set(
     l2_target_path_text = manifest.artifact_paths.get("l2_target")
     if l2_target_path_text:
         l2_target_path = _artifact_path(artifacts_root, l2_target_path_text)
+    l2_expert_bank: L2ExpertBank | None = None
+    l2_expert_bank_path_text = manifest.artifact_paths.get("l2_expert_bank")
+    if l2_expert_bank_path_text:
+        l2_expert_bank = L2ExpertBank.load(_artifact_path(artifacts_root, l2_expert_bank_path_text))
 
     l1_crate_dir = default_l1_crate_dir
     l1_path_text = manifest.artifact_paths.get("l1_crate_dir")
@@ -195,6 +216,7 @@ def load_offline_artifact_set(
         l1_worker_timeout_s=l1_worker_timeout_s,
         l2_bundle=l2_bundle,
         l2_target_path=l2_target_path,
+        l2_expert_bank=l2_expert_bank,
     )
 
 
@@ -210,10 +232,17 @@ def evaluate_offline_artifact_set(
     layer_correct_accepts = {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0}
     layer_wrong_accepts = {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0}
     layer_costs = {"L0": 0.0, "L1": 0.0, "L2": 0.0, "L3": 0.0, "L4": 0.0}
+    layer_field_accepts = {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0}
+    layer_field_correct = {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0}
+    layer_field_wrong = {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0}
     latencies: list[float] = []
     total_cost = 0.0
     frame_matches = 0
     wrong_accepts = 0
+    total_expected_fields = 0
+    weak_accepted_fields = 0
+    weak_correct_fields = 0
+    weak_wrong_fields = 0
 
     l1_worker = _build_l1_worker(artifact_set)
     l2_layer = _build_l2_layer(artifact_set)
@@ -221,20 +250,36 @@ def evaluate_offline_artifact_set(
         for trace in labeled:
             expected = trace.teacher_frame
             assert expected is not None
-            chosen_layer, frame, weak_accepted = _offline_route(
+            route = _offline_route(
                 trace,
                 artifact_set,
                 expected,
                 l1_worker=l1_worker,
                 l2_layer=l2_layer,
             )
+            chosen_layer = route.chosen_layer
+            frame = route.frame
             correct = frame == expected
             frame_matches += int(correct)
             layer_counts[chosen_layer] += 1
             layer_correct_accepts[chosen_layer] += int(correct)
-            if weak_accepted and not correct:
+            if route.weak_accepted and not correct:
                 wrong_accepts += 1
                 layer_wrong_accepts[chosen_layer] += 1
+            expected_fields = frame_field_values(expected)
+            total_expected_fields += len(expected_fields)
+            for patch in route.patches:
+                patch_values = _patch_field_values(patch)
+                layer = patch.source_layer
+                layer_field_accepts[layer] += len(patch_values)
+                for field_key, field_value in patch_values.items():
+                    is_correct = expected_fields.get(field_key) == field_value
+                    layer_field_correct[layer] += int(is_correct)
+                    layer_field_wrong[layer] += int(not is_correct)
+                    if layer != "L4":
+                        weak_accepted_fields += 1
+                        weak_correct_fields += int(is_correct)
+                        weak_wrong_fields += int(not is_correct)
             latencies.append(LAYER_LATENCY_MS[chosen_layer])
             request_cost = cost_model.layer_cost_usd(chosen_layer, trace.l4_usage)
             layer_costs[chosen_layer] += request_cost
@@ -256,6 +301,15 @@ def evaluate_offline_artifact_set(
             objective=objective,
             layer_metrics={},
             layer_counts=layer_counts,
+            field_metrics={
+                "total_expected_fields": 0.0,
+                "weak_accepted_fields": 0.0,
+                "weak_field_coverage": 0.0,
+                "weak_correct_fields": 0.0,
+                "weak_wrong_fields": 0.0,
+                "weak_field_accuracy": 1.0,
+                "wrong_accepted_field_rate": 0.0,
+            },
             requests=0,
         )
 
@@ -267,8 +321,31 @@ def evaluate_offline_artifact_set(
             "p95_latency_ms": LAYER_LATENCY_MS[layer] if count else 0.0,
             "cost_usd_per_100_requests": layer_costs[layer] / requests * 100.0,
             "layer_share": count / requests,
+            "field_accepts_per_request": layer_field_accepts[layer] / requests,
+            "field_accepted_accuracy": (
+                layer_field_correct[layer] / layer_field_accepts[layer]
+                if layer_field_accepts[layer]
+                else 1.0
+            ),
+            "wrong_accepted_field_rate": layer_field_wrong[layer]
+            / max(1, total_expected_fields),
         }
         for layer, count in layer_counts.items()
+    }
+    field_metrics = {
+        "total_expected_fields": float(total_expected_fields),
+        "weak_accepted_fields": float(weak_accepted_fields),
+        "weak_field_coverage": weak_accepted_fields / total_expected_fields
+        if total_expected_fields
+        else 0.0,
+        "weak_correct_fields": float(weak_correct_fields),
+        "weak_wrong_fields": float(weak_wrong_fields),
+        "weak_field_accuracy": weak_correct_fields / weak_accepted_fields
+        if weak_accepted_fields
+        else 1.0,
+        "wrong_accepted_field_rate": weak_wrong_fields / total_expected_fields
+        if total_expected_fields
+        else 0.0,
     }
     objective = ObjectiveMetrics(
         frame_exact_match=frame_matches / requests,
@@ -281,6 +358,7 @@ def evaluate_offline_artifact_set(
         objective=objective,
         layer_metrics=layer_metrics,
         layer_counts=layer_counts,
+        field_metrics=field_metrics,
         requests=requests,
     )
 
@@ -373,21 +451,71 @@ def _offline_route(
     *,
     l1_worker: RustL1Worker | None,
     l2_layer: RuntimeLayer | None,
-) -> tuple[str, Frame, bool]:
+) -> OfflineRouteResult:
+    composer = FrameComposer()
+    patches: list[FramePatch] = []
     normalized = normalize_utterance(trace.utterance)
     if normalized in artifact_set.l0_cache:
-        return "L0", artifact_set.l0_cache[normalized], True
+        result = LayerResult(
+            layer="L0",
+            accepted=True,
+            frame=artifact_set.l0_cache[normalized],
+            confidence=1.0,
+            reason="offline exact cache hit",
+            latency_ms=LAYER_LATENCY_MS["L0"],
+        )
+        if _apply_offline_result(composer, patches, result):
+            return OfflineRouteResult("L0", composer.to_frame(), True, patches)
     if l1_worker is not None:
         l1_response = l1_worker.answer(trace.utterance)
         if l1_response.accepted and l1_response.frame is not None:
-            return "L1", l1_response.frame, True
+            result = LayerResult(
+                layer="L1",
+                accepted=True,
+                frame=l1_response.frame,
+                confidence=1.0,
+                reason=l1_response.reason,
+                latency_ms=LAYER_LATENCY_MS["L1"],
+            )
+            if _apply_offline_result(composer, patches, result):
+                return OfflineRouteResult("L1", composer.to_frame(), True, patches)
     if l2_layer is not None:
         l2_result = l2_layer.try_answer(trace.utterance)
-        if l2_result.accepted and l2_result.frame is not None:
-            return "L2", l2_result.frame, True
+        if _apply_offline_result(composer, patches, l2_result):
+            return OfflineRouteResult("L2", composer.to_frame(), True, patches)
     if l3_result := _recorded_l3_accept(trace):
-        return "L3", l3_result, True
-    return "L4", fallback_frame, False
+        result = LayerResult(
+            layer="L3",
+            accepted=True,
+            frame=l3_result,
+            confidence=1.0,
+            reason="recorded L3 accept",
+            latency_ms=LAYER_LATENCY_MS["L3"],
+        )
+        if _apply_offline_result(composer, patches, result):
+            return OfflineRouteResult("L3", composer.to_frame(), True, patches)
+    patches.append(
+        composer.fill_missing_from_frame(
+            fallback_frame,
+            source_layer="L4",
+            confidence=1.0,
+            metadata={"adapter": "offline_l4_residual_fill"},
+        )
+    )
+    return OfflineRouteResult("L4", composer.to_frame(), False, patches)
+
+
+def _apply_offline_result(
+    composer: FrameComposer,
+    patches: list[FramePatch],
+    result: LayerResult,
+) -> bool:
+    patch = frame_patch_from_layer_result(result)
+    if patch is None:
+        return False
+    composer.apply_patch(patch)
+    patches.append(patch)
+    return patch.complete and composer.complete
 
 
 def _recorded_l3_accept(trace: TeacherTrace) -> Frame | None:
@@ -395,6 +523,19 @@ def _recorded_l3_accept(trace: TeacherTrace) -> Frame | None:
         if result.layer == "L3" and result.accepted and result.frame is not None:
             return result.frame
     return None
+
+
+def _patch_field_values(patch: FramePatch) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if patch.accepted_intent is not None:
+        values["intent"] = patch.accepted_intent
+    values.update(
+        {
+            f"slots.{slot_key}": slot_value
+            for slot_key, slot_value in patch.accepted_slots.items()
+        }
+    )
+    return values
 
 
 def _metric(result: OfflineReplayResult, layer: str, name: str) -> float:
@@ -433,7 +574,13 @@ def _build_l1_worker(artifact_set: OfflineArtifactSet) -> RustL1Worker | None:
 
 def _build_l2_layer(artifact_set: OfflineArtifactSet) -> RuntimeLayer | None:
     if artifact_set.l2_bundle is None:
-        return None
+        if artifact_set.l2_expert_bank is None:
+            return None
+        return L2ExpertBankLayer(artifact_set.l2_expert_bank)
     if artifact_set.l2_target_path is not None:
-        return TargetL2Layer(artifact_set.l2_bundle, artifact_set.l2_target_path)
-    return L2StudentLayer(artifact_set.l2_bundle)
+        fallback_layer = TargetL2Layer(artifact_set.l2_bundle, artifact_set.l2_target_path)
+    else:
+        fallback_layer = L2StudentLayer(artifact_set.l2_bundle)
+    if artifact_set.l2_expert_bank is not None:
+        return L2ExpertBankLayer(artifact_set.l2_expert_bank, fallback_layer)
+    return fallback_layer

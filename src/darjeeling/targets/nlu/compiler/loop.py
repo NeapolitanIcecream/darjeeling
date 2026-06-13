@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,10 @@ from darjeeling.targets.nlu.compiler.l2_distiller import (
     l2_config_from_proposal,
     l2_config_from_settings,
 )
+from darjeeling.targets.nlu.compiler.l2_target_evolution import (
+    L2TargetEvolutionConfig,
+    run_l2_target_evolution,
+)
 from darjeeling.targets.nlu.compiler.l2_tuner import (
     L2TuneSpec,
     residual_l2_validation_traces,
@@ -35,6 +40,7 @@ from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import (
     L3_PROMPT_PROPOSAL_SCHEMA,
     l3_prompt_artifact_from_proposal,
 )
+from darjeeling.targets.nlu.compiler.l3_residual_gate import evaluate_l3_residual_value
 from darjeeling.targets.nlu.compiler.l4_proposal import L4ProposalAdapter, ProposalParseError
 from darjeeling.targets.nlu.compiler.mining import (
     HardCase,
@@ -59,11 +65,19 @@ from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     benchmark_worker,
     build_l1_binary,
 )
+from darjeeling.targets.nlu.layers.l2_experts import (
+    L2ExpertBank,
+    L2ExpertTrainingConfig,
+    train_l2_expert_bank,
+    write_l2_expert_manifest,
+)
 from darjeeling.targets.nlu.layers.l2_student import (
+    L2StudentBundle,
     L2StudentConfig,
     train_l2_student,
     training_examples_from_teacher_traces,
 )
+from darjeeling.targets.nlu.layers.l2_target import TargetL2Layer
 from darjeeling.targets.nlu.layers.l4_cloud_llm import MissingTeacherError
 from darjeeling.targets.nlu.schemas import (
     TaskSchema,
@@ -92,6 +106,25 @@ class CompilerGenerationResult:
     promoted: bool
     reason: str
     manifest: ArtifactManifest | None = None
+
+
+@dataclass(frozen=True)
+class CandidatePart:
+    paths: dict[str, Path]
+    metrics: dict[str, object]
+    artifacts: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class PromotionEvaluation:
+    evaluation_traces: list[TeacherTrace]
+    current_replay: Any | None
+    candidate_replay: Any | None
+    per_layer_deltas: dict[str, LayerDelta]
+    promoted: bool
+    decision_reason: str
+    promoted_with_layer_regression: bool
+    regressed_layers: list[str]
 
 
 @dataclass(frozen=True)
@@ -133,7 +166,7 @@ def run_compiler_generation(
     split = split_teacher_traces(teacher_traces)
     candidate_metrics.update(
         {
-            "teacher_train_size": len(split.teacher_train),
+    "teacher_train_size": len(split.teacher_train),
             "teacher_promotion_holdout_size": len(split.teacher_promotion_holdout),
             "teacher_regression_sample_size": len(split.teacher_regression_sample),
         }
@@ -178,29 +211,22 @@ def run_compiler_generation(
         }
     )
     generated_artifacts = False
-    l1_candidate_generated = False
+    candidate_l3_mode = settings.local_slm_mode
 
-    exact_cache = exact_cache_from_teacher_traces(split.teacher_train)
-    candidate_l0_cache = {**current_artifacts.l0_cache, **exact_cache}
-    if exact_cache:
-        l0_payload = {
-            "schema_version": "l0-exact-v1",
-            "cache_type": "exact",
-            "frames_by_normalized_utterance": {
-                key: frame.model_dump(mode="json")
-                for key, frame in sorted(candidate_l0_cache.items())
-            },
-        }
-        l0_path = store.write_generation_json(generation, "l0_cache.json", l0_payload)
-        artifact_paths["l0_cache"] = _artifact_relative_path(store.root, l0_path)
-        candidate_metrics["l0_cache_lines"] = len(candidate_l0_cache)
-        candidate_metrics["l0_new_cache_lines"] = len(exact_cache)
-        generated_artifacts = True
-    else:
-        candidate_metrics["l0_cache_lines"] = len(candidate_l0_cache)
-        candidate_metrics["l0_new_cache_lines"] = 0
+    l0_part = build_l0_candidate(
+        store=store,
+        generation=generation,
+        current_l0_cache=current_artifacts.l0_cache,
+        teacher_train=split.teacher_train,
+        artifact_paths=artifact_paths,
+    )
+    candidate_l0_cache = l0_part.artifacts["l0_cache"] if l0_part.artifacts else {}
+    candidate_metrics.update(l0_part.metrics)
+    generated_artifacts = generated_artifacts or bool(l0_part.paths)
 
     candidate_l2_bundle = current_artifacts.l2_bundle
+    candidate_l2_target_path = current_artifacts.l2_target_path
+    candidate_l2_expert_bank = current_artifacts.l2_expert_bank
     candidate_l1_crate_dir = current_artifacts.l1_crate_dir
     lower_miss_train_traces = _l2_lower_miss_traces(split.teacher_train)
     l2_training_traces = _l2_training_traces_for_scope(
@@ -218,6 +244,7 @@ def run_compiler_generation(
     candidate_metrics["l2_tuning_mode"] = settings.l2_tuning_mode
     candidate_metrics["l2_tuning_min_examples"] = settings.l2_tuning_min_examples
     candidate_metrics["l2_tuning_split_policy"] = settings.l2_tuning_split_policy
+    candidate_metrics["l2_target_evolution_mode"] = settings.l2_target_evolution_mode
     candidate_metrics["l4_proposal_mode"] = settings.l4_proposal_mode
     l2_config = l2_config_from_settings(settings)
     guard_search_spec = GuardSearchSpec(
@@ -227,6 +254,10 @@ def run_compiler_generation(
         candidate_l2_bundle = None
         artifact_paths.pop("l2_student", None)
         artifact_paths.pop("l2_target", None)
+        artifact_paths.pop("l2_expert_bank", None)
+        artifact_paths.pop("l2_expert_manifest", None)
+        candidate_l2_target_path = None
+        candidate_l2_expert_bank = None
         candidate_metrics["l2_trained"] = False
         candidate_metrics["l2_training_error"] = "L2 disabled by settings"
     elif settings.l4_proposal_mode == "live" and l2_examples:
@@ -344,7 +375,7 @@ def run_compiler_generation(
     if settings.l2_enabled:
         candidate_metrics["l2_config"] = l2_config.model_dump(mode="json")
         try:
-            l2_bundle = train_l2_student(l2_examples, l2_config)
+            l2_bundle = train_l2_student_candidate(l2_examples, l2_config)
         except ValueError as exc:
             candidate_metrics["l2_trained"] = False
             candidate_metrics["l2_training_error"] = str(exc)
@@ -455,135 +486,72 @@ def run_compiler_generation(
             l2_path = l2_dir / "l2_student.joblib"
             l2_bundle.save(l2_path)
             artifact_paths["l2_student"] = _artifact_relative_path(store.root, l2_path)
-            if artifact_paths.pop("l2_target", None) is not None:
-                candidate_metrics["l2_target_dropped_reason"] = (
-                    "compiler retrained L2 bundle without target-aware adoption"
-                )
             candidate_metrics["l2_trained"] = True
             candidate_l2_bundle = l2_bundle
             generated_artifacts = True
 
-    if settings.l4_proposal_mode == "live" and split.teacher_train:
-        try:
-            l3_proposal_result = L4ProposalAdapter(settings).propose(
-                role="l3",
-                task_schema=_task_schema_from_teacher_traces(split.teacher_train),
-                traces=split.teacher_train,
-                output_schema=L3_PROMPT_PROPOSAL_SCHEMA,
-                current_artifact_summary=_artifact_summary(current_manifest),
-                metrics=candidate_metrics,
-            )
-            l3_prompt_artifact = l3_prompt_artifact_from_proposal(
-                l3_proposal_result.proposal,
-                traces=split.teacher_train,
-                prompt_version=f"{settings.local_slm_prompt_version}-candidate-gen-{generation:03d}",
-            )
-        except (MissingTeacherError, ProposalParseError, ValueError) as exc:
-            candidate_metrics["l4_l3_prompt_proposal_succeeded"] = False
-            candidate_metrics["l4_l3_prompt_proposal_error"] = str(exc)
-        else:
-            l3_path = store.write_generation_json(
-                generation,
-                "l3/l3_prompt.candidate.json",
-                l3_prompt_artifact.model_dump(mode="json"),
-            )
-            artifact_paths["l3_prompt_candidate"] = _artifact_relative_path(store.root, l3_path)
-            candidate_metrics["l4_l3_prompt_proposal_succeeded"] = True
-            candidate_metrics["l4_l3_prompt_proposal"] = l3_proposal_result.proposal
-            candidate_metrics["l4_l3_prompt_proposal_context_hash"] = (
-                l3_proposal_result.context_hash
-            )
-            candidate_metrics["l4_l3_prompt_proposal_prompt_cache_key"] = (
-                l3_proposal_result.prompt_cache_key
-            )
-            candidate_metrics["l4_l3_prompt_proposal_source_trace_ids"] = (
-                l3_proposal_result.source_trace_ids
-            )
-            candidate_metrics["l3_prompt_candidate_runtime_promoted"] = False
-            candidate_metrics["l3_prompt_candidate_promotion_blocker"] = (
-                "requires regenerated or shadow L3 replay before runtime promotion"
-            )
-            generated_artifacts = True
-
-    if settings.l1_agent_mode != "disabled":
-        candidate_metrics["l1_agent_mode"] = settings.l1_agent_mode
-        try:
-            l1_agent_result = L4CodingAgentAdapter(settings).run_l1_job(
-                job_dir=generation_dir / "l1_agent",
-                source_crate_dir=candidate_l1_crate_dir or settings.l1_rust_crate_dir,
-                teacher_train=split.teacher_train,
-                hard_cases=agent_hard_buffer_traces,
-                current_metrics=(
-                    current_manifest.candidate_metrics if current_manifest is not None else {}
-                ),
-                objective={
-                    "accuracy_epsilon": settings.promotion_accuracy_epsilon,
-                    "wrong_accept_limit": settings.l2_max_wrong_accept_rate,
-                },
-                run_validation=True,
-            )
-        except L1CodingAgentError as exc:
-            candidate_metrics["l1_agent_succeeded"] = False
-            candidate_metrics["l1_agent_error"] = str(exc)
-        else:
-            candidate_metrics["l1_agent_succeeded"] = l1_agent_result.succeeded
-            candidate_metrics["l1_agent_return_code"] = l1_agent_result.return_code
-            artifact_paths["l1_agent_dir"] = _artifact_relative_path(
-                store.root,
-                l1_agent_result.job_dir,
-            )
-            artifact_paths["l1_agent_diff"] = _artifact_relative_path(
-                store.root,
-                l1_agent_result.diff_path,
-            )
-            artifact_paths["l1_agent_report"] = _artifact_relative_path(
-                store.root,
-                l1_agent_result.report_path,
-            )
-            artifact_paths["l1_agent_commands"] = _artifact_relative_path(
-                store.root,
-                l1_agent_result.commands_path,
-            )
-            artifact_paths["l1_agent_transcript"] = _artifact_relative_path(
-                store.root,
-                l1_agent_result.transcript_path,
-            )
-            artifact_paths["l1_agent_provenance"] = _artifact_relative_path(
-                store.root,
-                l1_agent_result.provenance_path,
-            )
-            if l1_agent_result.succeeded:
-                candidate_l1_crate_dir = l1_agent_result.workspace_crate_dir
-                artifact_paths["l1_crate_dir"] = _artifact_relative_path(
-                    store.root,
-                    l1_agent_result.workspace_crate_dir,
-                )
-                generated_artifacts = True
-                l1_candidate_generated = True
-    else:
-        candidate_metrics["l1_agent_mode"] = "disabled"
-
-    if l1_candidate_generated and candidate_l1_crate_dir is not None:
-        l1_benchmark_payload = _l1_generation_benchmark_payload(
-            candidate_l1_crate_dir,
-            timeout_s=settings.l1_worker_timeout_s,
+    if settings.l2_enabled and candidate_l2_bundle is not None:
+        l2_target_result = evolve_l2_target_candidate(
+            run_dir=run_dir,
+            store=store,
+            generation=generation,
+            generation_dir=generation_dir,
+            settings=settings,
+            traces=split.teacher_train,
+            candidate_l2_bundle=candidate_l2_bundle,
+            existing_l2_target_path=candidate_l2_target_path,
+            artifact_paths=artifact_paths,
         )
-        l1_benchmark_path = store.write_generation_json(
-            generation,
-            "l1/l1_benchmark.json",
-            l1_benchmark_payload,
+        candidate_l2_target_path = l2_target_result.paths.get("l2_target_path")
+        candidate_metrics.update(l2_target_result.metrics)
+        generated_artifacts = generated_artifacts or bool(l2_target_result.paths)
+
+    if settings.l2_enabled and settings.l2_expert_bank_enabled:
+        expert_part = build_l2_expert_bank_candidate(
+            store=store,
+            generation_dir=generation_dir,
+            settings=settings,
+            traces=l2_training_traces,
+            artifact_paths=artifact_paths,
         )
-        artifact_paths["l1_benchmark"] = _artifact_relative_path(store.root, l1_benchmark_path)
-        candidate_metrics["l1_benchmark_status"] = l1_benchmark_payload.get("status")
-        if l1_benchmark_payload.get("status") == "success":
-            candidate_metrics["l1_benchmark_native_p95_us"] = l1_benchmark_payload.get(
-                "native_p95_us"
-            )
-            candidate_metrics["l1_benchmark_throughput_qps"] = l1_benchmark_payload.get(
-                "throughput_qps"
-            )
-        else:
-            candidate_metrics["l1_benchmark_error"] = l1_benchmark_payload.get("error")
+        expert_artifacts = expert_part.artifacts or {}
+        expert_bank = expert_artifacts.get("l2_expert_bank")
+        candidate_l2_expert_bank = expert_bank if isinstance(expert_bank, L2ExpertBank) else None
+        candidate_metrics.update(expert_part.metrics)
+        generated_artifacts = generated_artifacts or bool(expert_part.paths)
+    elif settings.l2_enabled:
+        candidate_metrics["l2_expert_bank_enabled"] = False
+        artifact_paths.pop("l2_expert_bank", None)
+        artifact_paths.pop("l2_expert_manifest", None)
+        candidate_l2_expert_bank = None
+
+    l3_prompt_part = build_l3_prompt_candidate(
+        store=store,
+        generation=generation,
+        settings=settings,
+        teacher_train=split.teacher_train,
+        current_manifest=current_manifest,
+        candidate_metrics=candidate_metrics,
+        artifact_paths=artifact_paths,
+    )
+    candidate_metrics.update(l3_prompt_part.metrics)
+    generated_artifacts = generated_artifacts or bool(l3_prompt_part.paths)
+
+    l1_part = evolve_l1_candidate(
+        store=store,
+        generation=generation,
+        generation_dir=generation_dir,
+        settings=settings,
+        teacher_train=split.teacher_train,
+        hard_cases=agent_hard_buffer_traces,
+        current_manifest=current_manifest,
+        source_crate_dir=candidate_l1_crate_dir or settings.l1_rust_crate_dir,
+        artifact_paths=artifact_paths,
+    )
+    candidate_metrics.update(l1_part.metrics)
+    if l1_part.artifacts and l1_part.artifacts.get("l1_crate_dir") is not None:
+        candidate_l1_crate_dir = l1_part.artifacts["l1_crate_dir"]
+    generated_artifacts = generated_artifacts or bool(l1_part.paths)
 
     if not generated_artifacts:
         return CompilerGenerationResult(
@@ -592,73 +560,68 @@ def run_compiler_generation(
             reason="no teacher-visible artifacts generated",
         )
 
-    candidate_artifacts = OfflineArtifactSet(
+    l3_gate_part = gate_l3_runtime_candidate(
+        settings=settings,
+        traces=split.teacher_train,
+        artifact_paths=artifact_paths,
+    )
+    candidate_l3_mode = str(l3_gate_part.metrics.get("l3_mode_effective", candidate_l3_mode))
+    candidate_metrics.update(l3_gate_part.metrics)
+
+    candidate_artifacts = assemble_candidate_artifact_set(
         l0_cache=candidate_l0_cache,
         l1_crate_dir=candidate_l1_crate_dir,
         l1_worker_timeout_s=settings.l1_worker_timeout_s,
         l2_bundle=candidate_l2_bundle,
+        l2_target_path=candidate_l2_target_path,
+        l2_expert_bank=candidate_l2_expert_bank,
     )
-    evaluation_traces = (
-        _dedupe_teacher_traces([*split.evaluation_traces, *replay_pressure_traces])
-        if split.evaluation_traces
-        else []
+    promotion = evaluate_and_promote(
+        split=split,
+        replay_pressure_traces=replay_pressure_traces,
+        current_artifacts=current_artifacts,
+        candidate_artifacts=candidate_artifacts,
+        settings=settings,
     )
-    if not evaluation_traces:
-        decision_reason = "promotion replay coverage is empty"
-        current_replay = None
-        candidate_replay = None
-        per_layer_deltas: dict[str, LayerDelta] = {}
-        promoted = False
-        promoted_with_layer_regression = False
-        regressed_layers: list[str] = []
-    else:
-        cost_model = replay_cost_model_from_settings(settings)
-        current_replay = evaluate_offline_artifact_set(
-            evaluation_traces,
-            current_artifacts,
-            cost_model=cost_model,
+    if settings.force_promote_artifacts and promotion.current_replay is not None:
+        candidate_metrics["force_promote_artifacts"] = True
+        candidate_metrics["force_promote_original_reason"] = promotion.decision_reason
+        promotion = PromotionEvaluation(
+            evaluation_traces=promotion.evaluation_traces,
+            current_replay=promotion.current_replay,
+            candidate_replay=promotion.candidate_replay,
+            per_layer_deltas=promotion.per_layer_deltas,
+            promoted=True,
+            decision_reason=(
+                f"force promoted by settings after: {promotion.decision_reason}"
+            ),
+            promoted_with_layer_regression=promotion.promoted_with_layer_regression,
+            regressed_layers=promotion.regressed_layers,
         )
-        candidate_replay = evaluate_offline_artifact_set(
-            evaluation_traces,
-            candidate_artifacts,
-            cost_model=cost_model,
-        )
-        per_layer_deltas = layer_deltas(current_replay, candidate_replay)
-        decision = decide_artifact_set_promotion(
-            current_replay.objective,
-            candidate_replay.objective,
-            per_layer_deltas=per_layer_deltas,
-            accuracy_epsilon=settings.promotion_accuracy_epsilon,
-            max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
-            block_layer_regressions=settings.promotion_block_layer_regressions,
-        )
-        decision_reason = decision.reason
-        promoted = decision.promoted
-        promoted_with_layer_regression = decision.promoted_with_layer_regression
-        regressed_layers = decision.regressed_layers or []
-        if settings.force_promote_artifacts:
-            candidate_metrics["force_promote_artifacts"] = True
-            candidate_metrics["force_promote_original_reason"] = decision_reason
-            promoted = True
-            decision_reason = f"force promoted by settings after: {decision_reason}"
 
     candidate_metrics.update(
         {
-            "promotion_eval_size": len(evaluation_traces),
+            "promotion_eval_size": len(promotion.evaluation_traces),
             "promotion_eval_hard_buffer_size": len(replay_pressure_traces)
             if split.evaluation_traces
             else 0,
-            "current_objective": _objective_payload(current_replay.objective)
-            if current_replay is not None
+            "current_objective": _objective_payload(promotion.current_replay.objective)
+            if promotion.current_replay is not None
             else None,
-            "candidate_objective": _objective_payload(candidate_replay.objective)
-            if candidate_replay is not None
+            "candidate_objective": _objective_payload(promotion.candidate_replay.objective)
+            if promotion.candidate_replay is not None
             else None,
-            "current_layer_counts": current_replay.layer_counts
-            if current_replay is not None
+            "current_layer_counts": promotion.current_replay.layer_counts
+            if promotion.current_replay is not None
             else None,
-            "candidate_layer_counts": candidate_replay.layer_counts
-            if candidate_replay is not None
+            "candidate_layer_counts": promotion.candidate_replay.layer_counts
+            if promotion.candidate_replay is not None
+            else None,
+            "current_field_metrics": promotion.current_replay.field_metrics
+            if promotion.current_replay is not None
+            else None,
+            "candidate_field_metrics": promotion.candidate_replay.field_metrics
+            if promotion.candidate_replay is not None
             else None,
             "promotion_block_layer_regressions": settings.promotion_block_layer_regressions,
         }
@@ -678,11 +641,11 @@ def run_compiler_generation(
         },
         artifact_paths=artifact_paths,
         candidate_metrics=candidate_metrics,
-        per_layer_deltas=per_layer_deltas,
-        promoted_with_layer_regression=promoted_with_layer_regression,
-        regressed_layers=regressed_layers,
-        promotion_reason=decision_reason,
-        l3_mode=settings.local_slm_mode,
+        per_layer_deltas=promotion.per_layer_deltas,
+        promoted_with_layer_regression=promotion.promoted_with_layer_regression,
+        regressed_layers=promotion.regressed_layers,
+        promotion_reason=promotion.decision_reason,
+        l3_mode=candidate_l3_mode,
     )
     metrics_csv_path = _write_candidate_metrics_csv(
         generation_dir / "candidate_metrics.csv",
@@ -691,9 +654,17 @@ def run_compiler_generation(
     promotion_json_path = _write_promotion_json(
         generation_dir / "promotion.json",
         manifest,
-        promoted=promoted,
-        current_score=(current_replay.objective if current_replay is not None else None),
-        candidate_score=(candidate_replay.objective if candidate_replay is not None else None),
+        promoted=promotion.promoted,
+        current_score=(
+            promotion.current_replay.objective
+            if promotion.current_replay is not None
+            else None
+        ),
+        candidate_score=(
+            promotion.candidate_replay.objective
+            if promotion.candidate_replay is not None
+            else None
+        ),
     )
     manifest.artifact_paths["candidate_metrics_csv"] = _artifact_relative_path(
         store.root,
@@ -703,20 +674,493 @@ def run_compiler_generation(
         store.root,
         promotion_json_path,
     )
-    if promoted:
+    if promotion.promoted:
         store.promote(manifest)
     else:
         store.write_generation_manifest(manifest)
     return CompilerGenerationResult(
         generation=generation,
-        promoted=promoted,
-        reason=decision_reason,
+        promoted=promotion.promoted,
+        reason=promotion.decision_reason,
         manifest=manifest,
     )
 
 
 def _artifact_relative_path(root: Path, path: Path) -> str:
     return str(path.relative_to(root))
+
+
+def build_l0_candidate(
+    *,
+    store: ArtifactStore,
+    generation: int,
+    current_l0_cache: dict[str, Any],
+    teacher_train: list[TeacherTrace],
+    artifact_paths: dict[str, str],
+) -> CandidatePart:
+    exact_cache = exact_cache_from_teacher_traces(teacher_train)
+    candidate_l0_cache = {**current_l0_cache, **exact_cache}
+    metrics: dict[str, object] = {
+        "l0_cache_lines": len(candidate_l0_cache),
+        "l0_new_cache_lines": len(exact_cache),
+    }
+    if not exact_cache:
+        return CandidatePart(
+            paths={},
+            metrics=metrics,
+            artifacts={"l0_cache": candidate_l0_cache},
+        )
+    l0_payload = {
+        "schema_version": "l0-exact-v1",
+        "cache_type": "exact",
+        "frames_by_normalized_utterance": {
+            key: frame.model_dump(mode="json")
+            for key, frame in sorted(candidate_l0_cache.items())
+        },
+    }
+    l0_path = store.write_generation_json(generation, "l0_cache.json", l0_payload)
+    artifact_paths["l0_cache"] = _artifact_relative_path(store.root, l0_path)
+    return CandidatePart(
+        paths={"l0_cache_path": l0_path},
+        metrics=metrics,
+        artifacts={"l0_cache": candidate_l0_cache},
+    )
+
+
+def train_l2_student_candidate(
+    examples,
+    config: L2StudentConfig,
+) -> L2StudentBundle:
+    return train_l2_student(examples, config)
+
+
+def evolve_l2_target_candidate(
+    *,
+    run_dir: Path,
+    store: ArtifactStore,
+    generation: int,
+    generation_dir: Path,
+    settings: Settings,
+    traces: list[TeacherTrace],
+    candidate_l2_bundle: L2StudentBundle,
+    existing_l2_target_path: Path | None,
+    artifact_paths: dict[str, str],
+) -> CandidatePart:
+    metrics: dict[str, object] = {
+        "l2_target_candidate_source": "none",
+        "l2_target_preserved": False,
+        "l2_target_evolution_mode": settings.l2_target_evolution_mode,
+    }
+    paths: dict[str, Path] = {}
+    if settings.l2_target_evolution_mode != "disabled":
+        job_dir = generation_dir / "l2_target_evolution"
+        try:
+            summary = run_l2_target_evolution(
+                config=L2TargetEvolutionConfig(
+                    source_repo_dir=Path.cwd(),
+                    job_dir=job_dir,
+                    rounds=settings.l2_target_evolution_rounds,
+                    mode=settings.l2_target_evolution_mode,
+                    target_scope=settings.l2_target_evolution_scope,
+                    split_policy=settings.l2_target_evolution_split_policy,
+                    codex_command=settings.l2_target_agent_codex_command,
+                    codex_model=settings.l2_target_agent_model,
+                    timeout_s=settings.l2_target_agent_timeout_s,
+                    sandbox=settings.l2_target_agent_sandbox,
+                    approval_policy=settings.l2_target_agent_approval_policy,
+                    ignore_user_config=settings.l2_target_agent_ignore_user_config,
+                    ignore_rules=settings.l2_target_agent_ignore_rules,
+                    ephemeral=settings.l2_target_agent_ephemeral,
+                    min_accepted_accuracy=settings.l2_min_guarded_accuracy,
+                    max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
+                ),
+                traces=traces,
+            )
+        except Exception as exc:
+            metrics["l2_target_evolution_succeeded"] = False
+            metrics["l2_target_evolution_error"] = str(exc)
+        else:
+            summary_path = job_dir / "summary.json"
+            artifact_paths["l2_target_evolution"] = _artifact_relative_path(
+                store.root,
+                summary_path,
+            )
+            metrics["l2_target_evolution_succeeded"] = True
+            metrics["l2_target_evolution_summary"] = _l2_target_evolution_summary(summary)
+            selected_target = _adopted_l2_target_snapshot(job_dir=job_dir, summary=summary)
+            if selected_target is not None:
+                target_path = generation_dir / "l2" / "target" / "target_l2.py"
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(selected_target, target_path)
+                artifact_paths["l2_target"] = _artifact_relative_path(store.root, target_path)
+                metrics["l2_target_candidate_source"] = "target_evolution"
+                metrics["l2_target_adopted"] = True
+                paths["l2_target_path"] = target_path
+                return CandidatePart(paths=paths, metrics=metrics)
+            metrics["l2_target_adopted"] = False
+    if existing_l2_target_path is not None and _l2_target_is_compatible(
+        candidate_l2_bundle,
+        existing_l2_target_path,
+        traces,
+    ):
+        artifact_paths["l2_target"] = _artifact_path_for_manifest(
+            store.root,
+            existing_l2_target_path,
+        )
+        metrics["l2_target_candidate_source"] = "existing_compatible"
+        metrics["l2_target_preserved"] = True
+        paths["l2_target_path"] = existing_l2_target_path
+        return CandidatePart(paths=paths, metrics=metrics)
+    if artifact_paths.pop("l2_target", None) is not None or existing_l2_target_path is not None:
+        metrics["l2_target_dropped_reason"] = "no compatible target-aware candidate exists"
+    return CandidatePart(paths=paths, metrics=metrics)
+
+
+def build_l2_expert_bank_candidate(
+    *,
+    store: ArtifactStore,
+    generation_dir: Path,
+    settings: Settings,
+    traces: list[TeacherTrace],
+    artifact_paths: dict[str, str],
+) -> CandidatePart:
+    metrics: dict[str, object] = {
+        "l2_expert_bank_enabled": True,
+        "l2_expert_training_traces": len([trace for trace in traces if trace.teacher_frame]),
+    }
+    bank = train_l2_expert_bank(
+        traces,
+        L2ExpertTrainingConfig(
+            min_examples=settings.l2_expert_min_examples,
+            max_intents=settings.l2_expert_max_intents,
+            max_slots=settings.l2_expert_max_slots,
+            min_accuracy=settings.l2_expert_min_accuracy,
+        ),
+    )
+    if bank is None:
+        artifact_paths.pop("l2_expert_bank", None)
+        artifact_paths.pop("l2_expert_manifest", None)
+        metrics["l2_expert_bank_trained"] = False
+        metrics["l2_expert_bank_skipped_reason"] = "no expert passed selection gates"
+        return CandidatePart(paths={}, metrics=metrics, artifacts={})
+    bank_path = generation_dir / "l2" / "experts" / "l2_expert_bank.joblib"
+    manifest_path = generation_dir / "l2" / "experts" / "l2_expert_bank.json"
+    bank.save(bank_path)
+    write_l2_expert_manifest(manifest_path, bank)
+    artifact_paths["l2_expert_bank"] = _artifact_relative_path(store.root, bank_path)
+    artifact_paths["l2_expert_manifest"] = _artifact_relative_path(store.root, manifest_path)
+    metrics["l2_expert_bank_trained"] = True
+    metrics["l2_expert_bank"] = bank.manifest_payload()
+    return CandidatePart(
+        paths={"l2_expert_bank_path": bank_path, "l2_expert_manifest_path": manifest_path},
+        metrics=metrics,
+        artifacts={"l2_expert_bank": bank},
+    )
+
+
+def build_l3_prompt_candidate(
+    *,
+    store: ArtifactStore,
+    generation: int,
+    settings: Settings,
+    teacher_train: list[TeacherTrace],
+    current_manifest: ArtifactManifest | None,
+    candidate_metrics: dict[str, object],
+    artifact_paths: dict[str, str],
+) -> CandidatePart:
+    metrics: dict[str, object] = {}
+    if settings.l4_proposal_mode != "live" or not teacher_train:
+        return CandidatePart(paths={}, metrics=metrics)
+    try:
+        l3_proposal_result = L4ProposalAdapter(settings).propose(
+            role="l3",
+            task_schema=_task_schema_from_teacher_traces(teacher_train),
+            traces=teacher_train,
+            output_schema=L3_PROMPT_PROPOSAL_SCHEMA,
+            current_artifact_summary=_artifact_summary(current_manifest),
+            metrics=candidate_metrics,
+        )
+        l3_prompt_artifact = l3_prompt_artifact_from_proposal(
+            l3_proposal_result.proposal,
+            traces=teacher_train,
+            prompt_version=f"{settings.local_slm_prompt_version}-candidate-gen-{generation:03d}",
+        )
+    except (MissingTeacherError, ProposalParseError, ValueError) as exc:
+        metrics["l4_l3_prompt_proposal_succeeded"] = False
+        metrics["l4_l3_prompt_proposal_error"] = str(exc)
+        return CandidatePart(paths={}, metrics=metrics)
+    l3_path = store.write_generation_json(
+        generation,
+        "l3/l3_prompt.candidate.json",
+        l3_prompt_artifact.model_dump(mode="json"),
+    )
+    artifact_paths["l3_prompt_candidate"] = _artifact_relative_path(store.root, l3_path)
+    metrics.update(
+        {
+            "l4_l3_prompt_proposal_succeeded": True,
+            "l4_l3_prompt_proposal": l3_proposal_result.proposal,
+            "l4_l3_prompt_proposal_context_hash": l3_proposal_result.context_hash,
+            "l4_l3_prompt_proposal_prompt_cache_key": (
+                l3_proposal_result.prompt_cache_key
+            ),
+            "l4_l3_prompt_proposal_source_trace_ids": (
+                l3_proposal_result.source_trace_ids
+            ),
+            "l3_prompt_candidate_runtime_promoted": False,
+            "l3_prompt_candidate_promotion_blocker": (
+                "requires regenerated or shadow L3 replay before runtime promotion"
+            ),
+        }
+    )
+    return CandidatePart(paths={"l3_prompt_candidate_path": l3_path}, metrics=metrics)
+
+
+def evolve_l1_candidate(
+    *,
+    store: ArtifactStore,
+    generation: int,
+    generation_dir: Path,
+    settings: Settings,
+    teacher_train: list[TeacherTrace],
+    hard_cases: list[TeacherTrace],
+    current_manifest: ArtifactManifest | None,
+    source_crate_dir: Path,
+    artifact_paths: dict[str, str],
+) -> CandidatePart:
+    metrics: dict[str, object] = {}
+    paths: dict[str, Path] = {}
+    artifacts: dict[str, object] = {}
+    if settings.l1_agent_mode == "disabled":
+        metrics["l1_agent_mode"] = "disabled"
+        return CandidatePart(paths=paths, metrics=metrics, artifacts=artifacts)
+    metrics["l1_agent_mode"] = settings.l1_agent_mode
+    try:
+        l1_agent_result = L4CodingAgentAdapter(settings).run_l1_job(
+            job_dir=generation_dir / "l1_agent",
+            source_crate_dir=source_crate_dir,
+            teacher_train=teacher_train,
+            hard_cases=hard_cases,
+            current_metrics=(
+                current_manifest.candidate_metrics if current_manifest is not None else {}
+            ),
+            objective={
+                "accuracy_epsilon": settings.promotion_accuracy_epsilon,
+                "wrong_accept_limit": settings.l2_max_wrong_accept_rate,
+            },
+            run_validation=True,
+        )
+    except L1CodingAgentError as exc:
+        metrics["l1_agent_succeeded"] = False
+        metrics["l1_agent_error"] = str(exc)
+        return CandidatePart(paths=paths, metrics=metrics, artifacts=artifacts)
+
+    metrics["l1_agent_succeeded"] = l1_agent_result.succeeded
+    metrics["l1_agent_return_code"] = l1_agent_result.return_code
+    for key, path in {
+        "l1_agent_dir": l1_agent_result.job_dir,
+        "l1_agent_diff": l1_agent_result.diff_path,
+        "l1_agent_report": l1_agent_result.report_path,
+        "l1_agent_commands": l1_agent_result.commands_path,
+        "l1_agent_transcript": l1_agent_result.transcript_path,
+        "l1_agent_provenance": l1_agent_result.provenance_path,
+    }.items():
+        artifact_paths[key] = _artifact_relative_path(store.root, path)
+        paths[f"{key}_path"] = path
+    if not l1_agent_result.succeeded:
+        return CandidatePart(paths=paths, metrics=metrics, artifacts=artifacts)
+
+    artifact_paths["l1_crate_dir"] = _artifact_relative_path(
+        store.root,
+        l1_agent_result.workspace_crate_dir,
+    )
+    paths["l1_crate_dir_path"] = l1_agent_result.workspace_crate_dir
+    artifacts["l1_crate_dir"] = l1_agent_result.workspace_crate_dir
+    l1_benchmark_payload = _l1_generation_benchmark_payload(
+        l1_agent_result.workspace_crate_dir,
+        timeout_s=settings.l1_worker_timeout_s,
+    )
+    l1_benchmark_path = store.write_generation_json(
+        generation,
+        "l1/l1_benchmark.json",
+        l1_benchmark_payload,
+    )
+    artifact_paths["l1_benchmark"] = _artifact_relative_path(store.root, l1_benchmark_path)
+    paths["l1_benchmark_path"] = l1_benchmark_path
+    metrics["l1_benchmark_status"] = l1_benchmark_payload.get("status")
+    if l1_benchmark_payload.get("status") == "success":
+        metrics["l1_benchmark_native_p95_us"] = l1_benchmark_payload.get("native_p95_us")
+        metrics["l1_benchmark_throughput_qps"] = l1_benchmark_payload.get("throughput_qps")
+    else:
+        metrics["l1_benchmark_error"] = l1_benchmark_payload.get("error")
+    return CandidatePart(paths=paths, metrics=metrics, artifacts=artifacts)
+
+
+def gate_l3_runtime_candidate(
+    *,
+    settings: Settings,
+    traces: list[TeacherTrace],
+    artifact_paths: dict[str, str],
+) -> CandidatePart:
+    metrics: dict[str, object] = {
+        "l3_mode_requested": settings.local_slm_mode,
+        "l3_mode_effective": settings.local_slm_mode,
+    }
+    if settings.local_slm_mode != "guarded":
+        metrics["l3_residual_gate_skipped_reason"] = "L3 runtime is not guarded"
+        return CandidatePart(paths={}, metrics=metrics)
+    if "l3_prompt" not in artifact_paths:
+        metrics["l3_mode_effective"] = "disabled"
+        metrics["l3_residual_gate_skipped_reason"] = "no promoted L3 prompt artifact"
+        return CandidatePart(paths={}, metrics=metrics)
+    gate = evaluate_l3_residual_value(traces, settings=settings)
+    metrics["l3_residual_gate"] = gate
+    if gate["passes_gate"]:
+        metrics["l3_runtime_enabled_by_residual_gate"] = True
+        return CandidatePart(paths={}, metrics=metrics)
+    artifact_paths.pop("l3_prompt", None)
+    metrics["l3_mode_effective"] = "disabled"
+    metrics["l3_runtime_enabled_by_residual_gate"] = False
+    metrics["l3_runtime_disabled_reason"] = gate["reason"]
+    return CandidatePart(paths={}, metrics=metrics)
+
+
+def assemble_candidate_artifact_set(
+    *,
+    l0_cache: dict[str, Any],
+    l1_crate_dir: Path | None,
+    l1_worker_timeout_s: float,
+    l2_bundle: L2StudentBundle | None,
+    l2_target_path: Path | None,
+    l2_expert_bank: L2ExpertBank | None,
+) -> OfflineArtifactSet:
+    return OfflineArtifactSet(
+        l0_cache=l0_cache,
+        l1_crate_dir=l1_crate_dir,
+        l1_worker_timeout_s=l1_worker_timeout_s,
+        l2_bundle=l2_bundle,
+        l2_target_path=l2_target_path,
+        l2_expert_bank=l2_expert_bank,
+    )
+
+
+def evaluate_and_promote(
+    *,
+    split,
+    replay_pressure_traces: list[TeacherTrace],
+    current_artifacts: OfflineArtifactSet,
+    candidate_artifacts: OfflineArtifactSet,
+    settings: Settings,
+) -> PromotionEvaluation:
+    evaluation_traces = (
+        _dedupe_teacher_traces([*split.evaluation_traces, *replay_pressure_traces])
+        if split.evaluation_traces
+        else []
+    )
+    if not evaluation_traces:
+        return PromotionEvaluation(
+            evaluation_traces=[],
+            current_replay=None,
+            candidate_replay=None,
+            per_layer_deltas={},
+            promoted=False,
+            decision_reason="promotion replay coverage is empty",
+            promoted_with_layer_regression=False,
+            regressed_layers=[],
+        )
+    cost_model = replay_cost_model_from_settings(settings)
+    current_replay = evaluate_offline_artifact_set(
+        evaluation_traces,
+        current_artifacts,
+        cost_model=cost_model,
+    )
+    candidate_replay = evaluate_offline_artifact_set(
+        evaluation_traces,
+        candidate_artifacts,
+        cost_model=cost_model,
+    )
+    per_layer_deltas = layer_deltas(current_replay, candidate_replay)
+    decision = decide_artifact_set_promotion(
+        current_replay.objective,
+        candidate_replay.objective,
+        per_layer_deltas=per_layer_deltas,
+        accuracy_epsilon=settings.promotion_accuracy_epsilon,
+        max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
+        block_layer_regressions=settings.promotion_block_layer_regressions,
+    )
+    return PromotionEvaluation(
+        evaluation_traces=evaluation_traces,
+        current_replay=current_replay,
+        candidate_replay=candidate_replay,
+        per_layer_deltas=per_layer_deltas,
+        promoted=decision.promoted,
+        decision_reason=decision.reason,
+        promoted_with_layer_regression=decision.promoted_with_layer_regression,
+        regressed_layers=decision.regressed_layers or [],
+    )
+
+
+def _l2_target_evolution_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": summary.get("schema_version"),
+        "mode": summary.get("mode"),
+        "rounds_completed": summary.get("rounds_completed"),
+        "stop_reason": summary.get("stop_reason"),
+        "adoption_decision": summary.get("adoption_decision"),
+        "selection_decision": summary.get("selection_decision"),
+        "target_scope": summary.get("target_scope"),
+        "data_split": summary.get("data_split"),
+    }
+
+
+def _adopted_l2_target_snapshot(
+    *,
+    job_dir: Path,
+    summary: dict[str, Any],
+) -> Path | None:
+    adoption = summary.get("adoption_decision")
+    if not isinstance(adoption, dict) or not adoption.get("adopted"):
+        return None
+    selected_round = adoption.get("round")
+    if selected_round is None:
+        return None
+    for round_payload in summary.get("rounds", []):
+        if not isinstance(round_payload, dict) or round_payload.get("round") != selected_round:
+            continue
+        snapshot = round_payload.get("target_snapshot")
+        if not isinstance(snapshot, str) or not snapshot:
+            continue
+        snapshot_path = Path(snapshot)
+        if not snapshot_path.is_absolute():
+            snapshot_path = job_dir / snapshot_path
+        target_path = snapshot_path / "target_l2.py"
+        return target_path if target_path.exists() else None
+    return None
+
+
+def _l2_target_is_compatible(
+    bundle: L2StudentBundle,
+    target_path: Path,
+    traces: list[TeacherTrace],
+) -> bool:
+    if not target_path.exists():
+        return False
+    try:
+        layer = TargetL2Layer(bundle, target_path)
+        utterance = next(
+            (trace.utterance for trace in traces if trace.teacher_frame is not None),
+            "compatibility smoke request",
+        )
+        layer.try_answer(utterance)
+    except Exception:
+        return False
+    return True
+
+
+def _artifact_path_for_manifest(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def _apply_l2_ablation_to_offline_artifacts(
@@ -729,6 +1173,8 @@ def _apply_l2_ablation_to_offline_artifacts(
             l1_crate_dir=artifacts.l1_crate_dir,
             l1_worker_timeout_s=artifacts.l1_worker_timeout_s,
             l2_bundle=None,
+            l2_target_path=None,
+            l2_expert_bank=None,
         )
     if settings.l2_guard_mode == "always_accept" and artifacts.l2_bundle is not None:
         artifacts.l2_bundle.config.accept_threshold = 0.0

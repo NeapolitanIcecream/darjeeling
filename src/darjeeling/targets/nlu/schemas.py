@@ -16,10 +16,20 @@ class Frame(BaseModel):
 LayerName = Literal["L0", "L1", "L2", "L3", "L4"]
 
 
+class FramePatch(BaseModel):
+    accepted_intent: str | None = None
+    accepted_slots: dict[str, str] = Field(default_factory=dict)
+    source_layer: LayerName
+    confidence: float | None = None
+    complete: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class LayerResult(BaseModel):
     layer: LayerName
     accepted: bool
     frame: Frame | None = None
+    patch: FramePatch | None = None
     confidence: float | None = None
     reason: str = ""
     latency_ms: float
@@ -36,6 +46,7 @@ class TraceRecord(BaseModel):
     final_frame: Frame
     layer_results: list[LayerResult]
     l4_usage: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -51,6 +62,7 @@ class TeacherTrace(BaseModel):
     final_frame: Frame
     layer_results: list[LayerResult]
     l4_usage: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: str
 
 

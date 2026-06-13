@@ -50,7 +50,7 @@ compiler 已迁到 `darjeeling.targets.nlu.compiler.*`，并通过
 - L2 训练 scope 由 `L2_TRAINING_SCOPE` 决定：默认 `teacher_train`，实验开关 `lower_miss` 只使用本轮 `teacher_train` 中 L0/L1 未接收的 traces。Scope 定义 L2 可见训练分布，不等同于最终 validation 口径。
 - Optuna internal validation 和 final guard calibration 都优先使用 residual validation：从 train window 中做内部 split，用 train prefix 模拟 L0 exact cache，并过滤 validation 中 exact repeat 与已记录 L0/L1 accepted 请求。这样 tuning/threshold 优化的是“真实会到达 L2 的 future residual”，而不是 L2-only 或 already-covered 样本。
 - L2 训练后执行 deterministic guard threshold grid search，选择满足 wrong-accept 上限且覆盖率最高的 threshold，并写入 L2 artifact 与 candidate metrics。若 residual calibration 不可用，compiler 回退到 training-scope search 并记录 `l2_guard_calibration.fallback_reason`。
-- L2 target-dependent runtime changes do not run through compiler generation of core artifacts. 显式 `edge-mvp-nlu l2 promote-target` 会在 manifest 中写入 `artifact_paths["l2_target"]`；compiler offline replay 加载 current/candidate artifact set 时必须与 runtime replay 一样应用 target wrapper。若 compiler 在普通 generation 中重新训练 core L2 bundle，但没有做 target-aware adoption，则必须删除继承的 `l2_target` path，并在 candidate metrics 中记录 `l2_target_dropped_reason`，避免旧 target code 与新 bundle 混用。
+- L2 target-dependent runtime changes can enter through either the standalone CLI flow or the main compiler candidate path. 显式 `edge-mvp-nlu l2 promote-target` 仍会在 manifest 中写入 `artifact_paths["l2_target"]`；compiler offline replay 加载 current/candidate artifact set 时必须与 runtime replay 一样应用 target wrapper。普通 generation 重新训练 core L2 bundle 后，会先尝试 staging an adopted target-evolution snapshot；若没有新 snapshot，则只在 inherited `l2_target` 与新 bundle 兼容时保留它，否则删除并记录 `l2_target_dropped_reason`。
 - `L4_PROPOSAL_MODE=live` 时，compiler 也会请求 legacy bounded L3 prompt proposal，展开 teacher-visible few-shot trace IDs，并写入 `l3/l3_prompt.candidate.json`。该 candidate 记录为 `l3_prompt_candidate`，不会自动成为 runtime `l3_prompt`；当前真实 L3 prompt evolve 主路径是显式 `edge-mvp-nlu l3 prompt-evolve`。
 - 用 `teacher_promotion_holdout + teacher_regression_sample + hard_buffer` 对 current artifact set 与 candidate artifact set 做离线 replay；hard buffer 包含 `train_visible` 与 `replay_only` 两类 replay pressure，但不能替代独立 holdout，若没有 holdout/regression 覆盖则拒绝 promotion。
 - promotion 使用 `decide_artifact_set_promotion`，检查 objective、accuracy epsilon 和 wrong-accept 上限。
@@ -188,3 +188,42 @@ MVP promotion 单位是 artifact set。单层 candidate 可以单独度量，但
 当前主线已把最小 per-layer hard gate 接入 promotion decision。Compiler 必须输出 per-layer delta；若某个仍在使用或使用占比上升的层出现显著 accepted accuracy 下降、wrong accept 上升或 p95 latency 上升，`PROMOTION_BLOCK_LAYER_REGRESSIONS=true` 时拒绝整组 promotion，并把 `regressed_layers` 写入 promotion record。若上层 share 下降是因为请求被更低层正确吸收，该上层不因自身样本减少而触发 regression。`promoted_with_layer_regression=true` 只应出现在显式关闭该 gate 或 `FORCE_PROMOTE_ARTIFACTS=true` 的诊断实验中。
 
 仍然保留为遗留问题的是更细粒度的恢复策略：当前 gate 能阻止被掩盖的退化，但 live manifest 仍按 artifact set 更新，尚未支持 shadow promotion、layer quarantine 或 per-layer rollback。
+
+## 2026-06-13 Compiler Refactor Update
+
+`run_compiler_generation` is now split into plain candidate-step helpers:
+
+- `build_l0_candidate`
+- `evolve_l1_candidate`
+- `train_l2_student_candidate`
+- `evolve_l2_target_candidate`
+- `build_l3_prompt_candidate`
+- `assemble_candidate_artifact_set`
+- `evaluate_and_promote`
+
+The helpers return or consume simple objects such as `CandidatePart(paths, metrics,
+artifacts)`. There is no plugin system, dependency-injection container, schema DSL, or
+generic lifecycle framework.
+
+L2 target evolution is part of the main candidate path when
+`L2_TARGET_EVOLUTION_MODE` is not `disabled`. The compiler reuses
+`l2_target_evolution.py`, stages an adopted `target_l2.py` snapshot into the generation,
+assembles it with the freshly trained `l2_student.joblib`, and evaluates the combined
+artifact set in offline replay. If evolution does not adopt a candidate, the compiler
+preserves an inherited `l2_target` only when it smoke-loads with the new bundle; otherwise
+it records `l2_target_dropped_reason = "no compatible target-aware candidate exists"`.
+
+L2 also trains an NLU-specific expert bank when the visible workload supports it. The bank
+contains intent binary experts and slot value experts, writes a joblib artifact plus a
+reviewable `l2_expert_bank.json` manifest, and emits `FramePatch` objects at runtime. The
+global L2 student/target wrapper remains the fallback.
+
+Proposal contexts now lead with ranked focus tasks rather than chronological first-N
+traces. Focus tasks are derived from teacher-visible hard cases, lower misses, wrong
+accepts, audit disagreement, and layer behavior. Raw traces are retained only as supporting
+examples.
+
+Guarded L3 runtime artifacts are kept only when `evaluate_l3_residual_value(...)` shows
+residual coverage, accepted accuracy, wrong-accept rate, p95 latency, and positive
+cost/latency value versus skipping L3. Failing gates remove `l3_prompt` from the candidate
+manifest and set effective `l3_mode` to `disabled`.

@@ -72,3 +72,20 @@ L1 coding-agent harness 应支持 dry-run mode：
 - shadow mode 模型加载失败时按配置降级并记录。
 - guarded mode 模型加载失败时 fail fast，除非 CLI 显式允许 degrade。
 - report 记录 actual device 和 mode。
+
+## 2026-06-13 Regression Coverage
+
+Added target-level tests for:
+
+- patch composition with L4 residual fill;
+- lower-layer live teacher audit and disagreement metadata;
+- field-level offline replay metrics;
+- L2 target preservation and staged target-evolution adoption in compiler generation;
+- L2 expert-bank training, manifest writing, and runtime patch emission;
+- focus-task proposal context and L1 workspace context without gold leakage;
+- L3 residual pass/skip gate and bounded decode default;
+- core/target boundary scanning to keep NLU schema terms out of core Python files.
+
+Required verification for this refactor is `uv run pytest tests/targets/nlu -q`.
+Run the full `uv run pytest tests -q` when core contracts, artifact store, CLI target
+wiring, or generic router behavior changes.

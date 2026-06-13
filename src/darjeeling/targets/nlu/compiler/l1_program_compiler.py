@@ -10,6 +10,7 @@ from difflib import unified_diff
 from pathlib import Path
 from typing import Any, Literal
 
+from darjeeling.targets.nlu.compiler.focus_tasks import build_focus_tasks, focus_task_document
 from darjeeling.targets.nlu.compiler.l4_context import assert_no_forbidden_context
 from darjeeling.targets.nlu.layers.l1_program_bank import ProgramRule
 from darjeeling.targets.nlu.schemas import TeacherTrace
@@ -240,6 +241,9 @@ def _write_context_files(
             teacher_train=teacher_train,
             hard_cases=hard_cases,
         ),
+        "focus_tasks.json": focus_task_document(
+            build_focus_tasks([*hard_cases, *teacher_train]),
+        ),
         "current_metrics.json": current_metrics,
         "objective.json": objective,
         "constraints.md": _constraints_text(),
@@ -267,9 +271,9 @@ def _build_l1_agent_prompt(*, context_dir: Path, workspace_crate_dir: Path) -> s
             "You are running as the L4 coding-agent compiler mode for L1.",
             "Edit only the Rust ProgramBank workspace provided for this job.",
             "Use the teacher-visible context files, objective, constraints, and command guide.",
-            "Start from `context_families.json`: it groups raw traces into schema-aware",
-            "pattern families and highlights current L1 behavior. Use raw JSONL files",
-            "only for examples and boundary checks.",
+            "Start from `focus_tasks.json`: it ranks local work by misses, wrong",
+            "accepts, audit disagreement, and L4 pressure. Use `context_families.json`",
+            "and raw JSONL files only for examples and boundary checks.",
             "Prefer native Rust code paths: if/else trees, tight loops, tables,",
             "small state machines, or validators.",
             "Default to abstain when uncertain. Do not change outer evaluator or promotion logic.",
