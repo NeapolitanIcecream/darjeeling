@@ -248,17 +248,22 @@ def route_nlu_layers(runtime_layers: dict[str, Any], *, utterance: str) -> NluRo
         if layer_name == "L4":
             residual_result = _try_l4_residual(layer, utterance=utterance, composer=composer)
             if residual_result is not None:
-                result = _apply_route_result(composer, residual_result, l4_override=True)
-                layer_results.append(result)
-                _record_l4_usage(l4_usage, result)
-                if result.patch is not None and result.patch.complete and composer.complete:
-                    return NluRouteResult(
-                        final_frame=composer.to_frame(),
-                        chosen_layer="L4",
-                        layer_results=layer_results,
-                        l4_usage=l4_usage,
-                        composer=composer,
-                    )
+                if _residual_requires_full_l4(residual_result):
+                    layer_results.append(residual_result)
+                    _record_l4_usage(l4_usage, residual_result)
+                else:
+                    result = _apply_route_result(composer, residual_result, l4_override=True)
+                    result = _with_residual_counts(result)
+                    layer_results.append(result)
+                    _record_l4_usage(l4_usage, result)
+                    if result.patch is not None and result.patch.complete and composer.complete:
+                        return NluRouteResult(
+                            final_frame=composer.to_frame(),
+                            chosen_layer="L4",
+                            layer_results=layer_results,
+                            l4_usage=l4_usage,
+                            composer=composer,
+                        )
         core_result = layer.try_answer({"utterance": utterance})
         result = legacy_layer_result_from_core(core_result)
         if layer_name == "L4" and result.frame is not None:
@@ -327,7 +332,8 @@ def _try_l4_residual(
     utterance: str,
     composer: FrameComposer,
 ) -> LayerResult | None:
-    if not composer.accepted_field_keys():
+    accepted_fields = composer.field_values()
+    if not accepted_fields:
         return None
     residual = getattr(layer, "try_residual_patch", None)
     if residual is None:
@@ -337,13 +343,131 @@ def _try_l4_residual(
         core_result = residual(
             {
                 "utterance": utterance,
-                "accepted_fields": composer.field_values(),
+                "accepted_fields": accepted_fields,
                 "missing_fields": composer.missing_field_keys(candidate_fields),
             }
         )
     except Exception:
         return None
-    return legacy_layer_result_from_core(core_result)
+    result = legacy_layer_result_from_core(core_result)
+    return _validate_residual_completion(result, accepted_fields=accepted_fields)
+
+
+def _validate_residual_completion(
+    result: LayerResult,
+    *,
+    accepted_fields: dict[str, str],
+) -> LayerResult:
+    if not result.accepted:
+        return _reject_l4_residual_result(
+            result,
+            patch=None,
+            reason="residual_not_accepted",
+            unverified_fields=sorted(accepted_fields),
+        )
+    patch = frame_patch_from_layer_result(result)
+    if patch is None:
+        return _reject_l4_residual_result(
+            result,
+            patch=None,
+            reason="residual_returned_no_patch",
+            unverified_fields=sorted(accepted_fields),
+        )
+    if not patch.complete:
+        return _reject_l4_residual_result(
+            result,
+            patch=patch,
+            reason="residual_patch_incomplete",
+            unverified_fields=sorted(accepted_fields),
+        )
+    unverified_fields = residual_patch_unverified_fields(
+        patch,
+        accepted_fields=accepted_fields,
+    )
+    if unverified_fields:
+        return _reject_l4_residual_result(
+            result,
+            patch=patch,
+            reason="unverified_accepted_fields",
+            unverified_fields=unverified_fields,
+        )
+    metadata = {
+        **result.metadata,
+        "residual_verification_complete": True,
+        "residual_unverified_fields": [],
+        "residual_verified_field_count": len(_metadata_fields(patch, "verified_fields")),
+        "residual_removed_field_count": len(_metadata_fields(patch, "removed_fields")),
+    }
+    patch = patch.model_copy(
+        update={
+            "metadata": {
+                **patch.metadata,
+                "residual_verification_complete": True,
+                "residual_unverified_fields": [],
+            }
+        }
+    )
+    metadata["frame_patch"] = patch.model_dump(mode="json")
+    return result.model_copy(update={"patch": patch, "metadata": metadata})
+
+
+def _reject_l4_residual_result(
+    result: LayerResult,
+    *,
+    patch: FramePatch | None,
+    reason: str,
+    unverified_fields: list[str],
+) -> LayerResult:
+    metadata = dict(result.metadata)
+    if patch is not None:
+        metadata["untrusted_frame_patch"] = patch.model_dump(mode="json")
+    metadata.pop("frame_patch", None)
+    metadata.update(
+        {
+            "l4_call_kind": metadata.get("l4_call_kind", "residual"),
+            "residual_verification_complete": False,
+            "residual_completion_without_full_verification": bool(
+                patch is not None and patch.complete
+            ),
+            "residual_full_audit_reason": reason,
+            "residual_unverified_fields": sorted(unverified_fields),
+            "residual_verified_field_count": (
+                len(_metadata_fields(patch, "verified_fields")) if patch is not None else 0
+            ),
+            "residual_removed_field_count": (
+                len(_metadata_fields(patch, "removed_fields")) if patch is not None else 0
+            ),
+            **field_metadata_for_patch(None),
+        }
+    )
+    return result.model_copy(
+        update={
+            "accepted": False,
+            "patch": None,
+            "reason": reason,
+            "metadata": metadata,
+        }
+    )
+
+
+def _residual_requires_full_l4(result: LayerResult) -> bool:
+    return result.metadata.get("residual_full_audit_reason") is not None
+
+
+def _with_residual_counts(result: LayerResult) -> LayerResult:
+    if result.metadata.get("l4_call_kind") != "residual":
+        return result
+    patch = frame_patch_from_layer_result(result)
+    metadata = dict(result.metadata)
+    metadata["residual_verified_field_count"] = (
+        len(_metadata_fields(patch, "verified_fields")) if patch is not None else 0
+    )
+    metadata["residual_removed_field_count"] = (
+        len(_metadata_fields(patch, "removed_fields")) if patch is not None else 0
+    )
+    metadata["residual_conflict_count"] = len(metadata.get("field_conflicts", []))
+    metadata["residual_override_count"] = len(metadata.get("field_overrides", []))
+    return result.model_copy(update={"metadata": metadata})
 
 
 def _residual_field_keys(layer: Any) -> list[str]:
@@ -375,6 +499,20 @@ def _record_l4_usage(l4_usage: dict[str, Any], result: LayerResult) -> None:
         l4_usage["serving_fields_avoided"] = (
             float(l4_usage.get("serving_fields_avoided", 0.0)) + float(fields_avoided)
         )
+    if call_kind == "residual":
+        if result.metadata.get("residual_completion_without_full_verification") is True:
+            l4_usage["serving_residual_unverified_completions"] = (
+                int(l4_usage.get("serving_residual_unverified_completions", 0)) + 1
+            )
+        for metadata_key, usage_key in [
+            ("residual_verified_field_count", "serving_residual_verified_fields"),
+            ("residual_removed_field_count", "serving_residual_removed_fields"),
+            ("residual_conflict_count", "serving_residual_conflicts"),
+            ("residual_override_count", "serving_residual_overrides"),
+        ]:
+            value = result.metadata.get(metadata_key)
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                l4_usage[usage_key] = float(l4_usage.get(usage_key, 0.0)) + float(value)
 
 
 def _usage_tokens(usage: dict[str, Any]) -> int:
@@ -462,6 +600,26 @@ def accepted_field_keys(patch: FramePatch | None) -> set[str]:
         fields.add(FIELD_INTENT)
     fields.update(slot_field_key(slot_key) for slot_key in patch.accepted_slots)
     return fields
+
+
+def residual_patch_unverified_fields(
+    patch: FramePatch,
+    *,
+    accepted_fields: dict[str, str],
+) -> list[str]:
+    handled_fields = accepted_field_keys(patch)
+    handled_fields.update(_metadata_fields(patch, "verified_fields"))
+    handled_fields.update(_metadata_fields(patch, "removed_fields"))
+    return sorted(field_key for field_key in accepted_fields if field_key not in handled_fields)
+
+
+def _metadata_fields(patch: FramePatch | None, key: str) -> set[str]:
+    if patch is None:
+        return set()
+    values = patch.metadata.get(key, [])
+    if not isinstance(values, list | tuple | set):
+        return set()
+    return {str(value) for value in values if isinstance(value, str)}
 
 
 def frame_field_values(frame: Frame) -> dict[str, str]:

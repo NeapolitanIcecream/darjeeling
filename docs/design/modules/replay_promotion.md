@@ -158,3 +158,17 @@ reports, but they do not teach Darjeeling core what intent or slot fields mean.
 
 Cost metrics split serving full L4, serving residual L4, audit L4, and teacher-labeling
 metadata where traces contain it. The main objective cost remains serving behavior.
+
+## 2026-06-14 Residual L4 Teacher Semantics
+
+Residual L4 is a serving optimization only when the NLU target can reconstruct a complete
+final frame. A complete residual patch is trusted as a compiler-visible teacher label only
+when every previously accepted weak field is accounted for by the patch: verified in
+`metadata.verified_fields`, corrected in `accepted_intent` / `accepted_slots`, or removed
+through `metadata.removed_fields`.
+
+If a live residual patch claims completion but leaves an accepted weak field unchecked,
+runtime records the residual attempt and falls back to full L4. The untrusted patch is not
+applied and is not counted as accepted field output. When a verified live residual completes
+without a full-cache hit, replay writes the reconstructed final frame as `teacher_frame` and
+marks the trace with `teacher_frame_source=residual_live`.

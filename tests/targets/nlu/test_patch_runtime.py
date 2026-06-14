@@ -9,7 +9,10 @@ from darjeeling.targets.nlu.compiler.replay import (
     evaluate_offline_artifact_set,
 )
 from darjeeling.targets.nlu.data import DataRecord
-from darjeeling.targets.nlu.layers.l4_cloud_llm import TeacherCallResult
+from darjeeling.targets.nlu.layers.l4_cloud_llm import (
+    TeacherCallResult,
+    TeacherPatchCallResult,
+)
 from darjeeling.targets.nlu.patches import route_nlu_layers
 from darjeeling.targets.nlu.replay import run_replay
 from darjeeling.targets.nlu.schemas import (
@@ -56,6 +59,7 @@ class _ResidualPatchLayer:
                     metadata={
                         "l4_call_kind": "residual",
                         "fields_avoided": 2,
+                        "verified_fields": ["intent", "slots.slot_alpha"],
                     },
                 ).model_dump(mode="json"),
             },
@@ -63,6 +67,48 @@ class _ResidualPatchLayer:
 
     def try_answer(self, _input: dict[str, Any]) -> CoreLayerResult:
         raise AssertionError("full L4 should not be called after residual fill")
+
+
+class _PatchRuntime:
+    def build_layers(self, *, manifest, teacher, settings):
+        del manifest, settings
+        return {
+            "L1": _PatchLayer(
+                CoreLayerResult(
+                    layer="L1",
+                    accepted=True,
+                    output=None,
+                    latency_ms=1.0,
+                    metadata={
+                        "frame_patch": FramePatch(
+                            accepted_intent="intent_alpha",
+                            source_layer="L1",
+                        ).model_dump(mode="json")
+                    },
+                )
+            ),
+            "L2": _PatchLayer(
+                CoreLayerResult(
+                    layer="L2",
+                    accepted=True,
+                    output=None,
+                    latency_ms=2.0,
+                    metadata={
+                        "frame_patch": FramePatch(
+                            accepted_slots={"slot_alpha": "lower value"},
+                            source_layer="L2",
+                        ).model_dump(mode="json")
+                    },
+                )
+            ),
+            "L4": teacher,
+        }
+
+
+class _PatchRuntimeTarget:
+    name = "nlu"
+    schema_version = "nlu-target-v1"
+    runtime = _PatchRuntime()
 
 
 def test_route_nlu_layers_lets_full_l4_override_weak_field_conflicts() -> None:
@@ -180,6 +226,7 @@ def test_route_nlu_layers_uses_residual_l4_for_partial_patch_completion() -> Non
 
     result = route_nlu_layers(layers, utterance="alpha request")
 
+    assert result.chosen_layer == "L4"
     assert result.final_frame == Frame(
         intent="intent_alpha",
         slots={"slot_alpha": "lower value", "slot_beta": "teacher residual"},
@@ -197,6 +244,166 @@ def test_route_nlu_layers_uses_residual_l4_for_partial_patch_completion() -> Non
     assert result.l4_usage["serving_residual_calls"] == 1
     assert result.l4_usage["serving_residual_tokens"] == 3
     assert result.l4_usage["serving_fields_avoided"] == 2.0
+    assert result.l4_usage["serving_residual_verified_fields"] == 2.0
+
+
+def test_run_replay_labels_verified_live_residual_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    data_dir.mkdir()
+    (data_dir / "train.jsonl").write_text(
+        DataRecord(
+            request_id="r1",
+            utterance="alpha request",
+            gold_frame=Frame(
+                intent="intent_alpha",
+                slots={"slot_alpha": "lower value", "slot_beta": "teacher residual"},
+            ),
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_residual_patch(self, *, utterance, task_schema, accepted_fields, missing_fields):
+        del self, task_schema
+        assert utterance == "alpha request"
+        assert accepted_fields == {
+            "intent": "intent_alpha",
+            "slots.slot_alpha": "lower value",
+        }
+        assert missing_fields == ["slots.slot_beta"]
+        return TeacherPatchCallResult(
+            patch=FramePatch(
+                accepted_slots={"slot_beta": "teacher residual"},
+                source_layer="L4",
+                complete=True,
+                metadata={"verified_fields": ["intent", "slots.slot_alpha"]},
+            ),
+            raw_response="{}",
+            usage={"total_tokens": 5},
+            model="fake-teacher",
+            context_hash="ctx",
+            prompt_cache_key="cache",
+        )
+
+    def fake_answer(self, utterance, task_schema):
+        raise AssertionError("verified residual completion should not call full L4")
+
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.layers.l4_cloud_llm.CloudLLMTeacher.residual_patch",
+        fake_residual_patch,
+    )
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.layers.l4_cloud_llm.CloudLLMTeacher.answer",
+        fake_answer,
+    )
+    settings = load_settings().model_copy(update={"openai_api_key": "test-key"})
+
+    run_replay(
+        stream="sequential",
+        max_requests=1,
+        teacher_mode="live",
+        run_dir=run_dir,
+        data_dir=data_dir,
+        settings=settings,
+        target=_PatchRuntimeTarget(),
+    )
+
+    trace = json.loads((run_dir / "traces.jsonl").read_text(encoding="utf-8"))
+    assert trace["chosen_layer"] == "L4"
+    assert trace["teacher_frame"] == trace["final_frame"]
+    assert trace["metadata"]["teacher_frame_source"] == "residual_live"
+    assert trace["metadata"]["residual_l4_verified_teacher_frame"] is True
+    assert trace["metadata"]["residual_l4_verified_field_count"] == 2.0
+
+
+def test_run_replay_full_audits_unverified_live_residual_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    data_dir.mkdir()
+    (data_dir / "train.jsonl").write_text(
+        DataRecord(
+            request_id="r1",
+            utterance="alpha request",
+            gold_frame=Frame(
+                intent="intent_alpha",
+                slots={"slot_alpha": "teacher value", "slot_beta": "teacher residual"},
+            ),
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_residual_patch(self, *, utterance, task_schema, accepted_fields, missing_fields):
+        del self, utterance, task_schema, accepted_fields, missing_fields
+        return TeacherPatchCallResult(
+            patch=FramePatch(
+                accepted_slots={"slot_beta": "teacher residual"},
+                source_layer="L4",
+                complete=True,
+            ),
+            raw_response="{}",
+            usage={"total_tokens": 5},
+            model="fake-teacher",
+            context_hash="ctx-residual",
+            prompt_cache_key="cache-residual",
+        )
+
+    def fake_answer(self, utterance, task_schema):
+        del self, utterance, task_schema
+        return TeacherCallResult(
+            frame=Frame(
+                intent="intent_alpha",
+                slots={"slot_alpha": "teacher value", "slot_beta": "teacher residual"},
+            ),
+            raw_response='{"intent":"intent_alpha","slots":{"slot_alpha":"teacher value","slot_beta":"teacher residual"}}',
+            usage={"total_tokens": 11},
+            model="fake-teacher",
+            context_hash="ctx-full",
+            prompt_cache_key="cache-full",
+        )
+
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.layers.l4_cloud_llm.CloudLLMTeacher.residual_patch",
+        fake_residual_patch,
+    )
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.layers.l4_cloud_llm.CloudLLMTeacher.answer",
+        fake_answer,
+    )
+    settings = load_settings().model_copy(update={"openai_api_key": "test-key"})
+
+    run_replay(
+        stream="sequential",
+        max_requests=1,
+        teacher_mode="live",
+        run_dir=run_dir,
+        data_dir=data_dir,
+        settings=settings,
+        target=_PatchRuntimeTarget(),
+    )
+
+    trace = json.loads((run_dir / "traces.jsonl").read_text(encoding="utf-8"))
+    assert trace["chosen_layer"] == "L4"
+    assert trace["teacher_frame"] == {
+        "intent": "intent_alpha",
+        "slots": {"slot_alpha": "teacher value", "slot_beta": "teacher residual"},
+        "is_abstain": False,
+    }
+    assert trace["metadata"]["residual_l4_unverified_completions"] == 1
+    assert trace["metadata"]["residual_l4_full_audit_reason"] == (
+        "unverified_accepted_fields"
+    )
+    assert [result["metadata"]["l4_call_kind"] for result in trace["layer_results"] if result["layer"] == "L4"] == [
+        "residual",
+        "full",
+    ]
 
 
 def test_run_replay_audits_lower_layer_accept_and_records_disagreement(

@@ -69,3 +69,21 @@ come from NLU `FramePatch` traces and remain target-specific diagnostics.
 Lower-layer teacher audit metadata is also reflected in hard cases: audit disagreement can
 be mined as `teacher_audit_disagreement`, making accepted lower-layer mistakes visible to
 compiler focus tasks and reports.
+
+## 2026-06-14 Residual Metrics Update
+
+Run reports split measured L4 buckets from traces: serving full L4, serving residual L4,
+audit L4, and teacher-labeling L4. These rows use live/cache result metadata when tokens,
+latency, and cost are present.
+
+Offline replay and promotion still model residual L4 cost and latency from constants. Those
+values are labeled as modeled in candidate cost metrics, including
+`modeled_residual_l4_cost_usd_per_100_requests`,
+`modeled_residual_l4_latency_ms_assumption`, and
+`modeled_residual_l4_min_cost_fraction`.
+
+Experiment comparison now puts field and residual metrics before layer share: weak field
+coverage/accuracy, wrong accepted field rate, L4 conflict rate, full/residual L4 calls and
+tokens per 100 requests, serving/audit cost per 100 requests, correct weak fields avoiding
+full L4, and residual L4 verified fields. Layer share remains available, but it is no
+longer the main signal for patch-runtime value.

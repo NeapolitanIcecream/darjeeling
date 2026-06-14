@@ -390,7 +390,6 @@ class CachedTeacherLayer:
                 patch = call_result.patch.model_copy(
                     update={
                         "source_layer": "L4",
-                        "complete": True,
                         "metadata": {
                             **call_result.patch.metadata,
                             "adapter": "l4_residual_live",
@@ -497,7 +496,7 @@ def parse_teacher_patch(raw_response: str, *, task_schema: TaskSchema) -> FrameP
             }
         )
     _validate_patch_schema(patch, task_schema)
-    return patch.model_copy(update={"source_layer": "L4", "complete": True})
+    return patch.model_copy(update={"source_layer": "L4"})
 
 
 def teacher_cache_key(

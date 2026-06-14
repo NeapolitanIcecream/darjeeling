@@ -24,7 +24,7 @@ from darjeeling.targets.nlu.patches import (
     frame_field_values,
     frame_patch_from_layer_result,
 )
-from darjeeling.targets.nlu.schemas import Frame, LayerName, TraceRecord
+from darjeeling.targets.nlu.schemas import Frame, LayerName, LayerResult, TraceRecord
 from darjeeling.targets.nlu.trace import read_traces
 
 L1_BENCHMARK_FILENAME = "l1_benchmark.json"
@@ -37,6 +37,18 @@ EXPERIMENT_COMPARISON_FIELDNAMES = [
     "requests",
     "frame_exact_match",
     "total_latency_p95_ms",
+    "weak_field_coverage",
+    "weak_field_accuracy",
+    "wrong_accepted_field_rate",
+    "l4_conflict_rate",
+    "full_l4_calls_per_100",
+    "residual_l4_calls_per_100",
+    "full_l4_tokens_per_100",
+    "residual_l4_tokens_per_100",
+    "serving_cost_per_100",
+    "audit_cost_per_100",
+    "correct_weak_fields_avoiding_full_l4_per_100",
+    "residual_l4_verified_fields_per_100",
     "comparison_score",
     "comparison_rank",
     "l0_share",
@@ -215,6 +227,11 @@ def _experiment_comparison_row(run_dir: Path) -> dict[str, Any]:
     layer_counts = Counter(trace.chosen_layer for trace in traces)
     requests = len(traces)
     benchmark = _load_json_object(run_dir / "reports" / L1_BENCHMARK_FILENAME)
+    field_stats = _field_summary_stats(traces)
+    cost_stats = _cost_summary_stats(traces)
+    serving_full = cost_stats["serving_full_l4"]
+    serving_residual = cost_stats["serving_residual_l4"]
+    audit_l4 = cost_stats["audit_l4"]
 
     row: dict[str, Any] = {
         "experiment": metadata.get("experiment") or run_dir.name,
@@ -223,6 +240,37 @@ def _experiment_comparison_row(run_dir: Path) -> dict[str, Any]:
         "requests": requests,
         "frame_exact_match": _gold_frame_exact_match(traces),
         "total_latency_p95_ms": round(_percentile(_total_latencies_ms(traces), 95), 6),
+        "weak_field_coverage": round(float(field_stats["weak_field_coverage"]), 6),
+        "weak_field_accuracy": round(float(field_stats["weak_field_accuracy"]), 6),
+        "wrong_accepted_field_rate": round(
+            float(field_stats["wrong_accepted_field_rate"]),
+            6,
+        ),
+        "l4_conflict_rate": round(float(field_stats["l4_conflict_rate"]), 6),
+        "full_l4_calls_per_100": round(float(serving_full["calls_per_100"]), 6),
+        "residual_l4_calls_per_100": round(float(serving_residual["calls_per_100"]), 6),
+        "full_l4_tokens_per_100": round(float(serving_full["tokens_per_100"]), 6),
+        "residual_l4_tokens_per_100": round(
+            float(serving_residual["tokens_per_100"]),
+            6,
+        ),
+        "serving_cost_per_100": round(
+            float(serving_full["cost_usd_per_100_requests"])
+            + float(serving_residual["cost_usd_per_100_requests"]),
+            6,
+        ),
+        "audit_cost_per_100": round(
+            float(audit_l4["cost_usd_per_100_requests"]),
+            6,
+        ),
+        "correct_weak_fields_avoiding_full_l4_per_100": round(
+            float(field_stats["correct_weak_fields_avoiding_full_l4_per_100"]),
+            6,
+        ),
+        "residual_l4_verified_fields_per_100": round(
+            float(field_stats["residual_l4_verified_fields_per_100"]),
+            6,
+        ),
         "promoted_generations": sum(1 for record in promotion_records if record.get("promoted")),
         "promotion_attempts": len(promotion_records),
         "promoted_with_layer_regression": sum(
@@ -264,9 +312,18 @@ def _rank_experiment_comparison_rows(rows: list[dict[str, Any]]) -> list[dict[st
 def _experiment_comparison_score(row: dict[str, Any]) -> float:
     frame_exact = _float_or_zero(row.get("frame_exact_match"))
     latency_p95 = _float_or_zero(row.get("total_latency_p95_ms"))
-    l4_share = _float_or_zero(row.get("l4_share"))
+    serving_cost = _float_or_zero(row.get("serving_cost_per_100"))
+    wrong_field_rate = _float_or_zero(row.get("wrong_accepted_field_rate"))
+    conflict_rate = _float_or_zero(row.get("l4_conflict_rate"))
     bottleneck_count = _float_or_zero(row.get("bottleneck_count"))
-    return 100.0 * frame_exact - 0.01 * latency_p95 - 10.0 * l4_share - 2.0 * bottleneck_count
+    return (
+        100.0 * frame_exact
+        - 0.01 * latency_p95
+        - 0.1 * serving_cost
+        - 20.0 * wrong_field_rate
+        - 10.0 * conflict_rate
+        - 2.0 * bottleneck_count
+    )
 
 
 def _float_or_zero(value: Any) -> float:
@@ -597,6 +654,12 @@ def _field_summary_section(traces: list[TraceRecord]) -> str:
         f"{_format_layer_summary_value('accepted_accuracy', stats['weak_field_accuracy'])}",
         "- wrong accepted field rate: "
         f"{_format_layer_summary_value('wrong_accept_rate', stats['wrong_accepted_field_rate'])}",
+        "- L4 conflict rate: "
+        f"{_format_layer_summary_value('wrong_accept_rate', stats['l4_conflict_rate'])}",
+        "- correct weak fields avoiding full L4 / 100 requests: "
+        f"{_format_layer_summary_value('coverage', stats['correct_weak_fields_avoiding_full_l4_per_100'])}",
+        "- residual L4 verified fields / 100 requests: "
+        f"{_format_layer_summary_value('coverage', stats['residual_l4_verified_fields_per_100'])}",
         "",
         "| layer | accepted_fields | field_accuracy | wrong_field_rate |",
         "| --- | ---: | ---: | ---: |",
@@ -632,6 +695,12 @@ def _field_summary_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]
             "weak_field_coverage",
             "weak_field_accuracy",
             "wrong_accepted_field_rate",
+            "l4_field_conflicts",
+            "l4_conflict_rate",
+            "correct_weak_fields_avoiding_full_l4",
+            "correct_weak_fields_avoiding_full_l4_per_100",
+            "residual_l4_verified_fields",
+            "residual_l4_verified_fields_per_100",
         ]
     ]
     for layer, layer_stats in stats["layers"].items():
@@ -679,6 +748,11 @@ def _cost_summary_section(traces: list[TraceRecord]) -> str:
     lines.append(
         "- serving fields avoided by residual L4: "
         f"{_format_layer_summary_value('coverage', stats['serving_fields_avoided'])}"
+    )
+    lines.append(
+        "- run trace L4 rows are measured when result metadata carries live tokens, "
+        "latency, and cost; offline promotion residual savings are modeled and "
+        "labeled with modeled residual fields in candidate metrics."
     )
     return "\n".join(lines)
 
@@ -761,25 +835,26 @@ def _field_summary_stats(traces: list[TraceRecord]) -> dict[str, Any]:
     weak_accepted_fields = 0
     weak_correct_fields = 0
     weak_wrong_fields = 0
+    correct_weak_fields_avoiding_full_l4 = 0
+    residual_l4_verified_fields = 0
+    l4_field_conflicts = 0
     for trace in traces:
         expected = _evaluation_label(trace)
         if expected is None:
             continue
         expected_fields = frame_field_values(expected)
         total_expected_fields += len(expected_fields)
+        correct_weak_fields_avoiding_full_l4 += _correct_weak_fields_avoiding_full_l4(
+            trace,
+            expected_fields,
+        )
+        residual_l4_verified_fields += _trace_residual_l4_verified_fields(trace)
+        l4_field_conflicts += _trace_l4_field_conflicts(trace)
         for result in trace.layer_results:
             patch = frame_patch_from_layer_result(result)
             if patch is None:
                 continue
-            patch_values: dict[str, str] = {}
-            if patch.accepted_intent is not None:
-                patch_values["intent"] = patch.accepted_intent
-            patch_values.update(
-                {
-                    f"slots.{slot_key}": slot_value
-                    for slot_key, slot_value in patch.accepted_slots.items()
-                }
-            )
+            patch_values = _patch_field_values(patch)
             layer_stats = layers[patch.source_layer]
             layer_stats["accepted"] += len(patch_values)
             for field_key, field_value in patch_values.items():
@@ -810,8 +885,97 @@ def _field_summary_stats(traces: list[TraceRecord]) -> dict[str, Any]:
         "wrong_accepted_field_rate": (
             weak_wrong_fields / total_expected_fields if total_expected_fields else 0.0
         ),
+        "l4_field_conflicts": float(l4_field_conflicts),
+        "l4_conflict_rate": (
+            l4_field_conflicts / total_expected_fields if total_expected_fields else 0.0
+        ),
+        "correct_weak_fields_avoiding_full_l4": float(
+            correct_weak_fields_avoiding_full_l4
+        ),
+        "correct_weak_fields_avoiding_full_l4_per_100": (
+            correct_weak_fields_avoiding_full_l4 / len(traces) * 100.0
+            if traces
+            else 0.0
+        ),
+        "residual_l4_verified_fields": float(residual_l4_verified_fields),
+        "residual_l4_verified_fields_per_100": (
+            residual_l4_verified_fields / len(traces) * 100.0 if traces else 0.0
+        ),
         "layers": layers,
     }
+
+
+def _correct_weak_fields_avoiding_full_l4(
+    trace: TraceRecord,
+    expected_fields: dict[str, str],
+) -> int:
+    if not any(_trusted_residual_l4_result(result) for result in trace.layer_results):
+        return 0
+    correct = 0
+    for result in trace.layer_results:
+        if result.layer == "L4":
+            break
+        patch = frame_patch_from_layer_result(result)
+        if patch is None or patch.source_layer == "L4":
+            continue
+        for field_key, field_value in _patch_field_values(patch).items():
+            correct += int(expected_fields.get(field_key) == field_value)
+    return correct
+
+
+def _trace_residual_l4_verified_fields(trace: TraceRecord) -> int:
+    total = 0
+    for result in trace.layer_results:
+        if not _trusted_residual_l4_result(result):
+            continue
+        value = _numeric_value(result.metadata.get("residual_verified_field_count"))
+        if value is not None:
+            total += int(value)
+            continue
+        patch = frame_patch_from_layer_result(result)
+        if patch is None:
+            continue
+        verified_fields = patch.metadata.get("verified_fields", [])
+        if isinstance(verified_fields, list | tuple | set):
+            total += sum(1 for field in verified_fields if isinstance(field, str))
+    return total
+
+
+def _trace_l4_field_conflicts(trace: TraceRecord) -> int:
+    trace_conflicts = trace.metadata.get("field_conflicts")
+    if isinstance(trace_conflicts, list):
+        return len(trace_conflicts)
+    conflicts = 0
+    for result in trace.layer_results:
+        if result.layer != "L4":
+            continue
+        result_conflicts = result.metadata.get("field_conflicts")
+        if isinstance(result_conflicts, list):
+            conflicts += len(result_conflicts)
+    return conflicts
+
+
+def _trusted_residual_l4_result(result: LayerResult) -> bool:
+    return (
+        result.layer == "L4"
+        and result.metadata.get("l4_call_kind") == "residual"
+        and result.metadata.get("residual_verification_complete") is True
+        and result.patch is not None
+        and result.patch.complete
+    )
+
+
+def _patch_field_values(patch: Any) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if patch.accepted_intent is not None:
+        values["intent"] = patch.accepted_intent
+    values.update(
+        {
+            f"slots.{slot_key}": slot_value
+            for slot_key, slot_value in patch.accepted_slots.items()
+        }
+    )
+    return values
 
 
 def _l2_unguarded_section(traces: list[TraceRecord]) -> str:

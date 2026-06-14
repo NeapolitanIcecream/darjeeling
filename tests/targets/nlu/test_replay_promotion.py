@@ -335,6 +335,11 @@ def test_offline_replay_counts_partial_patch_as_residual_l4_value(monkeypatch) -
     assert result.layer_counts["L4"] == 1
     assert result.cost_metrics["serving_full_l4_calls"] == 0.0
     assert result.cost_metrics["serving_residual_l4_calls"] == 1.0
+    assert result.cost_metrics["modeled_residual_l4_calls"] == 1.0
+    assert result.cost_metrics["modeled_residual_l4_calls_per_100"] == 100.0
+    assert result.cost_metrics["modeled_residual_l4_cost_usd_per_100_requests"] == 0.5
+    assert result.cost_metrics["modeled_residual_l4_latency_ms_assumption"] == 300.0
+    assert result.cost_metrics["modeled_residual_l4_min_cost_fraction"] == 0.25
     assert result.field_metrics["correct_weak_fields_avoiding_full_l4"] == 1.0
     assert result.objective.full_l4_calls_per_100_requests == 0.0
     assert result.objective.residual_l4_calls_per_100_requests == 100.0

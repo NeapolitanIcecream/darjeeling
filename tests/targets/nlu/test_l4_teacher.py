@@ -160,7 +160,7 @@ def test_live_teacher_call_appends_cache(tmp_path: Path) -> None:
     assert payload["prompt_cache_key"].startswith("darjeeling:teacher-v1:")
 
 
-def test_live_residual_teacher_call_uses_residual_budget_without_cache_append(
+def test_live_residual_teacher_call_uses_residual_budget_and_metadata(
     tmp_path: Path,
 ) -> None:
     settings = load_settings().model_copy(
@@ -191,10 +191,11 @@ def test_live_residual_teacher_call_uses_residual_budget_without_cache_append(
     assert result.frame is None
     assert result.patch is not None
     assert result.patch.accepted_intent == "intent_beta"
+    assert result.patch.complete is True
     assert result.metadata["l4_call_kind"] == "residual"
     assert result.metadata["fields_avoided"] == 1
+    assert result.metadata["usage"]["total_tokens"] == 18
     assert fake_client.completions.calls[0]["max_completion_tokens"] == 32
-    assert not cache_path.exists()
 
 
 def test_live_teacher_retries_transient_completion_failure(tmp_path: Path) -> None:

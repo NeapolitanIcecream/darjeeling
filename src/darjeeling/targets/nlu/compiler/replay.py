@@ -253,6 +253,7 @@ def evaluate_offline_artifact_set(
     weak_wrong_fields = 0
     full_l4_calls = 0
     residual_l4_calls = 0
+    modeled_residual_l4_cost_usd = 0.0
     correct_weak_fields_avoiding_full_l4 = 0
     residual_l4_verified_fields = 0
     l4_conflicts = 0
@@ -310,6 +311,8 @@ def evaluate_offline_artifact_set(
                 trace=trace,
                 cost_model=cost_model,
             )
+            if route.residual_l4_call:
+                modeled_residual_l4_cost_usd += request_cost
             layer_costs[chosen_layer] += request_cost
             total_cost += request_cost
     finally:
@@ -405,6 +408,14 @@ def evaluate_offline_artifact_set(
         "serving_l4_fields_avoided_per_100": (
             correct_weak_fields_avoiding_full_l4 / requests * 100.0
         ),
+        "modeled_residual_l4_calls": float(residual_l4_calls),
+        "modeled_residual_l4_calls_per_100": residual_l4_calls / requests * 100.0,
+        "modeled_residual_l4_cost_usd": modeled_residual_l4_cost_usd,
+        "modeled_residual_l4_cost_usd_per_100_requests": (
+            modeled_residual_l4_cost_usd / requests * 100.0
+        ),
+        "modeled_residual_l4_latency_ms_assumption": RESIDUAL_L4_LATENCY_MS,
+        "modeled_residual_l4_min_cost_fraction": RESIDUAL_L4_MIN_COST_FRACTION,
     }
     objective = ObjectiveMetrics(
         frame_exact_match=frame_matches / requests,
@@ -667,6 +678,12 @@ def _empty_cost_metrics() -> dict[str, float]:
         "serving_residual_l4_calls_per_100": 0.0,
         "serving_l4_fields_avoided": 0.0,
         "serving_l4_fields_avoided_per_100": 0.0,
+        "modeled_residual_l4_calls": 0.0,
+        "modeled_residual_l4_calls_per_100": 0.0,
+        "modeled_residual_l4_cost_usd": 0.0,
+        "modeled_residual_l4_cost_usd_per_100_requests": 0.0,
+        "modeled_residual_l4_latency_ms_assumption": RESIDUAL_L4_LATENCY_MS,
+        "modeled_residual_l4_min_cost_fraction": RESIDUAL_L4_MIN_COST_FRACTION,
     }
 
 

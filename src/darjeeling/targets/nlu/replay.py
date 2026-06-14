@@ -29,7 +29,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     TeacherCache,
 )
 from darjeeling.targets.nlu.patches import legacy_layer_result_from_core, route_nlu_layers
-from darjeeling.targets.nlu.schemas import Frame, TraceRecord
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TraceRecord
 from darjeeling.targets.nlu.settings import Settings
 from darjeeling.targets.nlu.streams import StreamItem, build_uniform_stream, build_zipf_stream
 from darjeeling.targets.nlu.target import NluLayerAdapter, NluTarget
@@ -95,6 +95,7 @@ def run_replay(
                 utterance=utterance,
                 chosen_layer=chosen_layer,
                 final_frame=final_frame,
+                layer_results=layer_results,
                 settings=settings,
                 teacher_mode=teacher_mode,
             )
@@ -110,6 +111,7 @@ def run_replay(
                     l4_usage=route_result.l4_usage,
                     metadata={
                         **audit_metadata,
+                        **_residual_l4_trace_metadata(layer_results),
                         "composer_field_sources": route_result.composer.field_sources,
                         "field_conflicts": route_result.composer.field_conflicts,
                         "field_overrides": route_result.composer.field_overrides,
@@ -351,11 +353,13 @@ def _lower_layer_audit(
     utterance: str,
     chosen_layer: str,
     final_frame: Frame,
+    layer_results: list[LayerResult],
     settings: Settings,
     teacher_mode: str,
 ) -> tuple[Frame | None, dict[str, Any]]:
     lower_layer_accepted = chosen_layer in {"L0", "L1", "L2", "L3"}
     teacher_frame = teacher_layer.cache.get(utterance)
+    residual_teacher_source = _trusted_residual_teacher_source(layer_results)
     metadata: dict[str, Any] = {
         "lower_layer_accepted": lower_layer_accepted,
         "lower_layer_accepted_layer": chosen_layer if lower_layer_accepted else None,
@@ -366,6 +370,13 @@ def _lower_layer_audit(
         "teacher_disagreed": False,
     }
     if not lower_layer_accepted:
+        if residual_teacher_source is not None:
+            metadata["residual_l4_teacher_source"] = residual_teacher_source
+            metadata["residual_l4_verified_teacher_frame"] = True
+            if teacher_frame is None:
+                teacher_frame = final_frame
+                metadata["teacher_source"] = residual_teacher_source
+                metadata["teacher_frame_source"] = residual_teacher_source
         return teacher_frame, metadata
     if teacher_frame is not None:
         metadata["teacher_audited"] = True
@@ -400,6 +411,75 @@ def _lower_layer_audit(
     if isinstance(usage, dict):
         metadata["teacher_audit_tokens"] = _usage_tokens(usage)
     return teacher_frame, metadata
+
+
+def _trusted_residual_teacher_source(layer_results: list[LayerResult]) -> str | None:
+    for result in reversed(layer_results):
+        if result.layer != "L4":
+            continue
+        if result.metadata.get("l4_call_kind") != "residual":
+            continue
+        if result.metadata.get("residual_verification_complete") is not True:
+            continue
+        if result.patch is None or not result.patch.complete:
+            continue
+        source = result.metadata.get("teacher_source")
+        if source == "live":
+            return "residual_live"
+        if source == "cache":
+            return "residual_cache"
+        return "residual_l4"
+    return None
+
+
+def _residual_l4_trace_metadata(layer_results: list[LayerResult]) -> dict[str, Any]:
+    residual_results = [
+        result
+        for result in layer_results
+        if result.layer == "L4" and result.metadata.get("l4_call_kind") == "residual"
+    ]
+    if not residual_results:
+        return {}
+    unverified = [
+        result
+        for result in residual_results
+        if result.metadata.get("residual_completion_without_full_verification") is True
+    ]
+    reasons = [
+        str(result.metadata.get("residual_full_audit_reason"))
+        for result in residual_results
+        if result.metadata.get("residual_full_audit_reason")
+    ]
+    return {
+        "residual_l4_calls": len(residual_results),
+        "residual_l4_unverified_completions": len(unverified),
+        "residual_l4_full_audit_reason": reasons[0] if reasons else None,
+        "residual_l4_verified_field_count": _sum_numeric_metadata(
+            residual_results,
+            "residual_verified_field_count",
+        ),
+        "residual_l4_removed_field_count": _sum_numeric_metadata(
+            residual_results,
+            "residual_removed_field_count",
+        ),
+        "residual_l4_conflict_count": _sum_numeric_metadata(
+            residual_results,
+            "residual_conflict_count",
+        ),
+        "residual_l4_override_count": _sum_numeric_metadata(
+            residual_results,
+            "residual_override_count",
+        ),
+    }
+
+
+def _sum_numeric_metadata(results: list[LayerResult], key: str) -> float:
+    total = 0.0
+    for result in results:
+        value = result.metadata.get(key)
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            total += float(value)
+    return total
 
 
 def _should_audit_lower_accept(

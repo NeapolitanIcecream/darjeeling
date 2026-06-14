@@ -909,6 +909,52 @@ def test_generate_experiment_comparison_report_summarizes_runs(tmp_path: Path) -
         final_frame=Frame(intent="intent_alpha"),
         gold_frame=Frame(intent="intent_alpha"),
     )
+    residual_frame = Frame(
+        intent="intent_alpha",
+        slots={"slot_alpha": "weak value", "slot_beta": "residual value"},
+    )
+    (run_a / "traces.jsonl").write_text(
+        TraceRecord(
+            request_id="main-evolution-r1",
+            utterance="main-evolution utterance",
+            gold_frame=residual_frame,
+            teacher_frame=residual_frame,
+            chosen_layer="L4",
+            final_frame=residual_frame,
+            layer_results=[
+                LayerResult(
+                    layer="L1",
+                    accepted=True,
+                    patch=FramePatch(
+                        accepted_intent="intent_alpha",
+                        accepted_slots={"slot_alpha": "weak value"},
+                        source_layer="L1",
+                    ),
+                    latency_ms=1.0,
+                ),
+                LayerResult(
+                    layer="L4",
+                    accepted=True,
+                    patch=FramePatch(
+                        accepted_slots={"slot_beta": "residual value"},
+                        source_layer="L4",
+                        complete=True,
+                        metadata={"verified_fields": ["intent", "slots.slot_alpha"]},
+                    ),
+                    latency_ms=250.0,
+                    cost_usd=0.005,
+                    metadata={
+                        "l4_call_kind": "residual",
+                        "usage": {"total_tokens": 4},
+                        "residual_verification_complete": True,
+                        "residual_verified_field_count": 2,
+                    },
+                ),
+            ],
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
     _write_comparison_trace(
         run_b,
         experiment="no-l2",
@@ -961,6 +1007,12 @@ def test_generate_experiment_comparison_report_summarizes_runs(tmp_path: Path) -
     assert rows[0]["experiment"] == "main-evolution"
     assert rows[0]["comparison_rank"] == "1"
     assert "comparison_score" in rows[0]
+    assert rows[0]["weak_field_coverage"] == "0.666667"
+    assert rows[0]["residual_l4_calls_per_100"] == "100.0"
+    assert rows[0]["residual_l4_tokens_per_100"] == "400.0"
+    assert rows[0]["serving_cost_per_100"] == "0.5"
+    assert rows[0]["correct_weak_fields_avoiding_full_l4_per_100"] == "200.0"
+    assert rows[0]["residual_l4_verified_fields_per_100"] == "200.0"
     assert "l1_benchmark_native_p95_us" in csv_text
     assert "9.0" in csv_text
     assert "Experiment Comparison" in html_text

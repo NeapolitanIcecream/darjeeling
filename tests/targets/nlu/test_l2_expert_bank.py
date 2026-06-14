@@ -38,10 +38,18 @@ def test_l2_expert_bank_trains_intent_and_slot_experts_that_emit_patch() -> None
     assert manifest["selection_metrics"]["schema_version"] == "l2-expert-selection-v2"
     assert manifest["selection_metrics"]["training_traces"] == 6
     assert manifest["selection_metrics"]["validation_traces"] == 2
+    assert manifest["selection_metrics"]["split_policy"] == "intent_stratified"
+    assert manifest["selection_metrics"]["validation_intents"] == {
+        "intent_alarm": 1,
+        "intent_weather": 1,
+    }
     assert [expert["intent"] for expert in manifest["intent_experts"]] == [
         "intent_alarm"
     ]
     assert [expert["slot_key"] for expert in manifest["slot_experts"]] == ["slot_time"]
+    assert manifest["intent_experts"][0]["validation_metrics"]["positive_examples"] == 1
+    assert manifest["intent_experts"][0]["validation_metrics"]["negative_examples"] == 1
+    assert manifest["slot_experts"][0]["validation_metrics"]["wrong_accepts"] == 0
 
     result = L2ExpertBankLayer(bank).try_answer("please alarm at seven am")
 
@@ -83,6 +91,25 @@ def test_l2_expert_bank_skips_slots_incompatible_with_selected_intent() -> None:
     assert patch.accepted_intent == "intent_alpha"
     assert patch.accepted_slots == {}
     assert any(item.get("policy") == "slot_intent_signature_abstain" for item in fired)
+
+
+def test_l2_expert_bank_uses_stable_split_for_tiny_datasets() -> None:
+    traces = traces_to_teacher_view(_expert_traces()[:4])
+
+    bank = train_l2_expert_bank(
+        traces,
+        L2ExpertTrainingConfig(
+            min_examples=2,
+            max_intents=1,
+            max_slots=1,
+            min_accuracy=0.0,
+        ),
+    )
+
+    assert bank is not None
+    assert bank.manifest_payload()["selection_metrics"]["split_policy"] == (
+        "stable_request_id_stride"
+    )
 
 
 def test_compiler_generation_writes_l2_expert_bank_artifact(tmp_path: Path) -> None:

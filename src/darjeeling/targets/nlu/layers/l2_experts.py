@@ -263,7 +263,7 @@ def train_l2_expert_bank(
     labeled = [trace for trace in traces if trace.teacher_frame is not None]
     if len(labeled) < config.min_examples:
         return None
-    train_traces, validation_traces = _split_train_validation(labeled, config)
+    train_traces, validation_traces, split_policy = _split_train_validation(labeled, config)
     if len(train_traces) < config.min_examples or not validation_traces:
         return None
     intent_experts: list[IntentBinaryExpert] = []
@@ -299,7 +299,9 @@ def train_l2_expert_bank(
             "schema_version": "l2-expert-selection-v2",
             "training_traces": len(train_traces),
             "validation_traces": len(validation_traces),
-            "split_policy": "stable_request_id_stride",
+            "split_policy": split_policy,
+            "training_intents": _intent_counts(train_traces),
+            "validation_intents": _intent_counts(validation_traces),
             "selected_intents": selected_intents,
             "selected_slots": selected_slots,
             "adopted_intent_experts": [expert.intent for expert in intent_experts],
@@ -323,10 +325,22 @@ def write_l2_expert_manifest(path: Path, bank: L2ExpertBank) -> Path:
 def _split_train_validation(
     traces: list[TeacherTrace],
     config: L2ExpertTrainingConfig,
-) -> tuple[list[TeacherTrace], list[TeacherTrace]]:
+) -> tuple[list[TeacherTrace], list[TeacherTrace], str]:
     ordered = sorted(traces, key=lambda trace: trace.request_id)
     if len(ordered) < 2 or config.validation_fraction <= 0.0:
-        return ordered, []
+        return ordered, [], "none"
+    stratified = _intent_stratified_split(ordered, config)
+    if stratified is not None:
+        train, validation = stratified
+        return train, validation, "intent_stratified"
+    train, validation = _stable_request_id_stride_split(ordered, config)
+    return train, validation, "stable_request_id_stride"
+
+
+def _stable_request_id_stride_split(
+    ordered: list[TeacherTrace],
+    config: L2ExpertTrainingConfig,
+) -> tuple[list[TeacherTrace], list[TeacherTrace]]:
     stride = max(2, round(1.0 / config.validation_fraction))
     validation = [
         trace for index, trace in enumerate(ordered, start=1) if index % stride == 0
@@ -336,6 +350,59 @@ def _split_train_validation(
     validation_ids = {trace.request_id for trace in validation}
     train = [trace for trace in ordered if trace.request_id not in validation_ids]
     return train, validation
+
+
+def _intent_stratified_split(
+    ordered: list[TeacherTrace],
+    config: L2ExpertTrainingConfig,
+) -> tuple[list[TeacherTrace], list[TeacherTrace]] | None:
+    groups: dict[str, list[TeacherTrace]] = {}
+    for trace in ordered:
+        if trace.teacher_frame is None:
+            continue
+        groups.setdefault(trace.teacher_frame.intent, []).append(trace)
+    if len(groups) < 2:
+        return None
+    if any(len(group) < 2 for group in groups.values()):
+        return None
+
+    validation: list[TeacherTrace] = []
+    for intent in sorted(groups):
+        group = groups[intent]
+        validation_count = max(1, round(len(group) * config.validation_fraction))
+        validation_count = min(validation_count, len(group) - 1)
+        if validation_count <= 0:
+            return None
+        validation.extend(_stable_pick(group, validation_count))
+
+    validation_ids = {trace.request_id for trace in validation}
+    train = [trace for trace in ordered if trace.request_id not in validation_ids]
+    if len(train) < config.min_examples or not validation:
+        return None
+    return train, sorted(validation, key=lambda trace: trace.request_id)
+
+
+def _stable_pick(group: list[TeacherTrace], count: int) -> list[TeacherTrace]:
+    if count >= len(group):
+        return list(group)
+    stride = len(group) / count
+    selected: list[TeacherTrace] = []
+    used: set[str] = set()
+    for index in range(count):
+        candidate = group[min(len(group) - 1, int((index + 1) * stride) - 1)]
+        if candidate.request_id in used:
+            continue
+        selected.append(candidate)
+        used.add(candidate.request_id)
+    if len(selected) < count:
+        for candidate in reversed(group):
+            if candidate.request_id in used:
+                continue
+            selected.append(candidate)
+            used.add(candidate.request_id)
+            if len(selected) == count:
+                break
+    return sorted(selected, key=lambda trace: trace.request_id)
 
 
 def _select_intent_candidate(
@@ -464,6 +531,10 @@ def _train_intent_expert(
         1 if trace.teacher_frame and trace.teacher_frame.intent == intent else 0
         for trace in validation_traces
     ]
+    positive_validation = sum(validation_labels)
+    negative_validation = len(validation_labels) - positive_validation
+    if positive_validation == 0 or negative_validation == 0:
+        return None
     threshold, metrics = _select_threshold(
         probabilities=probabilities,
         labels=validation_labels,
@@ -476,7 +547,11 @@ def _train_intent_expert(
         vectorizer=vectorizer,
         classifier=classifier,
         threshold=threshold,
-        validation_metrics=metrics,
+        validation_metrics={
+            **metrics,
+            "positive_examples": positive_validation,
+            "negative_examples": negative_validation,
+        },
     )
 
 
@@ -585,6 +660,12 @@ def _slot_expert_metrics(
         else:
             wrong += 1
     labeled = sum(1 for trace in traces if trace.teacher_frame is not None)
+    positive_examples = sum(
+        1
+        for trace in traces
+        if trace.teacher_frame is not None and slot_key in trace.teacher_frame.slots
+    )
+    negative_examples = labeled - positive_examples
     return {
         "accepted": accepted,
         "correct_accepts": correct,
@@ -592,7 +673,19 @@ def _slot_expert_metrics(
         "accepted_accuracy": correct / accepted if accepted else 1.0,
         "coverage": accepted / labeled if labeled else 0.0,
         "value_count": len(values_by_normalized_value),
+        "positive_examples": positive_examples,
+        "negative_examples": negative_examples,
     }
+
+
+def _intent_counts(traces: list[TeacherTrace]) -> dict[str, int]:
+    return dict(
+        sorted(
+            Counter(
+                trace.teacher_frame.intent for trace in traces if trace.teacher_frame
+            ).items()
+        )
+    )
 
 
 def _slot_value_from_utterance(
