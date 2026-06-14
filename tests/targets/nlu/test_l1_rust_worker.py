@@ -43,6 +43,20 @@ def test_rust_l1_worker_answers_neutral_alpha_request(l1_binary: Path) -> None:
     assert response.program_path
 
 
+def test_rust_l1_worker_accepts_patch_only_response(l1_binary: Path) -> None:
+    with RustL1Worker(l1_binary) as worker:
+        response = worker.answer("alpha intent", request_id="r-patch")
+
+    assert response.request_id == "r-patch"
+    assert response.accepted
+    assert response.frame is None
+    assert response.patch is not None
+    assert response.patch.accepted_intent == "intent_alpha"
+    assert response.patch.accepted_slots == {}
+    assert response.patch.source_layer == "L1"
+    assert response.patch.complete is False
+
+
 @pytest.mark.parametrize(
     "utterance",
     [
@@ -73,3 +87,16 @@ def test_rust_l1_layer_abstains_on_unknown_request(l1_binary: Path) -> None:
     assert not result.accepted
     assert result.frame is None
     assert "native_latency_us" in result.metadata
+
+
+def test_rust_l1_layer_accepts_patch_only_response(l1_binary: Path) -> None:
+    with RustL1Worker(l1_binary) as worker:
+        layer = RustProgramBankLayer(worker)
+        result = layer.try_answer("alpha intent")
+
+    assert result.layer == "L1"
+    assert result.accepted
+    assert result.frame is None
+    assert result.patch is not None
+    assert result.patch.accepted_intent == "intent_alpha"
+    assert result.metadata["frame_patch"]["accepted_intent"] == "intent_alpha"

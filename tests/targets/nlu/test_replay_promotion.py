@@ -10,7 +10,7 @@ from darjeeling.targets.nlu.compiler.replay import (
     decide_promotion,
     evaluate_offline_artifact_set,
 )
-from darjeeling.targets.nlu.schemas import Frame, LayerResult, TeacherTrace
+from darjeeling.targets.nlu.schemas import Frame, FramePatch, LayerResult, TeacherTrace
 from darjeeling.targets.nlu.settings import DEFAULT_NLU_L1_CRATE_DIR
 
 
@@ -301,3 +301,41 @@ def test_offline_replay_uses_trace_l4_usage_for_cost() -> None:
     assert result.layer_counts["L4"] == 1
     assert result.objective.cost_usd_per_100_requests == 600.0
     assert result.layer_metrics["L4"]["cost_usd_per_100_requests"] == 600.0
+
+
+def test_offline_replay_counts_partial_patch_as_residual_l4_value(monkeypatch) -> None:
+    class FakeL2Layer:
+        def try_answer(self, utterance: str) -> LayerResult:
+            assert utterance == "alpha request"
+            return LayerResult(
+                layer="L2",
+                accepted=True,
+                patch=FramePatch(accepted_intent="intent_alpha", source_layer="L2"),
+                latency_ms=5.0,
+            )
+
+    monkeypatch.setattr(replay_module, "_build_l2_layer", lambda _artifact_set: FakeL2Layer())
+
+    result = evaluate_offline_artifact_set(
+        [
+            TeacherTrace(
+                request_id="r1",
+                utterance="alpha request",
+                teacher_frame=Frame(intent="intent_alpha", slots={"slot_beta": "value"}),
+                chosen_layer="L4",
+                final_frame=Frame(intent="intent_alpha", slots={"slot_beta": "value"}),
+                layer_results=[],
+                timestamp="2026-06-08T00:00:00Z",
+            )
+        ],
+        OfflineArtifactSet(l0_cache={}),
+        cost_model=ReplayCostModel(l4_default_cost_usd_per_request=0.01),
+    )
+
+    assert result.layer_counts["L4"] == 1
+    assert result.cost_metrics["serving_full_l4_calls"] == 0.0
+    assert result.cost_metrics["serving_residual_l4_calls"] == 1.0
+    assert result.field_metrics["correct_weak_fields_avoiding_full_l4"] == 1.0
+    assert result.objective.full_l4_calls_per_100_requests == 0.0
+    assert result.objective.residual_l4_calls_per_100_requests == 100.0
+    assert result.objective.cost_usd_per_100_requests == 0.5

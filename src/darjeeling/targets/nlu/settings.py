@@ -37,6 +37,10 @@ class Settings(BaseSettings):
         validation_alias="TEACHER_PROMPT_VERSION",
     )
     teacher_max_tokens: int = Field(default=256, validation_alias="TEACHER_MAX_TOKENS")
+    residual_l4_max_tokens: int = Field(
+        default=96,
+        validation_alias="RESIDUAL_L4_MAX_TOKENS",
+    )
     lower_layer_audit_mode: Literal["disabled", "sample", "always"] = Field(
         default="always",
         validation_alias="LOWER_LAYER_AUDIT_MODE",
@@ -236,6 +240,17 @@ class Settings(BaseSettings):
     l2_expert_max_intents: int = Field(default=4, validation_alias="L2_EXPERT_MAX_INTENTS")
     l2_expert_max_slots: int = Field(default=4, validation_alias="L2_EXPERT_MAX_SLOTS")
     l2_expert_min_accuracy: float = Field(default=0.95, validation_alias="L2_EXPERT_MIN_ACCURACY")
+    l2_expert_validation_fraction: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=0.5,
+        validation_alias="L2_EXPERT_VALIDATION_FRACTION",
+    )
+    l2_expert_intent_margin: float = Field(
+        default=0.05,
+        ge=0.0,
+        validation_alias="L2_EXPERT_INTENT_MARGIN",
+    )
     promotion_accuracy_epsilon: float = 0.02
     promotion_block_layer_regressions: bool = Field(
         default=True,

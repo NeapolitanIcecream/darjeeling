@@ -23,6 +23,8 @@ class L2ExpertTrainingConfig:
     max_intents: int = 4
     max_slots: int = 4
     min_accuracy: float = 0.95
+    validation_fraction: float = 0.25
+    intent_conflict_margin: float = 0.05
     random_state: int = 17
 
 
@@ -124,6 +126,8 @@ class SlotValueExpert:
 class L2ExpertBank:
     intent_experts: list[IntentBinaryExpert] = field(default_factory=list)
     slot_experts: list[SlotValueExpert] = field(default_factory=list)
+    intent_conflict_margin: float = 0.05
+    slot_signatures_by_intent: dict[str, set[str]] = field(default_factory=dict)
     selection_metrics: dict[str, Any] = field(default_factory=dict)
 
     def try_patch(self, utterance: str) -> tuple[FramePatch | None, list[dict[str, Any]]]:
@@ -131,20 +135,56 @@ class L2ExpertBank:
         accepted_intent: str | None = None
         accepted_slots: dict[str, str] = {}
         confidences: list[float] = []
+        intent_candidates: list[tuple[FramePatch, dict[str, Any]]] = []
+        intent_conflict_margin = getattr(self, "intent_conflict_margin", 0.05)
+        slot_signatures_by_intent = getattr(self, "slot_signatures_by_intent", {})
         for expert in self.intent_experts:
             patch, metadata = expert.try_patch(utterance)
             if patch is None:
                 continue
             fired.append(metadata)
-            accepted_intent = accepted_intent or patch.accepted_intent
-            if patch.confidence is not None:
-                confidences.append(patch.confidence)
+            intent_candidates.append((patch, metadata))
+        accepted_intent, intent_confidence, intent_policy = _select_intent_candidate(
+            intent_candidates,
+            margin=intent_conflict_margin,
+        )
+        if intent_policy:
+            fired.append(intent_policy)
+        if intent_confidence is not None:
+            confidences.append(intent_confidence)
+
         for expert in self.slot_experts:
             patch, metadata = expert.try_patch(utterance)
             if patch is None:
                 continue
             fired.append(metadata)
-            accepted_slots.update(patch.accepted_slots)
+            for slot_key, slot_value in patch.accepted_slots.items():
+                if (
+                    accepted_intent is not None
+                    and accepted_intent in slot_signatures_by_intent
+                    and slot_key not in slot_signatures_by_intent.get(accepted_intent, set())
+                ):
+                    fired.append(
+                        {
+                            "expert": expert.name,
+                            "policy": "slot_intent_signature_abstain",
+                            "intent": accepted_intent,
+                            "slot_key": slot_key,
+                        }
+                    )
+                    continue
+                if slot_key in accepted_slots and accepted_slots[slot_key] != slot_value:
+                    fired.append(
+                        {
+                            "expert": expert.name,
+                            "policy": "slot_conflict_abstain",
+                            "slot_key": slot_key,
+                            "existing_value": accepted_slots[slot_key],
+                            "candidate_value": slot_value,
+                        }
+                    )
+                    continue
+                accepted_slots[slot_key] = slot_value
             if patch.confidence is not None:
                 confidences.append(patch.confidence)
         if accepted_intent is None and not accepted_slots:
@@ -166,6 +206,11 @@ class L2ExpertBank:
             "schema_version": EXPERT_BANK_SCHEMA_VERSION,
             "intent_experts": [expert.manifest_entry() for expert in self.intent_experts],
             "slot_experts": [expert.manifest_entry() for expert in self.slot_experts],
+            "intent_conflict_margin": self.intent_conflict_margin,
+            "slot_signatures_by_intent": {
+                intent: sorted(slots)
+                for intent, slots in sorted(self.slot_signatures_by_intent.items())
+            },
             "selection_metrics": self.selection_metrics,
         }
 
@@ -218,16 +263,29 @@ def train_l2_expert_bank(
     labeled = [trace for trace in traces if trace.teacher_frame is not None]
     if len(labeled) < config.min_examples:
         return None
+    train_traces, validation_traces = _split_train_validation(labeled, config)
+    if len(train_traces) < config.min_examples or not validation_traces:
+        return None
     intent_experts: list[IntentBinaryExpert] = []
     slot_experts: list[SlotValueExpert] = []
-    selected_intents = _selected_intents(labeled, config)
-    selected_slots = _selected_slots(labeled, config)
+    selected_intents = _selected_intents(train_traces, config)
+    selected_slots = _selected_slots(train_traces, config)
     for intent in selected_intents:
-        expert = _train_intent_expert(labeled, intent=intent, config=config)
+        expert = _train_intent_expert(
+            train_traces,
+            validation_traces=validation_traces,
+            intent=intent,
+            config=config,
+        )
         if expert is not None:
             intent_experts.append(expert)
     for slot_key in selected_slots:
-        expert = _train_slot_expert(labeled, slot_key=slot_key, config=config)
+        expert = _train_slot_expert(
+            train_traces,
+            validation_traces=validation_traces,
+            slot_key=slot_key,
+            config=config,
+        )
         if expert is not None:
             slot_experts.append(expert)
     if not intent_experts and not slot_experts:
@@ -235,15 +293,20 @@ def train_l2_expert_bank(
     return L2ExpertBank(
         intent_experts=intent_experts,
         slot_experts=slot_experts,
+        intent_conflict_margin=config.intent_conflict_margin,
+        slot_signatures_by_intent=_slot_signatures_by_intent(train_traces),
         selection_metrics={
-            "schema_version": "l2-expert-selection-v1",
-            "training_traces": len(labeled),
+            "schema_version": "l2-expert-selection-v2",
+            "training_traces": len(train_traces),
+            "validation_traces": len(validation_traces),
+            "split_policy": "stable_request_id_stride",
             "selected_intents": selected_intents,
             "selected_slots": selected_slots,
             "adopted_intent_experts": [expert.intent for expert in intent_experts],
             "adopted_slot_experts": [expert.slot_key for expert in slot_experts],
             "min_accuracy": config.min_accuracy,
             "min_examples": config.min_examples,
+            "intent_conflict_margin": config.intent_conflict_margin,
         },
     )
 
@@ -255,6 +318,72 @@ def write_l2_expert_manifest(path: Path, bank: L2ExpertBank) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _split_train_validation(
+    traces: list[TeacherTrace],
+    config: L2ExpertTrainingConfig,
+) -> tuple[list[TeacherTrace], list[TeacherTrace]]:
+    ordered = sorted(traces, key=lambda trace: trace.request_id)
+    if len(ordered) < 2 or config.validation_fraction <= 0.0:
+        return ordered, []
+    stride = max(2, round(1.0 / config.validation_fraction))
+    validation = [
+        trace for index, trace in enumerate(ordered, start=1) if index % stride == 0
+    ]
+    if not validation:
+        validation = [ordered[-1]]
+    validation_ids = {trace.request_id for trace in validation}
+    train = [trace for trace in ordered if trace.request_id not in validation_ids]
+    return train, validation
+
+
+def _select_intent_candidate(
+    candidates: list[tuple[FramePatch, dict[str, Any]]],
+    *,
+    margin: float,
+) -> tuple[str | None, float | None, dict[str, Any] | None]:
+    if not candidates:
+        return None, None, None
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            item[0].confidence if item[0].confidence is not None else 0.0,
+            item[0].accepted_intent or "",
+        ),
+        reverse=True,
+    )
+    top_patch = ranked[0][0]
+    top_probability = top_patch.confidence if top_patch.confidence is not None else 0.0
+    if len(ranked) > 1:
+        runner_up = ranked[1][0]
+        runner_probability = runner_up.confidence if runner_up.confidence is not None else 0.0
+        if top_probability - runner_probability < margin:
+            return (
+                None,
+                None,
+                {
+                    "policy": "intent_conflict_abstain",
+                    "margin": margin,
+                    "candidates": [
+                        {
+                            "intent": patch.accepted_intent,
+                            "probability": patch.confidence,
+                        }
+                        for patch, _metadata in ranked
+                    ],
+                },
+            )
+    return (
+        top_patch.accepted_intent,
+        top_patch.confidence,
+        {
+            "policy": "intent_selected_by_margin",
+            "intent": top_patch.accepted_intent,
+            "probability": top_patch.confidence,
+            "margin": margin,
+        },
+    )
 
 
 def _selected_intents(
@@ -288,9 +417,21 @@ def _selected_slots(
     ]
 
 
+def _slot_signatures_by_intent(traces: list[TeacherTrace]) -> dict[str, set[str]]:
+    signatures: dict[str, set[str]] = {}
+    for trace in traces:
+        if trace.teacher_frame is None:
+            continue
+        signatures.setdefault(trace.teacher_frame.intent, set()).update(
+            trace.teacher_frame.slots
+        )
+    return signatures
+
+
 def _train_intent_expert(
     traces: list[TeacherTrace],
     *,
+    validation_traces: list[TeacherTrace],
     intent: str,
     config: L2ExpertTrainingConfig,
 ) -> IntentBinaryExpert | None:
@@ -314,10 +455,18 @@ def _train_intent_expert(
     ]
     classifier = LogisticRegression(random_state=config.random_state, max_iter=1000)
     classifier.fit(matrix, labels)
-    probabilities = classifier.predict_proba(matrix)[:, list(classifier.classes_).index(1)]
+    validation_matrix = vectorizer.transform([trace.utterance for trace in validation_traces])
+    probabilities = classifier.predict_proba(validation_matrix)[
+        :,
+        list(classifier.classes_).index(1),
+    ]
+    validation_labels = [
+        1 if trace.teacher_frame and trace.teacher_frame.intent == intent else 0
+        for trace in validation_traces
+    ]
     threshold, metrics = _select_threshold(
         probabilities=probabilities,
-        labels=labels,
+        labels=validation_labels,
         min_accuracy=config.min_accuracy,
     )
     if threshold is None:
@@ -334,6 +483,7 @@ def _train_intent_expert(
 def _train_slot_expert(
     traces: list[TeacherTrace],
     *,
+    validation_traces: list[TeacherTrace],
     slot_key: str,
     config: L2ExpertTrainingConfig,
 ) -> SlotValueExpert | None:
@@ -351,7 +501,11 @@ def _train_slot_expert(
     }
     if not values_by_normalized_value:
         return None
-    metrics = _slot_expert_metrics(traces, slot_key, values_by_normalized_value)
+    metrics = _slot_expert_metrics(
+        validation_traces,
+        slot_key,
+        values_by_normalized_value,
+    )
     if metrics["accepted"] == 0 or metrics["accepted_accuracy"] < config.min_accuracy:
         return None
     return SlotValueExpert(

@@ -11,6 +11,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     TaskSchema,
     TeacherCache,
     parse_teacher_frame,
+    parse_teacher_patch,
 )
 from darjeeling.targets.nlu.settings import load_settings
 
@@ -90,6 +91,18 @@ def test_parse_teacher_frame_requires_frame_json() -> None:
     assert frame.slots == {"slot_alpha": "value alpha"}
 
 
+def test_parse_teacher_patch_accepts_residual_patch_json() -> None:
+    patch = parse_teacher_patch(
+        '{"accepted_intent":"intent_alpha","accepted_slots":{"slot_alpha":"value alpha"}}',
+        task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=["slot_alpha"]),
+    )
+
+    assert patch.accepted_intent == "intent_alpha"
+    assert patch.accepted_slots == {"slot_alpha": "value alpha"}
+    assert patch.source_layer == "L4"
+    assert patch.complete is True
+
+
 def test_live_teacher_client_sets_sdk_timeout_and_disables_sdk_retries(monkeypatch) -> None:
     captured = {}
 
@@ -145,6 +158,43 @@ def test_live_teacher_call_appends_cache(tmp_path: Path) -> None:
     assert payload["usage"]["total_tokens"] == 18
     assert payload["context_hash"]
     assert payload["prompt_cache_key"].startswith("darjeeling:teacher-v1:")
+
+
+def test_live_residual_teacher_call_uses_residual_budget_without_cache_append(
+    tmp_path: Path,
+) -> None:
+    settings = load_settings().model_copy(
+        update={
+            "teacher_max_tokens": 256,
+            "residual_l4_max_tokens": 32,
+        }
+    )
+    fake_client = FakeClient()
+    cache_path = tmp_path / "teacher_cache.jsonl"
+    cache = TeacherCache.load(cache_path)
+    layer = CachedTeacherLayer(
+        cache,
+        allow_live=True,
+        use_cache=False,
+        settings=settings,
+        task_schema=TaskSchema(intent_names=["intent_alpha", "intent_beta"], slot_names=[]),
+        teacher=CloudLLMTeacher(settings, client=fake_client),
+    )
+
+    result = layer.try_residual_patch(
+        "beta sample request",
+        accepted_fields={"intent": "intent_alpha"},
+        missing_fields=[],
+    )
+
+    assert result.accepted
+    assert result.frame is None
+    assert result.patch is not None
+    assert result.patch.accepted_intent == "intent_beta"
+    assert result.metadata["l4_call_kind"] == "residual"
+    assert result.metadata["fields_avoided"] == 1
+    assert fake_client.completions.calls[0]["max_completion_tokens"] == 32
+    assert not cache_path.exists()
 
 
 def test_live_teacher_retries_transient_completion_failure(tmp_path: Path) -> None:
@@ -226,4 +276,3 @@ def test_cache_hit_does_not_call_live_teacher(tmp_path: Path) -> None:
     assert result.accepted
     assert result.metadata["teacher_source"] == "cache"
     assert fake_client.completions.calls == []
-

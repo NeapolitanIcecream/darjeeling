@@ -10,7 +10,10 @@ from difflib import unified_diff
 from pathlib import Path
 from typing import Any, Literal
 
-from darjeeling.targets.nlu.compiler.focus_tasks import build_focus_tasks, focus_task_document
+from darjeeling.targets.nlu.compiler.focus_tasks import (
+    build_focus_tasks,
+    focus_task_document_with_fields,
+)
 from darjeeling.targets.nlu.compiler.l4_context import assert_no_forbidden_context
 from darjeeling.targets.nlu.layers.l1_program_bank import ProgramRule
 from darjeeling.targets.nlu.schemas import TeacherTrace
@@ -241,8 +244,9 @@ def _write_context_files(
             teacher_train=teacher_train,
             hard_cases=hard_cases,
         ),
-        "focus_tasks.json": focus_task_document(
+        "focus_tasks.json": focus_task_document_with_fields(
             build_focus_tasks([*hard_cases, *teacher_train]),
+            [*hard_cases, *teacher_train],
         ),
         "current_metrics.json": current_metrics,
         "objective.json": objective,
@@ -895,6 +899,7 @@ def _constraints_text() -> str:
             "",
             "- L1 runtime is Rust native code.",
             "- L1 must abstain when uncertain.",
+            "- L1 may return a full frame or a precise intent-only/slot-only patch.",
             "- Do not use hidden evaluation labels or future labels.",
             "- Do not modify the outer evaluator, promotion logic, teacher cache,",
             "  or Python orchestration.",

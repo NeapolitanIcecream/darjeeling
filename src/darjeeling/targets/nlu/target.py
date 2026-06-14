@@ -226,6 +226,30 @@ class NluLayerAdapter:
         utterance = _request_utterance(input)
         return _core_layer_result_from_legacy(self.legacy_layer.try_answer(utterance))
 
+    def residual_field_keys(self) -> list[str]:
+        field_keys = getattr(self.legacy_layer, "residual_field_keys", None)
+        if field_keys is None:
+            return []
+        return list(field_keys())
+
+    def try_residual_patch(self, input: JsonObject) -> CoreLayerResult:
+        residual = getattr(self.legacy_layer, "try_residual_patch", None)
+        if residual is None:
+            raise AttributeError("legacy layer does not support residual patches")
+        utterance = _request_utterance(input)
+        accepted_fields = input.get("accepted_fields")
+        missing_fields = input.get("missing_fields")
+        if not isinstance(accepted_fields, dict):
+            accepted_fields = {}
+        if not isinstance(missing_fields, list):
+            missing_fields = []
+        result = residual(
+            utterance,
+            accepted_fields={str(key): str(value) for key, value in accepted_fields.items()},
+            missing_fields=[str(field) for field in missing_fields],
+        )
+        return _core_layer_result_from_legacy(result)
+
     def close(self) -> None:
         if self._close is not None:
             self._close()

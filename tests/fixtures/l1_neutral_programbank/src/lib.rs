@@ -2,7 +2,7 @@ pub mod frame;
 pub mod normalize;
 pub mod programs;
 
-use crate::frame::{L1Result, Request};
+use crate::frame::{FramePatch, L1Result, Request};
 use crate::normalize::normalize;
 use crate::programs::alpha::try_alpha_accept;
 use crate::programs::Candidate;
@@ -11,6 +11,24 @@ use std::time::Instant;
 pub fn try_answer(request: &Request) -> L1Result {
     let started_at = Instant::now();
     let q = normalize(&request.utterance);
+    if q == "alpha intent" {
+        return L1Result {
+            request_id: request.request_id.clone(),
+            accepted: true,
+            frame: None,
+            patch: Some(FramePatch {
+                accepted_intent: Some("intent_alpha".to_string()),
+                accepted_slots: Default::default(),
+                source_layer: "L1".to_string(),
+                confidence: Some(1.0),
+                complete: false,
+                metadata: Default::default(),
+            }),
+            program_path: "programs/alpha::try_alpha_intent_patch".to_string(),
+            native_latency_us: elapsed_us(started_at),
+            reason: "matched native intent patch".to_string(),
+        };
+    }
     let candidates = collect_candidates(&q);
     let latency_us = elapsed_us(started_at);
 
@@ -32,6 +50,7 @@ pub fn try_answer(request: &Request) -> L1Result {
             request_id: request.request_id.clone(),
             accepted: true,
             frame: Some(first.frame.clone()),
+            patch: None,
             program_path: paths,
             native_latency_us: latency_us,
             reason: "matched native program".to_string(),
@@ -81,6 +100,20 @@ mod tests {
             Some("red")
         );
         assert!(result.native_latency_us < 10_000);
+    }
+
+    #[test]
+    fn accepts_neutral_alpha_intent_patch() {
+        let result = try_answer(&Request {
+            request_id: "r4".to_string(),
+            utterance: "alpha intent".to_string(),
+        });
+
+        assert!(result.accepted);
+        assert!(result.frame.is_none());
+        let patch = result.patch.unwrap();
+        assert_eq!(patch.accepted_intent.as_deref(), Some("intent_alpha"));
+        assert!(!patch.complete);
     }
 
     #[test]

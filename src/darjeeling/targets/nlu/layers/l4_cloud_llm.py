@@ -10,9 +10,13 @@ from typing import Any
 
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.runtime.timing import elapsed_ms
-from darjeeling.targets.nlu.compiler.l4_context import build_teacher_context
+from darjeeling.targets.nlu.compiler.l4_context import (
+    build_residual_teacher_context,
+    build_teacher_context,
+)
 from darjeeling.targets.nlu.data import normalize_utterance
-from darjeeling.targets.nlu.schemas import Frame, LayerResult, TaskSchema
+from darjeeling.targets.nlu.patches import FIELD_INTENT, slot_field_key
+from darjeeling.targets.nlu.schemas import Frame, FramePatch, LayerResult, TaskSchema
 from darjeeling.targets.nlu.settings import Settings
 from darjeeling.targets.nlu.teacher import (
     NluTeacherParseError,
@@ -33,11 +37,13 @@ __all__ = [
     "TaskSchema",
     "TeacherCache",
     "TeacherCallResult",
+    "TeacherPatchCallResult",
     "TeacherParseError",
     "build_teacher_system_prompt",
     "create_chat_completion_with_retry",
     "has_valid_teacher_cache",
     "parse_teacher_frame",
+    "parse_teacher_patch",
     "require_live_or_cached_teacher",
     "teacher_cache_key",
     "_extract_chat_content",
@@ -56,6 +62,16 @@ class TeacherParseError(RuntimeError):
 @dataclass(frozen=True)
 class TeacherCallResult:
     frame: Frame
+    raw_response: str
+    usage: dict[str, Any]
+    model: str
+    context_hash: str
+    prompt_cache_key: str
+
+
+@dataclass(frozen=True)
+class TeacherPatchCallResult:
+    patch: FramePatch
     raw_response: str
     usage: dict[str, Any]
     model: str
@@ -128,6 +144,46 @@ class CloudLLMTeacher:
         raw_response = _extract_chat_content(response)
         return TeacherCallResult(
             frame=parse_teacher_frame(raw_response),
+            raw_response=raw_response,
+            usage=_extract_usage(response),
+            model=getattr(response, "model", self.settings.openai_model),
+            context_hash=context.context_hash,
+            prompt_cache_key=context.prompt_cache_key,
+        )
+
+    def residual_patch(
+        self,
+        *,
+        utterance: str,
+        task_schema: TaskSchema,
+        accepted_fields: dict[str, str],
+        missing_fields: list[str],
+    ) -> TeacherPatchCallResult:
+        context = build_residual_teacher_context(
+            utterance=utterance,
+            accepted_fields=accepted_fields,
+            missing_fields=missing_fields,
+            task_schema=task_schema,
+            settings=self.settings,
+        )
+        response = create_chat_completion_with_retry(
+            self.client(),
+            self.settings,
+            response_check=_extract_chat_content,
+            model=self.settings.openai_model,
+            messages=context.messages,
+            response_format={"type": "json_object"},
+            max_completion_tokens=min(
+                self.settings.teacher_max_tokens,
+                self.settings.residual_l4_max_tokens,
+            ),
+            prompt_cache_key=context.prompt_cache_key,
+            prompt_cache_retention=context.prompt_cache_retention,
+            timeout=self.settings.openai_timeout_s,
+        )
+        raw_response = _extract_chat_content(response)
+        return TeacherPatchCallResult(
+            patch=parse_teacher_patch(raw_response, task_schema=task_schema),
             raw_response=raw_response,
             usage=_extract_usage(response),
             model=getattr(response, "model", self.settings.openai_model),
@@ -241,7 +297,7 @@ class CachedTeacherLayer:
                     confidence=1.0,
                     reason="teacher cache hit",
                     latency_ms=ms(),
-                    metadata={"teacher_source": "cache"},
+                    metadata={"teacher_source": "cache", "l4_call_kind": "full"},
                 )
 
             if self.allow_live:
@@ -270,10 +326,102 @@ class CachedTeacherLayer:
                     ),
                     metadata={
                         "teacher_source": "live",
+                        "l4_call_kind": "full",
                         "model": call_result.model,
                         "usage": call_result.usage,
                         "context_hash": call_result.context_hash,
                         "prompt_cache_key": call_result.prompt_cache_key,
+                    },
+                )
+
+            raise MissingTeacherError(f"teacher cache miss for utterance: {utterance!r}")
+
+    def residual_field_keys(self) -> list[str]:
+        return [
+            FIELD_INTENT,
+            *(slot_field_key(slot_name) for slot_name in self.task_schema.slot_names),
+        ]
+
+    def try_residual_patch(
+        self,
+        utterance: str,
+        *,
+        accepted_fields: dict[str, str],
+        missing_fields: list[str],
+    ) -> LayerResult:
+        fields_avoided = len(accepted_fields)
+        with elapsed_ms() as ms:
+            if self.use_cache and (cached_frame := self.cache.get(utterance)) is not None:
+                patch = _residual_patch_from_frame(
+                    cached_frame,
+                    accepted_fields=accepted_fields,
+                    missing_fields=missing_fields,
+                    metadata={
+                        "adapter": "l4_residual_cache",
+                        "teacher_source": "cache",
+                        "l4_call_kind": "residual",
+                        "fields_avoided": fields_avoided,
+                    },
+                )
+                return LayerResult(
+                    layer="L4",
+                    accepted=True,
+                    patch=patch,
+                    confidence=1.0,
+                    reason="teacher cache residual fill",
+                    latency_ms=ms(),
+                    metadata={
+                        "teacher_source": "cache",
+                        "l4_call_kind": "residual",
+                        "fields_avoided": fields_avoided,
+                        "accepted_fields": accepted_fields,
+                        "missing_fields": missing_fields,
+                        "frame_patch": patch.model_dump(mode="json"),
+                    },
+                )
+
+            if self.allow_live:
+                call_result = self.teacher.residual_patch(
+                    utterance=utterance,
+                    task_schema=self.task_schema,
+                    accepted_fields=accepted_fields,
+                    missing_fields=missing_fields,
+                )
+                patch = call_result.patch.model_copy(
+                    update={
+                        "source_layer": "L4",
+                        "complete": True,
+                        "metadata": {
+                            **call_result.patch.metadata,
+                            "adapter": "l4_residual_live",
+                            "teacher_source": "live",
+                            "l4_call_kind": "residual",
+                            "fields_avoided": fields_avoided,
+                        },
+                    }
+                )
+                return LayerResult(
+                    layer="L4",
+                    accepted=True,
+                    patch=patch,
+                    confidence=1.0,
+                    reason="live residual teacher call",
+                    latency_ms=ms(),
+                    cost_usd=replay_cost_model_from_settings(self.settings).layer_cost_usd(
+                        "L4",
+                        call_result.usage,
+                    ),
+                    metadata={
+                        "teacher_source": "live",
+                        "l4_call_kind": "residual",
+                        "fields_avoided": fields_avoided,
+                        "accepted_fields": accepted_fields,
+                        "missing_fields": missing_fields,
+                        "model": call_result.model,
+                        "usage": call_result.usage,
+                        "context_hash": call_result.context_hash,
+                        "prompt_cache_key": call_result.prompt_cache_key,
+                        "frame_patch": patch.model_dump(mode="json"),
                     },
                 )
 
@@ -327,6 +475,31 @@ def parse_teacher_frame(raw_response: str) -> Frame:
         raise TeacherParseError(str(exc)) from exc
 
 
+def parse_teacher_patch(raw_response: str, *, task_schema: TaskSchema) -> FramePatch:
+    try:
+        payload = json.loads(raw_response)
+    except json.JSONDecodeError as exc:
+        raise TeacherParseError(f"teacher returned invalid JSON: {exc}") from exc
+    if "intent" in payload or "slots" in payload:
+        frame = Frame.model_validate(payload)
+        patch = FramePatch(
+            accepted_intent=frame.intent,
+            accepted_slots=dict(frame.slots),
+            source_layer="L4",
+            complete=True,
+        )
+    else:
+        patch = FramePatch.model_validate(
+            {
+                "source_layer": "L4",
+                "complete": True,
+                **payload,
+            }
+        )
+    _validate_patch_schema(patch, task_schema)
+    return patch.model_copy(update={"source_layer": "L4", "complete": True})
+
+
 def teacher_cache_key(
     *,
     normalized_utterance: str,
@@ -367,3 +540,64 @@ def _extract_usage(response: Any) -> dict[str, Any]:
         for key in ["prompt_tokens", "completion_tokens", "total_tokens"]
         if hasattr(usage, key)
     }
+
+
+def _validate_patch_schema(patch: FramePatch, task_schema: TaskSchema) -> None:
+    if patch.accepted_intent is not None and patch.accepted_intent not in task_schema.intent_names:
+        raise TeacherParseError(
+            f"residual teacher returned unsupported intent: {patch.accepted_intent}"
+        )
+    unsupported_slots = sorted(set(patch.accepted_slots) - set(task_schema.slot_names))
+    if unsupported_slots:
+        raise TeacherParseError(
+            f"residual teacher returned unsupported slot: {unsupported_slots[0]}"
+        )
+
+
+def _residual_patch_from_frame(
+    frame: Frame,
+    *,
+    accepted_fields: dict[str, str],
+    missing_fields: list[str],
+    metadata: dict[str, Any],
+) -> FramePatch:
+    accepted_intent: str | None = None
+    accepted_slots: dict[str, str] = {}
+    removed_fields: list[str] = []
+    verified_fields: list[str] = []
+
+    if FIELD_INTENT in missing_fields or accepted_fields.get(FIELD_INTENT) != frame.intent:
+        accepted_intent = frame.intent
+    else:
+        verified_fields.append(FIELD_INTENT)
+
+    for field_key, accepted_value in accepted_fields.items():
+        if not field_key.startswith("slots."):
+            continue
+        slot_key = field_key.removeprefix("slots.")
+        if slot_key not in frame.slots:
+            removed_fields.append(field_key)
+            continue
+        if frame.slots[slot_key] != accepted_value:
+            accepted_slots[slot_key] = frame.slots[slot_key]
+        else:
+            verified_fields.append(field_key)
+
+    for field_key in missing_fields:
+        if not field_key.startswith("slots."):
+            continue
+        slot_key = field_key.removeprefix("slots.")
+        if slot_key in frame.slots:
+            accepted_slots[slot_key] = frame.slots[slot_key]
+
+    return FramePatch(
+        accepted_intent=accepted_intent,
+        accepted_slots=accepted_slots,
+        source_layer="L4",
+        complete=True,
+        metadata={
+            **metadata,
+            "removed_fields": removed_fields,
+            "verified_fields": sorted(set(verified_fields)),
+        },
+    )

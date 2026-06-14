@@ -75,6 +75,7 @@ def test_proposal_context_uses_teacher_visible_traces_only() -> None:
     payload = json.loads(rendered.dynamic_tail)
     assert payload["focus_tasks"]["schema_version"] == "nlu-focus-tasks-v1"
     assert payload["focus_tasks"]["tasks"][0]["positive_examples"][0]["request_id"] == "r1"
+    assert payload["focus_tasks"]["field_opportunities"][0]["fallback_count"] == 1
     assert "supporting_teacher_traces" in payload
     assert "teacher_traces" not in payload
     assert rendered.context_layout_version == "proposal-layout-v2-focus-tasks"

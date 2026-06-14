@@ -4,11 +4,18 @@ from pathlib import Path
 from darjeeling.artifacts.store import ArtifactStore
 from darjeeling.targets.nlu.compiler.loop import run_compiler_generation
 from darjeeling.targets.nlu.layers.l2_experts import (
+    L2ExpertBank,
     L2ExpertBankLayer,
     L2ExpertTrainingConfig,
     train_l2_expert_bank,
 )
-from darjeeling.targets.nlu.schemas import Frame, LayerResult, TraceRecord, traces_to_teacher_view
+from darjeeling.targets.nlu.schemas import (
+    Frame,
+    FramePatch,
+    LayerResult,
+    TraceRecord,
+    traces_to_teacher_view,
+)
 from darjeeling.targets.nlu.settings import load_settings
 
 
@@ -28,6 +35,9 @@ def test_l2_expert_bank_trains_intent_and_slot_experts_that_emit_patch() -> None
     assert bank is not None
     manifest = bank.manifest_payload()
     assert manifest["schema_version"] == "l2-expert-bank-v1"
+    assert manifest["selection_metrics"]["schema_version"] == "l2-expert-selection-v2"
+    assert manifest["selection_metrics"]["training_traces"] == 6
+    assert manifest["selection_metrics"]["validation_traces"] == 2
     assert [expert["intent"] for expert in manifest["intent_experts"]] == [
         "intent_alarm"
     ]
@@ -42,6 +52,37 @@ def test_l2_expert_bank_trains_intent_and_slot_experts_that_emit_patch() -> None
     assert result.patch.accepted_slots == {"slot_time": "seven am"}
     assert result.patch.complete is False
     assert result.metadata["frame_patch"]["accepted_intent"] == "intent_alarm"
+
+
+def test_l2_expert_bank_abstains_on_close_intent_conflict() -> None:
+    bank = L2ExpertBank(
+        intent_experts=[
+            _StaticIntentExpert("intent_alpha", 0.91),
+            _StaticIntentExpert("intent_beta", 0.88),
+        ],
+        intent_conflict_margin=0.05,
+    )
+
+    patch, fired = bank.try_patch("ambiguous request")
+
+    assert patch is None
+    assert fired[-1]["policy"] == "intent_conflict_abstain"
+
+
+def test_l2_expert_bank_skips_slots_incompatible_with_selected_intent() -> None:
+    bank = L2ExpertBank(
+        intent_experts=[_StaticIntentExpert("intent_alpha", 0.95)],
+        slot_experts=[_StaticSlotExpert("slot_beta", "value beta")],
+        intent_conflict_margin=0.05,
+        slot_signatures_by_intent={"intent_alpha": {"slot_alpha"}},
+    )
+
+    patch, fired = bank.try_patch("alpha with beta-looking value")
+
+    assert patch is not None
+    assert patch.accepted_intent == "intent_alpha"
+    assert patch.accepted_slots == {}
+    assert any(item.get("policy") == "slot_intent_signature_abstain" for item in fired)
 
 
 def test_compiler_generation_writes_l2_expert_bank_artifact(tmp_path: Path) -> None:
@@ -72,6 +113,46 @@ def test_compiler_generation_writes_l2_expert_bank_artifact(tmp_path: Path) -> N
         "slot_time"
     ]
     assert ArtifactStore(tmp_path / "artifacts").load_current_manifest() is not None
+
+
+class _StaticIntentExpert:
+    def __init__(self, intent: str, confidence: float) -> None:
+        self.intent = intent
+        self.confidence = confidence
+        self.name = f"intent:{intent}"
+
+    def try_patch(self, _utterance: str):
+        metadata = {
+            "expert": self.name,
+            "probability": self.confidence,
+            "threshold": 0.0,
+        }
+        return (
+            FramePatch(
+                accepted_intent=self.intent,
+                source_layer="L2",
+                confidence=self.confidence,
+            ),
+            metadata,
+        )
+
+
+class _StaticSlotExpert:
+    def __init__(self, slot_key: str, value: str) -> None:
+        self.slot_key = slot_key
+        self.value = value
+        self.name = f"slot:{slot_key}"
+
+    def try_patch(self, _utterance: str):
+        metadata = {"expert": self.name, "threshold": 1.0}
+        return (
+            FramePatch(
+                accepted_slots={self.slot_key: self.value},
+                source_layer="L2",
+                confidence=1.0,
+            ),
+            metadata,
+        )
 
 
 def _expert_traces() -> list[TraceRecord]:

@@ -30,7 +30,42 @@ class _PatchLayer:
         return self.result
 
 
-def test_route_nlu_layers_composes_partial_patches_and_l4_residual() -> None:
+class _ResidualPatchLayer:
+    def __init__(self) -> None:
+        self.residual_inputs: list[dict[str, Any]] = []
+
+    def residual_field_keys(self) -> list[str]:
+        return ["intent", "slots.slot_alpha", "slots.slot_beta"]
+
+    def try_residual_patch(self, input: dict[str, Any]) -> CoreLayerResult:
+        self.residual_inputs.append(input)
+        return CoreLayerResult(
+            layer="L4",
+            accepted=True,
+            output=None,
+            latency_ms=4.0,
+            cost_usd=0.001,
+            metadata={
+                "l4_call_kind": "residual",
+                "fields_avoided": 2,
+                "usage": {"total_tokens": 3},
+                "frame_patch": FramePatch(
+                    accepted_slots={"slot_beta": "teacher residual"},
+                    source_layer="L4",
+                    complete=True,
+                    metadata={
+                        "l4_call_kind": "residual",
+                        "fields_avoided": 2,
+                    },
+                ).model_dump(mode="json"),
+            },
+        )
+
+    def try_answer(self, _input: dict[str, Any]) -> CoreLayerResult:
+        raise AssertionError("full L4 should not be called after residual fill")
+
+
+def test_route_nlu_layers_lets_full_l4_override_weak_field_conflicts() -> None:
     layers = {
         "L1": _PatchLayer(
             CoreLayerResult(
@@ -83,17 +118,85 @@ def test_route_nlu_layers_composes_partial_patches_and_l4_residual() -> None:
     assert result.chosen_layer == "L4"
     assert result.final_frame == Frame(
         intent="intent_alpha",
-        slots={"slot_alpha": "lower value", "slot_beta": "teacher residual"},
+        slots={"slot_alpha": "teacher value", "slot_beta": "teacher residual"},
     )
     assert result.layer_results[0].metadata["patch_accepted_fields"] == ["intent"]
     assert result.layer_results[1].metadata["patch_accepted_fields"] == ["slots.slot_alpha"]
     assert result.layer_results[2].patch is not None
-    assert result.layer_results[2].patch.accepted_slots == {"slot_beta": "teacher residual"}
+    assert result.layer_results[2].patch.accepted_slots == {
+        "slot_alpha": "teacher value",
+        "slot_beta": "teacher residual",
+    }
+    assert result.layer_results[2].metadata["field_conflicts"] == [
+        {
+            "field": "slots.slot_alpha",
+            "old_value": "lower value",
+            "new_value": "teacher value",
+            "old_source": "L2",
+            "new_source": "L4",
+        }
+    ]
     assert result.composer.field_sources == {
         "intent": "L1",
-        "slots.slot_alpha": "L2",
+        "slots.slot_alpha": "L4",
         "slots.slot_beta": "L4",
     }
+    assert result.l4_usage["serving_full_calls"] == 1
+
+
+def test_route_nlu_layers_uses_residual_l4_for_partial_patch_completion() -> None:
+    l4 = _ResidualPatchLayer()
+    layers = {
+        "L1": _PatchLayer(
+            CoreLayerResult(
+                layer="L1",
+                accepted=True,
+                output=None,
+                latency_ms=1.0,
+                metadata={
+                    "frame_patch": FramePatch(
+                        accepted_intent="intent_alpha",
+                        source_layer="L1",
+                    ).model_dump(mode="json")
+                },
+            )
+        ),
+        "L2": _PatchLayer(
+            CoreLayerResult(
+                layer="L2",
+                accepted=True,
+                output=None,
+                latency_ms=2.0,
+                metadata={
+                    "frame_patch": FramePatch(
+                        accepted_slots={"slot_alpha": "lower value"},
+                        source_layer="L2",
+                    ).model_dump(mode="json")
+                },
+            )
+        ),
+        "L4": l4,
+    }
+
+    result = route_nlu_layers(layers, utterance="alpha request")
+
+    assert result.final_frame == Frame(
+        intent="intent_alpha",
+        slots={"slot_alpha": "lower value", "slot_beta": "teacher residual"},
+    )
+    assert l4.residual_inputs == [
+        {
+            "utterance": "alpha request",
+            "accepted_fields": {
+                "intent": "intent_alpha",
+                "slots.slot_alpha": "lower value",
+            },
+            "missing_fields": ["slots.slot_beta"],
+        }
+    ]
+    assert result.l4_usage["serving_residual_calls"] == 1
+    assert result.l4_usage["serving_residual_tokens"] == 3
+    assert result.l4_usage["serving_fields_avoided"] == 2.0
 
 
 def test_run_replay_audits_lower_layer_accept_and_records_disagreement(
@@ -171,6 +274,7 @@ def test_run_replay_audits_lower_layer_accept_and_records_disagreement(
     assert trace["metadata"]["teacher_audited"] is True
     assert trace["metadata"]["teacher_audit_source"] == "live"
     assert trace["metadata"]["teacher_disagreed"] is True
+    assert trace["metadata"]["teacher_audit_tokens"] == 7
     assert "intent_alpha" in (run_dir / "teacher_cache.jsonl").read_text(encoding="utf-8")
 
 

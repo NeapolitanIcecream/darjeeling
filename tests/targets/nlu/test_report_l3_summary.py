@@ -10,7 +10,13 @@ from darjeeling.targets.nlu.reports import (
     generate_experiment_comparison_report,
     generate_run_report,
 )
-from darjeeling.targets.nlu.schemas import Frame, LayerResult, TeacherTrace, TraceRecord
+from darjeeling.targets.nlu.schemas import (
+    Frame,
+    FramePatch,
+    LayerResult,
+    TeacherTrace,
+    TraceRecord,
+)
 
 
 def _nlu_manifest(**kwargs) -> ArtifactManifest:
@@ -409,6 +415,98 @@ def test_generate_run_report_includes_required_layer_summary_metrics(tmp_path: P
     assert metric_lookup[("layer_summary", "L4", "cost_usd_per_100_requests")] == "0.666667"
 
 
+def test_generate_run_report_splits_serving_residual_audit_and_labeling_costs(
+    tmp_path: Path,
+) -> None:
+    traces = [
+        TraceRecord(
+            request_id="r1",
+            utterance="alpha request",
+            gold_frame=Frame(intent="intent_alpha"),
+            teacher_frame=Frame(intent="intent_alpha"),
+            chosen_layer="L4",
+            final_frame=Frame(intent="intent_alpha"),
+            layer_results=[
+                LayerResult(
+                    layer="L4",
+                    accepted=True,
+                    frame=Frame(intent="intent_alpha"),
+                    latency_ms=900.0,
+                    cost_usd=0.02,
+                    metadata={
+                        "l4_call_kind": "full",
+                        "usage": {"total_tokens": 10},
+                    },
+                )
+            ],
+            metadata={
+                "teacher_audited": True,
+                "teacher_audit_cost_usd": 0.01,
+                "teacher_audit_latency_ms": 800.0,
+                "teacher_audit_tokens": 7,
+                "teacher_labeling_cost_usd": 0.03,
+                "teacher_labeling_latency_ms": 700.0,
+                "teacher_labeling_tokens": 9,
+            },
+        ),
+        TraceRecord(
+            request_id="r2",
+            utterance="beta request",
+            gold_frame=Frame(intent="intent_beta"),
+            teacher_frame=Frame(intent="intent_beta"),
+            chosen_layer="L4",
+            final_frame=Frame(intent="intent_beta"),
+            layer_results=[
+                LayerResult(
+                    layer="L4",
+                    accepted=True,
+                    patch=FramePatch(
+                        accepted_intent="intent_beta",
+                        source_layer="L4",
+                        complete=True,
+                    ),
+                    latency_ms=250.0,
+                    cost_usd=0.005,
+                    metadata={
+                        "l4_call_kind": "residual",
+                        "fields_avoided": 1,
+                        "usage": {"total_tokens": 4},
+                    },
+                )
+            ],
+        ),
+    ]
+    (tmp_path / "traces.jsonl").write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in traces),
+        encoding="utf-8",
+    )
+    (tmp_path / "settings.json").write_text("{}\n", encoding="utf-8")
+
+    result = generate_run_report(tmp_path)
+
+    summary = result.summary_path.read_text(encoding="utf-8")
+    metrics = list(csv.DictReader(result.metrics_csv_path.open(encoding="utf-8")))
+    metric_lookup = {
+        (row["scope"], row["layer"], row["metric"]): row["value"] for row in metrics
+    }
+    assert "## L4 Cost Summary" in summary
+    assert metric_lookup[("cost_summary", "serving_full_l4", "calls_per_100")] == "50.0"
+    assert (
+        metric_lookup[
+            ("cost_summary", "serving_residual_l4", "cost_usd_per_100_requests")
+        ]
+        == "0.25"
+    )
+    assert metric_lookup[("cost_summary", "audit_l4", "tokens_per_100")] == "350.0"
+    assert (
+        metric_lookup[
+            ("cost_summary", "teacher_labeling_l4", "cost_usd_per_100_requests")
+        ]
+        == "1.5"
+    )
+    assert metric_lookup[("cost_summary", "", "serving_fields_avoided")] == "1.0"
+
+
 def test_generate_run_report_includes_l2_unguarded_diagnostics(tmp_path: Path) -> None:
     traces = [
         TraceRecord(
@@ -598,6 +696,10 @@ def test_generate_run_report_includes_evolution_and_artifact_summary_tables(
                         "L3": 0,
                         "L4": 1,
                     },
+                    "candidate_cost_metrics": {
+                        "serving_full_l4_calls_per_100": 25.0,
+                        "serving_residual_l4_calls_per_100": 0.0,
+                    },
                 },
                 "per_layer_deltas": {
                     "L1": {
@@ -618,11 +720,11 @@ def test_generate_run_report_includes_evolution_and_artifact_summary_tables(
     metrics = result.metrics_csv_path.read_text(encoding="utf-8")
     assert "## Evolution Summary" in summary
     assert (
-        "| generation | L4_calls/100 | cost/100 | p95_ms | frame_em | "
+        "| generation | full_L4/100 | residual_L4/100 | L4_calls/100 | cost/100 | p95_ms | frame_em | "
         "L0_share | L1_share | L2_share | L3_share | L4_share |"
     ) in summary
     assert (
-        "| 1 | 25.000 | 2.500000 | 500.000 | 0.900 | 0.250 | 0.250 | 0.250 | 0.000 | 0.250 |"
+        "| 1 | 25.000 | 0.000 | 25.000 | 2.500000 | 500.000 | 0.900 | 0.250 | 0.250 | 0.250 | 0.000 | 0.250 |"
     ) in summary
     assert "## Artifact Summary" in summary
     assert (
@@ -638,6 +740,7 @@ def test_generate_run_report_includes_evolution_and_artifact_summary_tables(
         "-1.500000 | True | objective improved within gates |"
     ) in summary
     assert "evolution_summary,1,,l4_calls_per_100,25.0" in metrics
+    assert "evolution_summary,1,,serving_full_l4_calls_per_100,25.0" in metrics
 
 
 def test_generate_run_report_includes_l1_program_paths_and_diff_snippet(

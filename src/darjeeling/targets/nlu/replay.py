@@ -111,6 +111,9 @@ def run_replay(
                     metadata={
                         **audit_metadata,
                         "composer_field_sources": route_result.composer.field_sources,
+                        "field_conflicts": route_result.composer.field_conflicts,
+                        "field_overrides": route_result.composer.field_overrides,
+                        "verified_fields": route_result.composer.verified_fields,
                     },
                 )
             )
@@ -393,6 +396,9 @@ def _lower_layer_audit(
     metadata["teacher_disagreed"] = teacher_frame != final_frame
     metadata["teacher_audit_latency_ms"] = audit_result.latency_ms
     metadata["teacher_audit_cost_usd"] = audit_result.cost_usd
+    usage = audit_result.metadata.get("usage")
+    if isinstance(usage, dict):
+        metadata["teacher_audit_tokens"] = _usage_tokens(usage)
     return teacher_frame, metadata
 
 
@@ -413,6 +419,19 @@ def _should_audit_lower_accept(
     digest = sha256(f"{request_id}\0{utterance}".encode()).digest()
     value = int.from_bytes(digest[:8], "big") / float(2**64 - 1)
     return value <= settings.lower_layer_audit_sample_rate
+
+
+def _usage_tokens(usage: dict[str, Any]) -> int:
+    total = usage.get("total_tokens")
+    if isinstance(total, int | float) and not isinstance(total, bool):
+        return int(total)
+    prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+    completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
+    tokens = 0
+    for value in (prompt, completion):
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            tokens += int(value)
+    return tokens
 
 
 def _core_teacher_trace(trace: TraceRecord) -> CoreTeacherTrace:

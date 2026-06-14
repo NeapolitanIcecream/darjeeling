@@ -5,6 +5,7 @@ from typing import Any
 
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.targets.nlu.compiler.replay import LAYER_LATENCY_MS
+from darjeeling.targets.nlu.patches import accepted_field_keys, frame_patch_from_layer_result
 from darjeeling.targets.nlu.schemas import TeacherTrace
 from darjeeling.targets.nlu.settings import Settings
 
@@ -90,7 +91,9 @@ def evaluate_l3_residual_value(
 
 def _is_l2_residual(trace: TeacherTrace) -> bool:
     return not any(
-        result.layer in WEAK_BEFORE_L3 and result.accepted and result.frame is not None
+        result.layer in WEAK_BEFORE_L3
+        and result.accepted
+        and accepted_field_keys(frame_patch_from_layer_result(result))
         for result in trace.layer_results
     )
 

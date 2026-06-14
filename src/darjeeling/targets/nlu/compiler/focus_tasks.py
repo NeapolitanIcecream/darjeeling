@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from darjeeling.targets.nlu.patches import (
+    accepted_field_keys,
+    frame_field_values,
+    frame_patch_from_layer_result,
+)
 from darjeeling.targets.nlu.schemas import Frame, TeacherTrace
 
 FOCUS_TASK_SCHEMA_VERSION = "nlu-focus-tasks-v1"
@@ -53,8 +58,63 @@ def focus_task_document(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         "schema_version": FOCUS_TASK_SCHEMA_VERSION,
         "task_count": len(tasks),
         "source_trace_ids": source_trace_ids,
+        "field_opportunities": [],
         "tasks": tasks,
     }
+
+
+def focus_task_document_with_fields(
+    tasks: list[dict[str, Any]],
+    traces: list[TeacherTrace],
+) -> dict[str, Any]:
+    document = focus_task_document(tasks)
+    document["field_opportunities"] = build_field_opportunities(traces)
+    return document
+
+
+def build_field_opportunities(
+    traces: list[TeacherTrace],
+    *,
+    max_fields: int = 12,
+    examples_per_field: int = 4,
+) -> list[dict[str, Any]]:
+    labeled = [trace for trace in traces if trace.teacher_frame is not None]
+    stats: dict[str, dict[str, Any]] = {}
+    for trace in labeled:
+        assert trace.teacher_frame is not None
+        expected_fields = frame_field_values(trace.teacher_frame)
+        weak_fields = _weak_accepted_field_values(trace)
+        l4_fields = _l4_accepted_fields(trace)
+        l4_after_weak = bool(weak_fields) and bool(l4_fields)
+        for field_key, expected_value in expected_fields.items():
+            entry = stats.setdefault(field_key, _empty_field_opportunity(field_key))
+            if trace.chosen_layer == "L4":
+                entry["fallback_count"] += 1
+                _append_field_example(entry, trace, examples_per_field)
+            if field_key in weak_fields and weak_fields[field_key] != expected_value:
+                entry["wrong_accepted_count"] += 1
+                _append_field_example(entry, trace, examples_per_field)
+            if l4_after_weak and field_key in l4_fields:
+                entry["completed_by_l4_after_weak_count"] += 1
+                _append_field_example(entry, trace, examples_per_field)
+        for conflict in _l4_field_conflicts(trace):
+            field_key = str(conflict.get("field", ""))
+            if not field_key:
+                continue
+            entry = stats.setdefault(field_key, _empty_field_opportunity(field_key))
+            entry["conflict_count"] += 1
+            _append_field_example(entry, trace, examples_per_field)
+    ranked = sorted(
+        stats.values(),
+        key=lambda entry: (
+            entry["conflict_count"],
+            entry["wrong_accepted_count"],
+            entry["completed_by_l4_after_weak_count"],
+            entry["fallback_count"],
+        ),
+        reverse=True,
+    )
+    return [entry for entry in ranked[:max_fields] if _field_opportunity_score(entry) > 0]
 
 
 def _focus_task_payload(
@@ -172,4 +232,83 @@ def _weak_wrong_accept(trace: TeacherTrace) -> bool:
         trace.teacher_frame is not None
         and trace.chosen_layer in WEAK_LAYERS
         and trace.final_frame != trace.teacher_frame
+    )
+
+
+def _weak_accepted_field_values(trace: TeacherTrace) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for result in trace.layer_results:
+        if result.layer not in WEAK_LAYERS or not result.accepted:
+            continue
+        patch = frame_patch_from_layer_result(result)
+        if patch is None:
+            continue
+        if patch.accepted_intent is not None:
+            values["intent"] = patch.accepted_intent
+        values.update(
+            {
+                f"slots.{slot_key}": slot_value
+                for slot_key, slot_value in patch.accepted_slots.items()
+            }
+        )
+    return values
+
+
+def _l4_accepted_fields(trace: TeacherTrace) -> set[str]:
+    fields: set[str] = set()
+    for result in trace.layer_results:
+        if result.layer != "L4" or not result.accepted:
+            continue
+        fields.update(accepted_field_keys(frame_patch_from_layer_result(result)))
+    return fields
+
+
+def _l4_field_conflicts(trace: TeacherTrace) -> list[dict[str, Any]]:
+    conflicts: list[dict[str, Any]] = []
+    for result in trace.layer_results:
+        if result.layer != "L4":
+            continue
+        raw_conflicts = result.metadata.get("field_conflicts", [])
+        if isinstance(raw_conflicts, list):
+            conflicts.extend(
+                conflict for conflict in raw_conflicts if isinstance(conflict, dict)
+            )
+    raw_trace_conflicts = trace.metadata.get("field_conflicts", [])
+    if isinstance(raw_trace_conflicts, list):
+        conflicts.extend(
+            conflict for conflict in raw_trace_conflicts if isinstance(conflict, dict)
+        )
+    return conflicts
+
+
+def _empty_field_opportunity(field_key: str) -> dict[str, Any]:
+    return {
+        "field": field_key,
+        "fallback_count": 0,
+        "conflict_count": 0,
+        "wrong_accepted_count": 0,
+        "completed_by_l4_after_weak_count": 0,
+        "examples": [],
+    }
+
+
+def _append_field_example(
+    entry: dict[str, Any],
+    trace: TeacherTrace,
+    examples_per_field: int,
+) -> None:
+    examples = entry["examples"]
+    if any(example["request_id"] == trace.request_id for example in examples):
+        return
+    if len(examples) >= examples_per_field:
+        return
+    examples.append(_trace_example(trace))
+
+
+def _field_opportunity_score(entry: dict[str, Any]) -> int:
+    return int(
+        entry["conflict_count"] * 4
+        + entry["wrong_accepted_count"] * 3
+        + entry["completed_by_l4_after_weak_count"] * 2
+        + entry["fallback_count"]
     )

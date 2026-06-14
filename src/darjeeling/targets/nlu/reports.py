@@ -384,6 +384,7 @@ def _write_summary_md(
         "- `hard_cases.jsonl`\n\n"
         f"{_layer_summary_section(traces)}\n\n"
         f"{_field_summary_section(traces)}\n\n"
+        f"{_cost_summary_section(traces)}\n\n"
         f"{_l2_unguarded_section(traces)}\n\n"
         f"{_l2_tuning_section(current_manifest)}\n\n"
         f"{_evolution_summary_section(promotion_records)}\n\n"
@@ -472,6 +473,7 @@ def _metrics_rows(
         rows.append(_metric_row("run", "", layer, "chosen_share", round(share, 6)))
     rows.extend(_layer_summary_metric_rows(traces))
     rows.extend(_field_summary_metric_rows(traces))
+    rows.extend(_cost_summary_metric_rows(traces))
     rows.extend(_evolution_summary_metric_rows(promotion_records))
 
     gold_labeled = [trace for trace in traces if trace.gold_frame is not None]
@@ -644,6 +646,110 @@ def _field_summary_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]
                 )
             )
     return rows
+
+
+def _cost_summary_section(traces: list[TraceRecord]) -> str:
+    stats = _cost_summary_stats(traces)
+    lines = [
+        "## L4 Cost Summary",
+        "",
+        "| bucket | calls/100 | tokens/100 | cost/100 | p95_ms |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for bucket, label in [
+        ("serving_full_l4", "serving full L4"),
+        ("serving_residual_l4", "serving residual L4"),
+        ("audit_l4", "audit L4"),
+        ("teacher_labeling_l4", "teacher labeling L4"),
+    ]:
+        row = stats[bucket]
+        lines.append(
+            "| {label} | {calls} | {tokens} | {cost} | {p95} |".format(
+                label=label,
+                calls=_format_layer_summary_value("coverage", row["calls_per_100"]),
+                tokens=_format_layer_summary_value("coverage", row["tokens_per_100"]),
+                cost=_format_layer_summary_value(
+                    "cost_usd_per_100_requests",
+                    row["cost_usd_per_100_requests"],
+                ),
+                p95=_format_layer_summary_value("p95_ms", row["p95_ms"]),
+            )
+        )
+    lines.append("")
+    lines.append(
+        "- serving fields avoided by residual L4: "
+        f"{_format_layer_summary_value('coverage', stats['serving_fields_avoided'])}"
+    )
+    return "\n".join(lines)
+
+
+def _cost_summary_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]]:
+    stats = _cost_summary_stats(traces)
+    rows: list[dict[str, Any]] = []
+    for bucket, values in stats.items():
+        if bucket == "serving_fields_avoided":
+            rows.append(_metric_row("cost_summary", "", "", bucket, round(float(values), 6)))
+            continue
+        for key, value in values.items():
+            rows.append(
+                _metric_row(
+                    "cost_summary",
+                    "",
+                    bucket,
+                    key,
+                    round(float(value), 6),
+                )
+            )
+    return rows
+
+
+def _cost_summary_stats(traces: list[TraceRecord]) -> dict[str, Any]:
+    request_count = len(traces)
+    buckets = {
+        "serving_full_l4": _empty_cost_bucket(),
+        "serving_residual_l4": _empty_cost_bucket(),
+        "audit_l4": _empty_cost_bucket(),
+        "teacher_labeling_l4": _empty_cost_bucket(),
+    }
+    serving_fields_avoided = 0.0
+    for trace in traces:
+        for result in trace.layer_results:
+            if result.layer != "L4":
+                continue
+            call_kind = result.metadata.get("l4_call_kind", "full")
+            bucket = (
+                buckets["serving_residual_l4"]
+                if call_kind == "residual"
+                else buckets["serving_full_l4"]
+            )
+            _add_cost_observation(
+                bucket,
+                cost_usd=result.cost_usd,
+                latency_ms=result.latency_ms,
+                tokens=_usage_tokens(result.metadata.get("usage")),
+            )
+            fields_avoided = result.metadata.get("fields_avoided")
+            if isinstance(fields_avoided, int | float) and not isinstance(fields_avoided, bool):
+                serving_fields_avoided += float(fields_avoided)
+        if trace.metadata.get("teacher_audited") is True:
+            _add_cost_observation(
+                buckets["audit_l4"],
+                cost_usd=_numeric_value(trace.metadata.get("teacher_audit_cost_usd")) or 0.0,
+                latency_ms=_numeric_value(trace.metadata.get("teacher_audit_latency_ms")) or 0.0,
+                tokens=_numeric_value(trace.metadata.get("teacher_audit_tokens")) or 0.0,
+            )
+        if "teacher_labeling_cost_usd" in trace.metadata:
+            _add_cost_observation(
+                buckets["teacher_labeling_l4"],
+                cost_usd=_numeric_value(trace.metadata.get("teacher_labeling_cost_usd")) or 0.0,
+                latency_ms=_numeric_value(trace.metadata.get("teacher_labeling_latency_ms"))
+                or 0.0,
+                tokens=_numeric_value(trace.metadata.get("teacher_labeling_tokens")) or 0.0,
+            )
+    return {
+        name: _finalize_cost_bucket(bucket, request_count)
+        for name, bucket in buckets.items()
+    } | {"serving_fields_avoided": serving_fields_avoided}
 
 
 def _field_summary_stats(traces: list[TraceRecord]) -> dict[str, Any]:
@@ -962,15 +1068,16 @@ def _evolution_summary_section(promotion_records: list[dict[str, Any]]) -> str:
     lines = [
         "## Evolution Summary",
         "",
-        "| generation | L4_calls/100 | cost/100 | p95_ms | frame_em | "
+        "| generation | full_L4/100 | residual_L4/100 | L4_calls/100 | cost/100 | p95_ms | frame_em | "
         "L0_share | L1_share | L2_share | L3_share | L4_share |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in _evolution_summary_rows(promotion_records):
         lines.append(
-            "| {generation} | {l4_calls_per_100} | {cost_usd_per_100_requests} | "
-            "{p95_latency_ms} | {frame_exact_match} | {L0_share} | {L1_share} | "
-            "{L2_share} | {L3_share} | {L4_share} |".format(
+            "| {generation} | {serving_full_l4_calls_per_100} | "
+            "{serving_residual_l4_calls_per_100} | {l4_calls_per_100} | "
+            "{cost_usd_per_100_requests} | {p95_latency_ms} | {frame_exact_match} | "
+            "{L0_share} | {L1_share} | {L2_share} | {L3_share} | {L4_share} |".format(
                 **{key: _format_markdown_cell(key, row.get(key)) for key in row}
             )
         )
@@ -983,6 +1090,7 @@ def _evolution_summary_rows(records: list[dict[str, Any]]) -> list[dict[str, Any
         objective = record.get("candidate_objective") or {}
         candidate_metrics = record.get("candidate_metrics") or {}
         layer_counts = candidate_metrics.get("candidate_layer_counts") or {}
+        cost_metrics = candidate_metrics.get("candidate_cost_metrics") or {}
         eval_size = _positive_number(candidate_metrics.get("promotion_eval_size"))
         if eval_size is None:
             eval_size = sum(
@@ -992,6 +1100,12 @@ def _evolution_summary_rows(records: list[dict[str, Any]]) -> list[dict[str, Any
         row: dict[str, Any] = {
             "generation": record.get("generation", ""),
             "l4_calls_per_100": _layer_calls_per_100(layer_counts, "L4", eval_size),
+            "serving_full_l4_calls_per_100": _numeric_value(
+                cost_metrics.get("serving_full_l4_calls_per_100")
+            ),
+            "serving_residual_l4_calls_per_100": _numeric_value(
+                cost_metrics.get("serving_residual_l4_calls_per_100")
+            ),
             "cost_usd_per_100_requests": _numeric_value(objective.get("cost_usd_per_100_requests")),
             "p95_latency_ms": _numeric_value(objective.get("p95_latency_ms")),
             "frame_exact_match": _numeric_value(objective.get("frame_exact_match")),
@@ -1007,6 +1121,8 @@ def _evolution_summary_metric_rows(records: list[dict[str, Any]]) -> list[dict[s
     for summary in _evolution_summary_rows(records):
         generation = summary["generation"]
         for metric in [
+            "serving_full_l4_calls_per_100",
+            "serving_residual_l4_calls_per_100",
             "l4_calls_per_100",
             "cost_usd_per_100_requests",
             "p95_latency_ms",
@@ -1201,6 +1317,62 @@ def _numeric_value(value: Any) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _empty_cost_bucket() -> dict[str, Any]:
+    return {
+        "calls": 0.0,
+        "tokens": 0.0,
+        "cost_usd": 0.0,
+        "latencies": [],
+    }
+
+
+def _add_cost_observation(
+    bucket: dict[str, Any],
+    *,
+    cost_usd: float,
+    latency_ms: float,
+    tokens: float,
+) -> None:
+    bucket["calls"] += 1.0
+    bucket["tokens"] += tokens
+    bucket["cost_usd"] += cost_usd
+    if latency_ms > 0:
+        bucket["latencies"].append(latency_ms)
+
+
+def _finalize_cost_bucket(bucket: dict[str, Any], request_count: int) -> dict[str, float]:
+    calls = float(bucket["calls"])
+    tokens = float(bucket["tokens"])
+    cost_usd = float(bucket["cost_usd"])
+    latencies = bucket["latencies"]
+    return {
+        "calls": calls,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "calls_per_100": calls / request_count * 100.0 if request_count else 0.0,
+        "tokens_per_100": tokens / request_count * 100.0 if request_count else 0.0,
+        "cost_usd_per_100_requests": (
+            cost_usd / request_count * 100.0 if request_count else 0.0
+        ),
+        "p95_ms": _percentile(latencies, 95) if latencies else 0.0,
+    }
+
+
+def _usage_tokens(usage: Any) -> float:
+    if not isinstance(usage, dict):
+        return 0.0
+    total = _numeric_value(usage.get("total_tokens"))
+    if total is not None:
+        return total
+    prompt = _numeric_value(usage.get("prompt_tokens")) or _numeric_value(
+        usage.get("input_tokens")
+    )
+    completion = _numeric_value(usage.get("completion_tokens")) or _numeric_value(
+        usage.get("output_tokens")
+    )
+    return (prompt or 0.0) + (completion or 0.0)
 
 
 def _layer_calls_per_100(layer_counts: Any, layer: str, total: float | None) -> float | None:

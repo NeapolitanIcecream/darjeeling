@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from darjeeling.targets.nlu.compiler.focus_tasks import (
     build_focus_tasks,
-    focus_task_document,
+    focus_task_document_with_fields,
 )
 from darjeeling.targets.nlu.schemas import TeacherTrace
 
@@ -80,6 +80,60 @@ def build_teacher_context(
     )
 
 
+def build_residual_teacher_context(
+    *,
+    utterance: str,
+    accepted_fields: dict[str, str],
+    missing_fields: list[str],
+    task_schema: Any,
+    settings: Any,
+) -> L4RenderedContext:
+    stable_prefix = "\n".join(
+        [
+            "You are the L4 residual teacher for Darjeeling, a schema-constrained frame task.",
+            "Return strict JSON only.",
+            "Do not include explanations or markdown.",
+            "The JSON object must have this shape:",
+            '{"accepted_intent": null, "accepted_slots": {}, "complete": true}',
+            "Only include fields that are missing, corrected, or necessary to finish verification.",
+            "Use field key `intent` for intent and `slots.<slot_name>` for slots.",
+            "Use only these intents:",
+            json.dumps(task_schema.intent_names, ensure_ascii=False, sort_keys=True),
+            "Use only these slot names when slots are present:",
+            json.dumps(task_schema.slot_names, ensure_ascii=False, sort_keys=True),
+            f"Prompt version: {settings.teacher_prompt_version}-residual.",
+        ]
+    )
+    dynamic_tail = json.dumps(
+        {
+            "utterance": utterance,
+            "accepted_fields": accepted_fields,
+            "missing_fields": missing_fields,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    messages = [
+        {"role": "system", "content": stable_prefix},
+        {"role": "user", "content": dynamic_tail},
+    ]
+    assert_no_forbidden_context(messages)
+    schema_version = getattr(task_schema, "schema_version", "schema-unknown")
+    prompt_version = f"{settings.teacher_prompt_version}-residual"
+    return L4RenderedContext(
+        kind="teacher",
+        prompt_version=prompt_version,
+        context_layout_version="teacher-residual-layout-v1",
+        messages=messages,
+        context_hash=context_hash(messages),
+        source_trace_ids=[],
+        prompt_cache_key=f"darjeeling:{prompt_version}:{schema_version}",
+        prompt_cache_retention=settings.prompt_cache_retention,
+        stable_prefix=stable_prefix,
+        dynamic_tail=dynamic_tail,
+    )
+
+
 def build_teacher_stable_prefix(*, task_schema: Any, settings: Any) -> str:
     return "\n".join(
         [
@@ -126,11 +180,13 @@ def build_proposal_context(
         (trace for trace in traces if trace.teacher_frame is not None),
         key=lambda trace: trace.request_id,
     )[:max_dynamic_traces]
-    focus_tasks = focus_task_document(
+    labeled_traces = [trace for trace in traces if trace.teacher_frame is not None]
+    focus_tasks = focus_task_document_with_fields(
         build_focus_tasks(
-            [trace for trace in traces if trace.teacher_frame is not None],
+            labeled_traces,
             max_tasks=min(8, max_dynamic_traces),
-        )
+        ),
+        labeled_traces,
     )
     dynamic_payload = {
         "current_artifact_summary": current_artifact_summary or {},

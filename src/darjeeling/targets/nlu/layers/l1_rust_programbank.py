@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from darjeeling.runtime.timing import elapsed_ms
-from darjeeling.targets.nlu.schemas import Frame, LayerResult
+from darjeeling.targets.nlu.schemas import Frame, FramePatch, LayerResult
 
 DEFAULT_BENCHMARK_UTTERANCES = (
     "alpha request",
@@ -34,6 +34,7 @@ class RustL1Response(BaseModel):
     request_id: str
     accepted: bool
     frame: Frame | None = None
+    patch: FramePatch | None = None
     program_path: str = ""
     native_latency_us: int = 0
     reason: str = ""
@@ -157,8 +158,10 @@ class RustProgramBankLayer:
 
             return LayerResult(
                 layer="L1",
-                accepted=response.accepted and response.frame is not None,
+                accepted=response.accepted
+                and (response.frame is not None or response.patch is not None),
                 frame=response.frame,
+                patch=response.patch,
                 confidence=1.0 if response.accepted else None,
                 reason=response.reason,
                 latency_ms=ms(),
@@ -166,6 +169,11 @@ class RustProgramBankLayer:
                     "request_id": response.request_id,
                     "program_path": response.program_path,
                     "native_latency_us": response.native_latency_us,
+                    **(
+                        {"frame_patch": response.patch.model_dump(mode="json")}
+                        if response.patch is not None
+                        else {}
+                    ),
                     **response.metadata,
                 },
             )

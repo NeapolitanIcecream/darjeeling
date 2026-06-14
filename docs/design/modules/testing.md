@@ -78,12 +78,16 @@ L1 coding-agent harness 应支持 dry-run mode：
 Added target-level tests for:
 
 - patch composition with L4 residual fill;
+- L4 conflict override and true residual L4 fill/verify accounting;
 - lower-layer live teacher audit and disagreement metadata;
 - field-level offline replay metrics;
+- field-aware objective terms tied to avoided full L4 work;
 - L2 target preservation and staged target-evolution adoption in compiler generation;
-- L2 expert-bank training, manifest writing, and runtime patch emission;
-- focus-task proposal context and L1 workspace context without gold leakage;
+- L2 expert-bank train/validation split, conflict policy, manifest writing, and runtime patch emission;
+- patch-native L1 Rust/Python worker output;
+- field-level focus-task proposal context and L1 workspace context without gold leakage;
 - L3 residual pass/skip gate and bounded decode default;
+- serving/residual/audit/labeling L4 cost reporting;
 - core/target boundary scanning to keep NLU schema terms out of core Python files.
 
 Required verification for this refactor is `uv run pytest tests/targets/nlu -q`.

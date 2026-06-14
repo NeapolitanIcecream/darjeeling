@@ -28,6 +28,8 @@ LAYER_LATENCY_MS = {
     "L3": 120.0,
     "L4": 900.0,
 }
+RESIDUAL_L4_LATENCY_MS = 300.0
+RESIDUAL_L4_MIN_COST_FRACTION = 0.25
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,7 @@ class OfflineReplayResult:
     layer_metrics: dict[str, dict[str, float]]
     layer_counts: dict[str, int]
     field_metrics: dict[str, float]
+    cost_metrics: dict[str, float]
     requests: int
 
 
@@ -94,6 +97,11 @@ class OfflineRouteResult:
     frame: Frame
     weak_accepted: bool
     patches: list[FramePatch]
+    full_l4_call: bool = False
+    residual_l4_call: bool = False
+    correct_weak_fields_avoiding_full_l4: int = 0
+    residual_l4_verified_fields: int = 0
+    l4_conflicts: int = 0
 
 
 def decide_promotion(
@@ -243,6 +251,11 @@ def evaluate_offline_artifact_set(
     weak_accepted_fields = 0
     weak_correct_fields = 0
     weak_wrong_fields = 0
+    full_l4_calls = 0
+    residual_l4_calls = 0
+    correct_weak_fields_avoiding_full_l4 = 0
+    residual_l4_verified_fields = 0
+    l4_conflicts = 0
 
     l1_worker = _build_l1_worker(artifact_set)
     l2_layer = _build_l2_layer(artifact_set)
@@ -280,8 +293,23 @@ def evaluate_offline_artifact_set(
                         weak_accepted_fields += 1
                         weak_correct_fields += int(is_correct)
                         weak_wrong_fields += int(not is_correct)
-            latencies.append(LAYER_LATENCY_MS[chosen_layer])
-            request_cost = cost_model.layer_cost_usd(chosen_layer, trace.l4_usage)
+            full_l4_calls += int(route.full_l4_call)
+            residual_l4_calls += int(route.residual_l4_call)
+            correct_weak_fields_avoiding_full_l4 += (
+                route.correct_weak_fields_avoiding_full_l4
+            )
+            residual_l4_verified_fields += route.residual_l4_verified_fields
+            l4_conflicts += route.l4_conflicts
+            latencies.append(
+                RESIDUAL_L4_LATENCY_MS if route.residual_l4_call else LAYER_LATENCY_MS[chosen_layer]
+            )
+            request_cost = _offline_request_cost(
+                chosen_layer=chosen_layer,
+                route=route,
+                expected_field_count=len(expected_fields),
+                trace=trace,
+                cost_model=cost_model,
+            )
             layer_costs[chosen_layer] += request_cost
             total_cost += request_cost
     finally:
@@ -309,7 +337,14 @@ def evaluate_offline_artifact_set(
                 "weak_wrong_fields": 0.0,
                 "weak_field_accuracy": 1.0,
                 "wrong_accepted_field_rate": 0.0,
+                "correct_weak_fields_avoiding_full_l4": 0.0,
+                "correct_weak_fields_avoiding_full_l4_per_100": 0.0,
+                "residual_l4_verified_fields": 0.0,
+                "residual_l4_verified_fields_per_100": 0.0,
+                "l4_field_conflicts": 0.0,
+                "l4_conflict_rate": 0.0,
             },
+            cost_metrics=_empty_cost_metrics(),
             requests=0,
         )
 
@@ -346,6 +381,30 @@ def evaluate_offline_artifact_set(
         "wrong_accepted_field_rate": weak_wrong_fields / total_expected_fields
         if total_expected_fields
         else 0.0,
+        "correct_weak_fields_avoiding_full_l4": float(
+            correct_weak_fields_avoiding_full_l4
+        ),
+        "correct_weak_fields_avoiding_full_l4_per_100": (
+            correct_weak_fields_avoiding_full_l4 / requests * 100.0
+        ),
+        "residual_l4_verified_fields": float(residual_l4_verified_fields),
+        "residual_l4_verified_fields_per_100": (
+            residual_l4_verified_fields / requests * 100.0
+        ),
+        "l4_field_conflicts": float(l4_conflicts),
+        "l4_conflict_rate": l4_conflicts / total_expected_fields
+        if total_expected_fields
+        else 0.0,
+    }
+    cost_metrics = {
+        "serving_full_l4_calls": float(full_l4_calls),
+        "serving_residual_l4_calls": float(residual_l4_calls),
+        "serving_full_l4_calls_per_100": full_l4_calls / requests * 100.0,
+        "serving_residual_l4_calls_per_100": residual_l4_calls / requests * 100.0,
+        "serving_l4_fields_avoided": float(correct_weak_fields_avoiding_full_l4),
+        "serving_l4_fields_avoided_per_100": (
+            correct_weak_fields_avoiding_full_l4 / requests * 100.0
+        ),
     }
     objective = ObjectiveMetrics(
         frame_exact_match=frame_matches / requests,
@@ -353,12 +412,25 @@ def evaluate_offline_artifact_set(
         cost_usd_per_100_requests=total_cost / requests * 100.0,
         p95_latency_ms=_p95(latencies),
         artifact_complexity=artifact_set.artifact_complexity,
+        correct_weak_fields_avoiding_full_l4_per_100=field_metrics[
+            "correct_weak_fields_avoiding_full_l4_per_100"
+        ],
+        residual_l4_verified_fields_per_100=field_metrics[
+            "residual_l4_verified_fields_per_100"
+        ],
+        full_l4_calls_per_100_requests=cost_metrics["serving_full_l4_calls_per_100"],
+        residual_l4_calls_per_100_requests=cost_metrics[
+            "serving_residual_l4_calls_per_100"
+        ],
+        wrong_accepted_field_rate=field_metrics["wrong_accepted_field_rate"],
+        l4_conflict_rate=field_metrics["l4_conflict_rate"],
     )
     return OfflineReplayResult(
         objective=objective,
         layer_metrics=layer_metrics,
         layer_counts=layer_counts,
         field_metrics=field_metrics,
+        cost_metrics=cost_metrics,
         requests=requests,
     )
 
@@ -468,11 +540,14 @@ def _offline_route(
             return OfflineRouteResult("L0", composer.to_frame(), True, patches)
     if l1_worker is not None:
         l1_response = l1_worker.answer(trace.utterance)
-        if l1_response.accepted and l1_response.frame is not None:
+        if l1_response.accepted and (
+            l1_response.frame is not None or getattr(l1_response, "patch", None) is not None
+        ):
             result = LayerResult(
                 layer="L1",
                 accepted=True,
                 frame=l1_response.frame,
+                patch=getattr(l1_response, "patch", None),
                 confidence=1.0,
                 reason=l1_response.reason,
                 latency_ms=LAYER_LATENCY_MS["L1"],
@@ -494,15 +569,41 @@ def _offline_route(
         )
         if _apply_offline_result(composer, patches, result):
             return OfflineRouteResult("L3", composer.to_frame(), True, patches)
-    patches.append(
-        composer.fill_missing_from_frame(
-            fallback_frame,
-            source_layer="L4",
-            confidence=1.0,
-            metadata={"adapter": "offline_l4_residual_fill"},
-        )
+    pre_l4_values = composer.field_values()
+    expected_values = frame_field_values(fallback_frame)
+    correct_pre_l4_fields = sum(
+        expected_values.get(field_key) == field_value
+        for field_key, field_value in pre_l4_values.items()
     )
-    return OfflineRouteResult("L4", composer.to_frame(), False, patches)
+    residual_l4_call = bool(pre_l4_values)
+    patch = composer.fill_or_override_from_l4_frame(
+        fallback_frame,
+        source_layer="L4",
+        confidence=1.0,
+        metadata={
+            "adapter": "offline_l4_residual_fill"
+            if residual_l4_call
+            else "offline_l4_full_frame",
+            "l4_call_kind": "residual" if residual_l4_call else "full",
+            "fields_avoided": correct_pre_l4_fields if residual_l4_call else 0,
+        },
+    )
+    patches.append(patch)
+    return OfflineRouteResult(
+        "L4",
+        composer.to_frame(),
+        bool(pre_l4_values),
+        patches,
+        full_l4_call=not residual_l4_call,
+        residual_l4_call=residual_l4_call,
+        correct_weak_fields_avoiding_full_l4=(
+            correct_pre_l4_fields if residual_l4_call else 0
+        ),
+        residual_l4_verified_fields=len(patch.metadata.get("verified_fields", []))
+        if residual_l4_call
+        else 0,
+        l4_conflicts=len(patch.metadata.get("field_conflicts", [])),
+    )
 
 
 def _apply_offline_result(
@@ -536,6 +637,37 @@ def _patch_field_values(patch: FramePatch) -> dict[str, str]:
         }
     )
     return values
+
+
+def _offline_request_cost(
+    *,
+    chosen_layer: str,
+    route: OfflineRouteResult,
+    expected_field_count: int,
+    trace: TeacherTrace,
+    cost_model: ReplayCostModel,
+) -> float:
+    if chosen_layer != "L4" or not route.residual_l4_call:
+        return cost_model.layer_cost_usd(chosen_layer, trace.l4_usage)
+    full_cost = cost_model.layer_cost_usd("L4", trace.l4_usage)
+    if expected_field_count <= 0:
+        return full_cost * RESIDUAL_L4_MIN_COST_FRACTION
+    missing_fraction = (
+        max(0, expected_field_count - route.correct_weak_fields_avoiding_full_l4)
+        / expected_field_count
+    )
+    return full_cost * max(RESIDUAL_L4_MIN_COST_FRACTION, missing_fraction)
+
+
+def _empty_cost_metrics() -> dict[str, float]:
+    return {
+        "serving_full_l4_calls": 0.0,
+        "serving_residual_l4_calls": 0.0,
+        "serving_full_l4_calls_per_100": 0.0,
+        "serving_residual_l4_calls_per_100": 0.0,
+        "serving_l4_fields_avoided": 0.0,
+        "serving_l4_fields_avoided_per_100": 0.0,
+    }
 
 
 def _metric(result: OfflineReplayResult, layer: str, name: str) -> float:

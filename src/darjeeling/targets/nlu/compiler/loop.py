@@ -623,6 +623,12 @@ def run_compiler_generation(
             "candidate_field_metrics": promotion.candidate_replay.field_metrics
             if promotion.candidate_replay is not None
             else None,
+            "current_cost_metrics": promotion.current_replay.cost_metrics
+            if promotion.current_replay is not None
+            else None,
+            "candidate_cost_metrics": promotion.candidate_replay.cost_metrics
+            if promotion.candidate_replay is not None
+            else None,
             "promotion_block_layer_regressions": settings.promotion_block_layer_regressions,
         }
     )
@@ -835,6 +841,8 @@ def build_l2_expert_bank_candidate(
             max_intents=settings.l2_expert_max_intents,
             max_slots=settings.l2_expert_max_slots,
             min_accuracy=settings.l2_expert_min_accuracy,
+            validation_fraction=settings.l2_expert_validation_fraction,
+            intent_conflict_margin=settings.l2_expert_intent_margin,
         ),
     )
     if bank is None:
@@ -1306,13 +1314,7 @@ def _artifact_summary(manifest: ArtifactManifest | None) -> dict[str, object]:
 
 
 def _objective_payload(metrics) -> dict[str, float]:
-    return {
-        "frame_exact_match": metrics.frame_exact_match,
-        "wrong_accept_rate": metrics.wrong_accept_rate,
-        "cost_usd_per_100_requests": metrics.cost_usd_per_100_requests,
-        "p95_latency_ms": metrics.p95_latency_ms,
-        "artifact_complexity": metrics.artifact_complexity,
-    }
+    return asdict(metrics)
 
 
 def _threshold_evaluation_payload(evaluation) -> dict[str, float | int]:

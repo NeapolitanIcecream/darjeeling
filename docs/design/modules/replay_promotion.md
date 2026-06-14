@@ -132,8 +132,10 @@ regressed_layers = [...]
 
 Offline replay now mirrors the NLU patch runtime. Legacy accepted full-frame results become
 complete patches, patch-aware L2 experts can contribute only intent or slot fields, and
-L4 fills residual fields for final-frame completeness. Full-frame exact match and weak
-wrong-accept gates remain in place.
+L4 first tries a target-owned residual fill/verify path when weak layers have already
+accepted fields. If L4 is invoked and sees weak-field conflicts, the L4 patch can override
+or remove those fields and records `field_conflicts` / `field_overrides` metadata. Full-frame
+exact match and weak wrong-accept gates remain in place.
 
 Replay result payloads also include field-level metrics:
 
@@ -143,6 +145,16 @@ Replay result payloads also include field-level metrics:
 - weak field accuracy
 - wrong accepted field rate
 - per-layer field accepted accuracy and wrong-field rate
+- correct weak fields that avoided full L4 work
+- residual L4 verified fields
+- L4 field conflicts
+
+Promotion objective terms only reward field progress when it maps to avoided full L4 work
+or verified residual work. Raw weak field coverage is reported but is not rewarded by
+itself; wrong accepted fields and L4 conflicts are penalized.
 
 These metrics are target-owned NLU diagnostics. They are written to candidate metrics and
 reports, but they do not teach Darjeeling core what intent or slot fields mean.
+
+Cost metrics split serving full L4, serving residual L4, audit L4, and teacher-labeling
+metadata where traces contain it. The main objective cost remains serving behavior.
