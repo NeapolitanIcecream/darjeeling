@@ -329,10 +329,21 @@ def test_generate_run_report_writes_summary_metrics_artifacts_and_curves(
     assert result.metrics_csv_path.exists()
     assert result.artifacts_csv_path.exists()
     assert result.curves_html_path.exists()
+    assert result.quality_json_path.exists()
+    assert result.promotions_jsonl_path.exists()
     assert "Layer Summary" in result.summary_path.read_text(encoding="utf-8")
+    assert "`quality.json`" in result.summary_path.read_text(encoding="utf-8")
     assert "frame_exact_match" in result.metrics_csv_path.read_text(encoding="utf-8")
     assert "l0_cache" in result.artifacts_csv_path.read_text(encoding="utf-8")
     assert "Cumulative Layer Share" in result.curves_html_path.read_text(encoding="utf-8")
+    quality = json.loads(result.quality_json_path.read_text(encoding="utf-8"))
+    assert quality["schema_version"] == "nlu-run-quality-v1"
+    assert quality["requests"] == 1
+    assert quality["layer_counts"]["L4"] == 1
+    assert quality["promotion_summary"]["promoted_generations"] == 1
+    promotions = result.promotions_jsonl_path.read_text(encoding="utf-8").splitlines()
+    assert len(promotions) == 1
+    assert json.loads(promotions[0])["promoted"] is True
 
 
 def test_generate_run_report_includes_required_layer_summary_metrics(tmp_path: Path) -> None:
@@ -486,23 +497,16 @@ def test_generate_run_report_splits_serving_residual_audit_and_labeling_costs(
 
     summary = result.summary_path.read_text(encoding="utf-8")
     metrics = list(csv.DictReader(result.metrics_csv_path.open(encoding="utf-8")))
-    metric_lookup = {
-        (row["scope"], row["layer"], row["metric"]): row["value"] for row in metrics
-    }
+    metric_lookup = {(row["scope"], row["layer"], row["metric"]): row["value"] for row in metrics}
     assert "## L4 Cost Summary" in summary
     assert metric_lookup[("cost_summary", "serving_full_l4", "calls_per_100")] == "50.0"
     assert (
-        metric_lookup[
-            ("cost_summary", "serving_residual_l4", "cost_usd_per_100_requests")
-        ]
+        metric_lookup[("cost_summary", "serving_residual_l4", "cost_usd_per_100_requests")]
         == "0.25"
     )
     assert metric_lookup[("cost_summary", "audit_l4", "tokens_per_100")] == "350.0"
     assert (
-        metric_lookup[
-            ("cost_summary", "teacher_labeling_l4", "cost_usd_per_100_requests")
-        ]
-        == "1.5"
+        metric_lookup[("cost_summary", "teacher_labeling_l4", "cost_usd_per_100_requests")] == "1.5"
     )
     assert metric_lookup[("cost_summary", "", "serving_fields_avoided")] == "1.0"
 

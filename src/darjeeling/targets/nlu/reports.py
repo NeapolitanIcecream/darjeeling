@@ -30,6 +30,8 @@ from darjeeling.targets.nlu.trace import read_traces
 L1_BENCHMARK_FILENAME = "l1_benchmark.json"
 L3_BENCHMARK_FILENAME = "l3_benchmark.json"
 HARD_CASES_FILENAME = "hard_cases.jsonl"
+QUALITY_FILENAME = "quality.json"
+PROMOTIONS_FILENAME = "promotions.jsonl"
 EXPERIMENT_COMPARISON_FIELDNAMES = [
     "experiment",
     "stream",
@@ -80,6 +82,8 @@ class RunReportResult:
     artifacts_csv_path: Path
     curves_html_path: Path
     hard_cases_path: Path
+    quality_json_path: Path
+    promotions_jsonl_path: Path
     l1_benchmark_path: Path | None = None
 
 
@@ -140,6 +144,18 @@ def generate_run_report(run_dir: Path) -> RunReportResult:
         current_manifest=current_manifest,
         generation_manifests=generation_manifests,
     )
+    quality_json_path = _write_quality_json(
+        report_dir / QUALITY_FILENAME,
+        traces=traces,
+        promotion_records=promotion_records,
+        bottlenecks=bottlenecks,
+        l1_benchmark=l1_benchmark,
+        l3_benchmark=l3_benchmark,
+    )
+    promotions_jsonl_path = _write_promotions_jsonl(
+        report_dir / PROMOTIONS_FILENAME,
+        promotion_records=promotion_records,
+    )
 
     metrics_csv_path = _write_csv(
         report_dir / "metrics.csv",
@@ -186,6 +202,8 @@ def generate_run_report(run_dir: Path) -> RunReportResult:
         artifacts_csv_path=artifacts_csv_path,
         curves_html_path=curves_html_path,
         hard_cases_path=hard_cases_path,
+        quality_json_path=quality_json_path,
+        promotions_jsonl_path=promotions_jsonl_path,
         l1_benchmark_path=report_dir / L1_BENCHMARK_FILENAME if l1_benchmark is not None else None,
     )
 
@@ -438,7 +456,9 @@ def _write_summary_md(
         "- `metrics.csv`\n"
         "- `artifacts.csv`\n"
         "- `curves.html`\n"
-        "- `hard_cases.jsonl`\n\n"
+        "- `hard_cases.jsonl`\n"
+        "- `quality.json`\n"
+        "- `promotions.jsonl`\n\n"
         f"{_layer_summary_section(traces)}\n\n"
         f"{_field_summary_section(traces)}\n\n"
         f"{_cost_summary_section(traces)}\n\n"
@@ -816,13 +836,11 @@ def _cost_summary_stats(traces: list[TraceRecord]) -> dict[str, Any]:
             _add_cost_observation(
                 buckets["teacher_labeling_l4"],
                 cost_usd=_numeric_value(trace.metadata.get("teacher_labeling_cost_usd")) or 0.0,
-                latency_ms=_numeric_value(trace.metadata.get("teacher_labeling_latency_ms"))
-                or 0.0,
+                latency_ms=_numeric_value(trace.metadata.get("teacher_labeling_latency_ms")) or 0.0,
                 tokens=_numeric_value(trace.metadata.get("teacher_labeling_tokens")) or 0.0,
             )
     return {
-        name: _finalize_cost_bucket(bucket, request_count)
-        for name, bucket in buckets.items()
+        name: _finalize_cost_bucket(bucket, request_count) for name, bucket in buckets.items()
     } | {"serving_fields_avoided": serving_fields_avoided}
 
 
@@ -889,13 +907,9 @@ def _field_summary_stats(traces: list[TraceRecord]) -> dict[str, Any]:
         "l4_conflict_rate": (
             l4_field_conflicts / total_expected_fields if total_expected_fields else 0.0
         ),
-        "correct_weak_fields_avoiding_full_l4": float(
-            correct_weak_fields_avoiding_full_l4
-        ),
+        "correct_weak_fields_avoiding_full_l4": float(correct_weak_fields_avoiding_full_l4),
         "correct_weak_fields_avoiding_full_l4_per_100": (
-            correct_weak_fields_avoiding_full_l4 / len(traces) * 100.0
-            if traces
-            else 0.0
+            correct_weak_fields_avoiding_full_l4 / len(traces) * 100.0 if traces else 0.0
         ),
         "residual_l4_verified_fields": float(residual_l4_verified_fields),
         "residual_l4_verified_fields_per_100": (
@@ -970,10 +984,7 @@ def _patch_field_values(patch: Any) -> dict[str, str]:
     if patch.accepted_intent is not None:
         values["intent"] = patch.accepted_intent
     values.update(
-        {
-            f"slots.{slot_key}": slot_value
-            for slot_key, slot_value in patch.accepted_slots.items()
-        }
+        {f"slots.{slot_key}": slot_value for slot_key, slot_value in patch.accepted_slots.items()}
     )
     return values
 
@@ -1083,10 +1094,7 @@ def _l2_tuning_section(current_manifest: ArtifactManifest | None) -> str:
             "accepted_accuracy",
             unguarded.get("accepted_accuracy"),
         )
-        lines.append(
-            "- tuning validation unguarded accuracy: "
-            f"{unguarded_accuracy}"
-        )
+        lines.append(f"- tuning validation unguarded accuracy: {unguarded_accuracy}")
     if isinstance(guarded, dict):
         lines.append(
             "- tuning validation guarded coverage/accuracy/wrong rate: "
@@ -1102,10 +1110,7 @@ def _l2_tuning_section(current_manifest: ArtifactManifest | None) -> str:
 
 def _l2_unguarded_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]]:
     stats = _l2_unguarded_stats(traces)
-    return [
-        _metric_row("l2_unguarded", "", "L2", metric, value)
-        for metric, value in stats.items()
-    ]
+    return [_metric_row("l2_unguarded", "", "L2", metric, value) for metric, value in stats.items()]
 
 
 def _l2_unguarded_stats(traces: list[TraceRecord]) -> dict[str, Any]:
@@ -1517,9 +1522,7 @@ def _finalize_cost_bucket(bucket: dict[str, Any], request_count: int) -> dict[st
         "cost_usd": cost_usd,
         "calls_per_100": calls / request_count * 100.0 if request_count else 0.0,
         "tokens_per_100": tokens / request_count * 100.0 if request_count else 0.0,
-        "cost_usd_per_100_requests": (
-            cost_usd / request_count * 100.0 if request_count else 0.0
-        ),
+        "cost_usd_per_100_requests": (cost_usd / request_count * 100.0 if request_count else 0.0),
         "p95_ms": _percentile(latencies, 95) if latencies else 0.0,
     }
 
@@ -1530,9 +1533,7 @@ def _usage_tokens(usage: Any) -> float:
     total = _numeric_value(usage.get("total_tokens"))
     if total is not None:
         return total
-    prompt = _numeric_value(usage.get("prompt_tokens")) or _numeric_value(
-        usage.get("input_tokens")
-    )
+    prompt = _numeric_value(usage.get("prompt_tokens")) or _numeric_value(usage.get("input_tokens"))
     completion = _numeric_value(usage.get("completion_tokens")) or _numeric_value(
         usage.get("output_tokens")
     )
@@ -1966,6 +1967,74 @@ def _write_report_hard_cases(
     hard_buffer_path = _manifest_artifact_path(run_dir, manifest, "hard_buffer")
     hard_cases = load_hard_buffer_jsonl(hard_buffer_path) if hard_buffer_path is not None else []
     return write_hard_buffer_jsonl(path, hard_cases)
+
+
+def _write_quality_json(
+    path: Path,
+    *,
+    traces: list[TraceRecord],
+    promotion_records: list[dict[str, Any]],
+    bottlenecks: list[BottleneckFinding],
+    l1_benchmark: dict[str, Any] | None,
+    l3_benchmark: dict[str, Any] | None,
+) -> Path:
+    request_count = len(traces)
+    layer_counts = Counter(trace.chosen_layer for trace in traces)
+    gold_labeled = [trace for trace in traces if trace.gold_frame is not None]
+    exact_matches = sum(trace.final_frame == trace.gold_frame for trace in gold_labeled)
+    payload = {
+        "schema_version": "nlu-run-quality-v1",
+        "requests": request_count,
+        "gold_labeled_requests": len(gold_labeled),
+        "frame_exact_match": exact_matches / len(gold_labeled) if gold_labeled else None,
+        "layer_counts": {
+            layer: layer_counts.get(layer, 0) for layer in ["L0", "L1", "L2", "L3", "L4"]
+        },
+        "layer_shares": {
+            layer: (layer_counts.get(layer, 0) / request_count if request_count else 0.0)
+            for layer in ["L0", "L1", "L2", "L3", "L4"]
+        },
+        "total_latency_ms": {
+            "p50": _percentile(_total_latencies_ms(traces), 50),
+            "p95": _percentile(_total_latencies_ms(traces), 95),
+        },
+        "field_summary": _field_summary_stats(traces),
+        "cost_summary": _cost_summary_stats(traces),
+        "promotion_summary": {
+            "attempts": len(promotion_records),
+            "promoted_generations": sum(
+                1 for record in promotion_records if record.get("promoted")
+            ),
+            "promoted_with_layer_regression": sum(
+                1 for record in promotion_records if record.get("promoted_with_layer_regression")
+            ),
+        },
+        "bottlenecks": [
+            {
+                "code": finding.code,
+                "label": finding.label,
+                "severity": finding.severity,
+                "evidence": finding.evidence,
+            }
+            for finding in bottlenecks
+        ],
+        "l1_benchmark": l1_benchmark,
+        "l3_benchmark": l3_benchmark,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_promotions_jsonl(
+    path: Path,
+    *,
+    promotion_records: list[dict[str, Any]],
+) -> Path:
+    path.write_text(
+        "".join(json.dumps(record, sort_keys=True) + "\n" for record in promotion_records),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _latest_manifest_with_artifact(
