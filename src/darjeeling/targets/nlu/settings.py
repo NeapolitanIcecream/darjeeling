@@ -13,6 +13,7 @@ from pydantic_settings import (
 
 DEFAULT_PROCESSED_DATA_DIR = Path("data/processed/default")
 DEFAULT_NLU_L1_CRATE_DIR = Path("src/darjeeling/targets/nlu/native/l1_empty_programbank")
+DEFAULT_TEACHER_CACHE_SEED_PATH = Path("runs/oracle-cache-massive/teacher_cache.jsonl")
 
 
 class Settings(BaseSettings):
@@ -37,6 +38,10 @@ class Settings(BaseSettings):
         validation_alias="TEACHER_PROMPT_VERSION",
     )
     teacher_max_tokens: int = Field(default=256, validation_alias="TEACHER_MAX_TOKENS")
+    teacher_cache_seed_path: Path | None = Field(
+        default=DEFAULT_TEACHER_CACHE_SEED_PATH,
+        validation_alias="TEACHER_CACHE_SEED_PATH",
+    )
     residual_l4_max_tokens: int = Field(
         default=96,
         validation_alias="RESIDUAL_L4_MAX_TOKENS",

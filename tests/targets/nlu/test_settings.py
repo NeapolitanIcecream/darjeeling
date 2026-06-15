@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from darjeeling.targets.nlu.settings import load_settings
+from darjeeling.targets.nlu.settings import DEFAULT_TEACHER_CACHE_SEED_PATH, load_settings
 
 
 def test_load_settings_reads_yaml_and_env_overrides_it(
@@ -68,6 +68,7 @@ def test_default_prompt_cache_retention_matches_live_provider_requirement() -> N
     assert settings.l2_tuning_search_space == "compact"
     assert settings.local_slm_max_new_tokens == 64
     assert settings.promotion_block_layer_regressions is True
+    assert settings.teacher_cache_seed_path == DEFAULT_TEACHER_CACHE_SEED_PATH
 
 
 def test_load_settings_fails_for_explicit_missing_file(tmp_path: Path) -> None:

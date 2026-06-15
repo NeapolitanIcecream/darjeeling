@@ -74,6 +74,7 @@ from darjeeling.targets.nlu.layers.l3_local_slm import (
 from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     MissingTeacherError,
     TaskSchema,
+    has_valid_teacher_cache,
     require_live_or_cached_teacher,
 )
 from darjeeling.targets.nlu.replay import (
@@ -216,6 +217,7 @@ def _execute_replay_run(
 ):
     target_spec = target_registry.get_target(target)
     run_dir.mkdir(parents=True, exist_ok=True)
+    _seed_teacher_cache_for_cache_mode(settings=settings, teacher=teacher, run_dir=run_dir)
     require_live_or_cached_teacher(settings, teacher, run_dir / "teacher_cache.jsonl")
     write_run_settings(
         run_dir / "settings.json",
@@ -2215,6 +2217,11 @@ def _preflight_data_check(data_dir: Path) -> dict:
 def _preflight_teacher_check(*, run_dir: Path, teacher: str, settings) -> dict:
     cache_path = run_dir / "teacher_cache.jsonl"
     try:
+        seed_path = _seed_teacher_cache_for_cache_mode(
+            settings=settings,
+            teacher=teacher,
+            run_dir=run_dir,
+        )
         require_live_or_cached_teacher(settings, teacher, cache_path)
     except MissingTeacherError as exc:
         return {
@@ -2222,11 +2229,39 @@ def _preflight_teacher_check(*, run_dir: Path, teacher: str, settings) -> dict:
             "status": "fail",
             "message": str(exc),
         }
-    return {
+    payload = {
         "name": "teacher",
         "status": "pass",
         "message": f"teacher mode {teacher!r} is usable",
     }
+    if seed_path is not None:
+        payload["seed_cache_path"] = str(seed_path)
+    return payload
+
+
+def _seed_teacher_cache_for_cache_mode(*, settings, teacher: str, run_dir: Path) -> Path | None:
+    if teacher != "cache":
+        return None
+
+    cache_path = run_dir / "teacher_cache.jsonl"
+    if has_valid_teacher_cache(cache_path):
+        return None
+
+    seed_path = settings.teacher_cache_seed_path
+    if seed_path is None:
+        return None
+    seed_path = seed_path.expanduser()
+    if seed_path == cache_path:
+        return None
+    if not has_valid_teacher_cache(seed_path):
+        raise MissingTeacherError(
+            "teacher cache is required but missing and configured seed cache "
+            f"is unavailable: {seed_path}"
+        )
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(seed_path, cache_path)
+    return seed_path
 
 
 def _preflight_l1_check(*, settings, check_l1_build: bool) -> dict:

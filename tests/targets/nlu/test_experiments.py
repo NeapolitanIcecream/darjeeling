@@ -14,6 +14,7 @@ from darjeeling.targets.nlu.experiments import (
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
 from darjeeling.targets.nlu.main_cli import (
     _execute_experiment_run,
+    _execute_replay_run,
     _experiment_preflight_payload,
     _preflight_l3_check,
     _promote_l3_prompt_artifact,
@@ -231,12 +232,123 @@ def test_experiment_preflight_passes_with_data_cache_and_l1_crate(tmp_path: Path
     assert l3_check["benchmark_required"] is False
 
 
+def test_experiment_preflight_seeds_cache_teacher_for_fresh_run_dir(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    seed_path = tmp_path / "seed" / "teacher_cache.jsonl"
+    data_dir.mkdir()
+    seed_path.parent.mkdir()
+    (data_dir / "train.jsonl").write_text('{"request_id":"r1"}\n', encoding="utf-8")
+    seed_path.write_text(
+        json.dumps(
+            {
+                "utterance": "beta request",
+                "teacher_frame": {"intent": "intent_beta", "slots": {}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = _experiment_preflight_payload(
+        run_dir=run_dir,
+        data_dir=data_dir,
+        teacher="cache",
+        settings=load_settings().model_copy(update={"teacher_cache_seed_path": seed_path}),
+    )
+
+    assert payload["status"] == "pass"
+    assert (run_dir / "teacher_cache.jsonl").read_text(encoding="utf-8") == seed_path.read_text(
+        encoding="utf-8"
+    )
+    teacher_check = next(check for check in payload["checks"] if check["name"] == "teacher")
+    assert teacher_check["seed_cache_path"] == str(seed_path)
+
+
+def test_experiment_preflight_live_teacher_does_not_seed_cache(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    seed_path = tmp_path / "seed" / "teacher_cache.jsonl"
+    data_dir.mkdir()
+    seed_path.parent.mkdir()
+    (data_dir / "train.jsonl").write_text('{"request_id":"r1"}\n', encoding="utf-8")
+    seed_path.write_text(
+        json.dumps(
+            {
+                "utterance": "beta request",
+                "teacher_frame": {"intent": "intent_beta", "slots": {}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = _experiment_preflight_payload(
+        run_dir=run_dir,
+        data_dir=data_dir,
+        teacher="live",
+        settings=load_settings().model_copy(
+            update={
+                "openai_api_key": "test-key",
+                "teacher_cache_seed_path": seed_path,
+            }
+        ),
+    )
+
+    assert payload["status"] == "pass"
+    assert not (run_dir / "teacher_cache.jsonl").exists()
+
+
+def test_execute_replay_run_seeds_cache_teacher_for_fresh_run_dir(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seed_path = tmp_path / "seed" / "teacher_cache.jsonl"
+    run_dir = tmp_path / "run"
+    seed_path.parent.mkdir()
+    seed_path.write_text(
+        json.dumps(
+            {
+                "utterance": "beta request",
+                "teacher_frame": {"intent": "intent_beta", "slots": {}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_replay(**kwargs):
+        assert (kwargs["run_dir"] / "teacher_cache.jsonl").read_text(
+            encoding="utf-8"
+        ) == seed_path.read_text(encoding="utf-8")
+        return SimpleNamespace(
+            requests=3,
+            traces_path=kwargs["run_dir"] / "traces.jsonl",
+            layer_counts={"L4": 3},
+        )
+
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.main_cli.run_replay",
+        fake_run_replay,
+    )
+
+    _execute_replay_run(
+        stream="zipf-heavy",
+        max_requests=3,
+        compile_every=2,
+        teacher="cache",
+        run_dir=run_dir,
+        data_dir=tmp_path / "data",
+        settings=load_settings().model_copy(update={"teacher_cache_seed_path": seed_path}),
+    )
+
+
 def test_experiment_preflight_fails_when_required_inputs_are_missing(tmp_path: Path) -> None:
     payload = _experiment_preflight_payload(
         run_dir=tmp_path / "run",
         data_dir=tmp_path / "missing-data",
         teacher="cache",
-        settings=load_settings(),
+        settings=load_settings().model_copy(update={"teacher_cache_seed_path": None}),
     )
 
     assert payload["status"] == "fail"
