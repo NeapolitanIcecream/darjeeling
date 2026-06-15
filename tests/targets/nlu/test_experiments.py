@@ -6,7 +6,11 @@ import pytest
 
 from darjeeling.artifacts.store import ArtifactStore
 from darjeeling.targets.nlu.compiler.l3_prompt_optimizer import l3_prompt_artifact_hash
-from darjeeling.targets.nlu.experiments import apply_experiment_settings, experiment_spec
+from darjeeling.targets.nlu.experiments import (
+    apply_experiment_settings,
+    experiment_metadata,
+    experiment_spec,
+)
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
 from darjeeling.targets.nlu.main_cli import (
     _execute_experiment_run,
@@ -22,19 +26,30 @@ def test_experiment_settings_apply_l2_ablations() -> None:
     settings = load_settings()
 
     no_guard = apply_experiment_settings(settings, experiment_spec("no-guard"))
+    no_audit = apply_experiment_settings(settings, experiment_spec("no-audit"))
     no_l2 = apply_experiment_settings(settings, experiment_spec("no-l2"))
+    l2_global = apply_experiment_settings(settings, experiment_spec("l2-global-student"))
+    l2_expert = apply_experiment_settings(settings, experiment_spec("l2-expert-bank"))
     l2_mlp = apply_experiment_settings(settings, experiment_spec("l2-mlp"))
     l2_tuned = apply_experiment_settings(settings, experiment_spec("l2-tuned"))
     l2_tuned_lower_miss = apply_experiment_settings(
         settings,
         experiment_spec("l2-tuned-lower-miss"),
     )
+    l3_disabled = apply_experiment_settings(settings, experiment_spec("l3-disabled"))
+    l3_shadow = apply_experiment_settings(settings, experiment_spec("l3-shadow"))
+    l3_guarded = apply_experiment_settings(settings, experiment_spec("l3-guarded"))
 
     assert no_guard.l2_guard_mode == "always_accept"
     assert no_guard.l2_max_wrong_accept_rate == 1.0
     assert no_guard.promotion_accuracy_epsilon == 1.0
     assert no_guard.force_promote_artifacts is True
+    assert no_audit.lower_layer_audit_mode == "disabled"
     assert no_l2.l2_enabled is False
+    assert l2_global.l2_enabled is True
+    assert l2_global.l2_expert_bank_enabled is False
+    assert l2_expert.l2_enabled is True
+    assert l2_expert.l2_expert_bank_enabled is True
     assert l2_mlp.l2_intent_model_family == "mlp"
     assert l2_mlp.l2_mlp_hidden_layer_sizes == (64,)
     assert l2_mlp.l2_max_iter == 300
@@ -45,14 +60,46 @@ def test_experiment_settings_apply_l2_ablations() -> None:
     assert l2_tuned.l2_training_scope == "teacher_train"
     assert l2_tuned_lower_miss.l2_training_scope == "lower_miss"
     assert l2_tuned_lower_miss.l2_tuning_mode == "optuna"
+    assert l3_disabled.local_slm_mode == "disabled"
+    assert l3_shadow.local_slm_mode == "shadow"
+    assert l3_guarded.local_slm_mode == "guarded"
+    assert settings.lower_layer_audit_mode == "always"
     assert settings.l2_guard_mode == "learned"
     assert settings.l2_intent_model_family == "sgd_logreg"
     assert settings.l2_max_wrong_accept_rate < 1.0
     assert settings.force_promote_artifacts is False
     assert settings.l2_enabled is True
+    assert settings.l2_expert_bank_enabled is True
+    assert settings.local_slm_mode == "disabled"
 
 
-def test_run_settings_payload_records_non_secret_settings_only(tmp_path: Path) -> None:
+def test_l2_experiment_specs_record_distinct_settings_metadata(tmp_path: Path) -> None:
+    global_student = experiment_metadata(
+        experiment_spec("l2-global-student"),
+        stream="zipf-heavy",
+        max_requests=3,
+        compile_every=2,
+        teacher="cache",
+        data_dir=str(tmp_path / "data"),
+    )
+    expert_bank = experiment_metadata(
+        experiment_spec("l2-expert-bank"),
+        stream="zipf-heavy",
+        max_requests=3,
+        compile_every=2,
+        teacher="cache",
+        data_dir=str(tmp_path / "data"),
+    )
+
+    assert global_student["settings_overrides"] == {"l2_expert_bank_enabled": False}
+    assert expert_bank["settings_overrides"] == {"l2_expert_bank_enabled": True}
+
+
+def test_run_settings_payload_records_non_secret_settings_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.main_cli._current_git_commit",
+        lambda: "abc123def456",
+    )
     settings = load_settings().model_copy(
         update={
             "openai_api_key": "secret",
@@ -78,6 +125,7 @@ def test_run_settings_payload_records_non_secret_settings_only(tmp_path: Path) -
     assert payload["target_schema_version"] == "nlu-target-v1"
     assert payload["openai_model"] == "model-from-test"
     assert payload["l4_input_usd_per_million"] == 2.0
+    assert payload["commit_hash"] == "abc123def456"
 
 
 def test_execute_experiment_run_writes_metadata_and_report(
@@ -220,6 +268,39 @@ def test_l3_preflight_guarded_missing_benchmark_fails(tmp_path: Path) -> None:
     assert check["status"] == "fail"
     assert check["readiness"] == "benchmark_missing"
     assert check["runtime_blocking"] is True
+
+
+def test_experiment_preflight_applies_l3_guarded_spec_before_checks(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    data_dir.mkdir()
+    run_dir.mkdir()
+    (data_dir / "train.jsonl").write_text('{"request_id":"r1"}\n', encoding="utf-8")
+    (run_dir / "teacher_cache.jsonl").write_text(
+        json.dumps(
+            {
+                "utterance": "beta request",
+                "teacher_frame": {"intent": "intent_beta", "slots": {}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = _experiment_preflight_payload(
+        run_dir=run_dir,
+        data_dir=data_dir,
+        teacher="cache",
+        settings=apply_experiment_settings(load_settings(), experiment_spec("l3-guarded")),
+        experiment=experiment_spec("l3-guarded"),
+    )
+
+    assert payload["experiment"] == "l3-guarded"
+    assert payload["settings_overrides"] == {"local_slm_mode": "guarded"}
+    l3_check = next(check for check in payload["checks"] if check["name"] == "l3.local_slm")
+    assert l3_check["status"] == "fail"
+    assert l3_check["mode"] == "guarded"
+    assert l3_check["runtime_blocking"] is True
 
 
 def test_l3_preflight_interprets_benchmark_artifact_by_mode(tmp_path: Path) -> None:

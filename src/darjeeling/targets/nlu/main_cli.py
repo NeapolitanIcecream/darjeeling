@@ -118,6 +118,23 @@ def _load_cli_settings():
     return load_settings(_settings_path)
 
 
+def _current_git_commit() -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    commit = completed.stdout.strip()
+    return commit or None
+
+
 @app.command()
 def run(
     stream: Annotated[
@@ -246,6 +263,7 @@ def _run_settings_payload(
         "data_dir": str(data_dir),
         "target_name": target_name,
         "target_schema_version": target_schema_version,
+        "commit_hash": _current_git_commit(),
     }
 
 
@@ -1751,6 +1769,180 @@ def experiment_no_l2(
     )
 
 
+@experiments_app.command("no-audit")
+def experiment_no_audit(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Experiment run directory."),
+    ] = Path("runs/no-audit"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+) -> None:
+    _run_single_experiment(
+        "no-audit",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
+@experiments_app.command("l2-global-student")
+def experiment_l2_global_student(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Experiment run directory."),
+    ] = Path("runs/l2-global-student"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+) -> None:
+    _run_single_experiment(
+        "l2-global-student",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
+@experiments_app.command("l2-expert-bank")
+def experiment_l2_expert_bank(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Experiment run directory."),
+    ] = Path("runs/l2-expert-bank"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+) -> None:
+    _run_single_experiment(
+        "l2-expert-bank",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
+@experiments_app.command("l3-disabled")
+def experiment_l3_disabled(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Experiment run directory."),
+    ] = Path("runs/l3-disabled"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+) -> None:
+    _run_single_experiment(
+        "l3-disabled",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
+@experiments_app.command("l3-shadow")
+def experiment_l3_shadow(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Experiment run directory."),
+    ] = Path("runs/l3-shadow"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+) -> None:
+    _run_single_experiment(
+        "l3-shadow",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
+@experiments_app.command("l3-guarded")
+def experiment_l3_guarded(
+    run_dir: Annotated[
+        Path,
+        typer.Option(help="Experiment run directory."),
+    ] = Path("runs/l3-guarded"),
+    stream: Annotated[str | None, typer.Option(help="Override experiment stream.")] = None,
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    compile_every: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher: Annotated[
+        str,
+        typer.Option(help="Teacher mode: live, cache, or live-or-cache."),
+    ] = "live-or-cache",
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed data directory produced by prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+) -> None:
+    _run_single_experiment(
+        "l3-guarded",
+        run_dir=run_dir,
+        stream=stream,
+        max_requests=max_requests,
+        compile_every=compile_every,
+        teacher=teacher,
+        data_dir=data_dir,
+    )
+
+
 @experiments_app.command("hard-buffer")
 def experiment_hard_buffer(
     run_dir: Annotated[
@@ -1859,10 +2051,19 @@ def experiment_suite(
     ] = DEFAULT_PROCESSED_DATA_DIR,
     parallel: Annotated[int, typer.Option(min=1, help="Maximum concurrent experiments.")] = 2,
     compare: Annotated[bool, typer.Option(help="Generate comparison report after success.")] = True,
+    include_guarded_l3: Annotated[
+        bool,
+        typer.Option(
+            "--include-guarded-l3/--skip-guarded-l3",
+            help="Append l3-guarded to the default suite after guarded L3 preflight passes.",
+        ),
+    ] = False,
 ) -> None:
     """Run an experiment suite with subprocess-level parallelism."""
 
     selected = list(experiment or DEFAULT_EXPERIMENT_SUITE)
+    if experiment is None and include_guarded_l3 and "l3-guarded" not in selected:
+        selected.append("l3-guarded")
     run_root.mkdir(parents=True, exist_ok=True)
     suite_payload = {
         "schema_version": "experiment-suite-v1",
@@ -1872,6 +2073,8 @@ def experiment_suite(
         "teacher": teacher,
         "data_dir": str(data_dir),
         "parallel": parallel,
+        "include_guarded_l3": include_guarded_l3,
+        "commit_hash": _current_git_commit(),
     }
     (run_root / "suite.json").write_text(
         json.dumps(suite_payload, indent=2, sort_keys=True) + "\n",
@@ -1931,16 +2134,25 @@ def experiment_preflight(
         bool,
         typer.Option(help="Build the configured L1 Rust crate during preflight."),
     ] = False,
+    experiment: Annotated[
+        str | None,
+        typer.Option("--experiment", help="Apply an experiment spec before checking readiness."),
+    ] = None,
 ) -> None:
     """Check local readiness before running experiments."""
 
     settings = _load_cli_settings()
+    spec: ExperimentSpec | None = None
+    if experiment is not None:
+        spec = experiment_spec(experiment)
+        settings = apply_experiment_settings(settings, spec)
     payload = _experiment_preflight_payload(
         run_dir=run_dir,
         data_dir=data_dir,
         teacher=teacher,
         settings=settings,
         check_l1_build=check_l1_build,
+        experiment=spec,
     )
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1957,6 +2169,7 @@ def _experiment_preflight_payload(
     teacher: str,
     settings,
     check_l1_build: bool = False,
+    experiment: ExperimentSpec | None = None,
 ) -> dict:
     checks = [
         _preflight_data_check(data_dir),
@@ -1972,6 +2185,8 @@ def _experiment_preflight_payload(
         "run_dir": str(run_dir),
         "data_dir": str(data_dir),
         "teacher": teacher,
+        "experiment": experiment.name if experiment is not None else "",
+        "settings_overrides": experiment.settings_overrides if experiment is not None else {},
         "checks": checks,
     }
 
@@ -2179,12 +2394,14 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
 
 DEFAULT_EXPERIMENT_SUITE = (
     "main-evolution",
-    "direct-l4-optimization",
-    "l2-family",
-    "no-guard",
-    "no-l2",
-    "hard-buffer",
     "workload-locality",
+    "no-guard",
+    "no-audit",
+    "no-l2",
+    "l2-global-student",
+    "l2-expert-bank",
+    "l3-disabled",
+    "l3-shadow",
 )
 
 

@@ -74,10 +74,40 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
             "Diagnostic ablation that promotes always-accept L2 artifacts in an isolated run."
         ),
     ),
+    "no-audit": ExperimentSpec(
+        name="no-audit",
+        settings_overrides={"lower_layer_audit_mode": "disabled"},
+        description="Disable lower-layer audit while leaving the serving cascade unchanged.",
+    ),
     "no-l2": ExperimentSpec(
         name="no-l2",
         settings_overrides={"l2_enabled": False},
         description="Ablate L2 training, artifact promotion, and runtime routing.",
+    ),
+    "l2-global-student": ExperimentSpec(
+        name="l2-global-student",
+        settings_overrides={"l2_expert_bank_enabled": False},
+        description="Use the global L2 student without expert-bank wrapping.",
+    ),
+    "l2-expert-bank": ExperimentSpec(
+        name="l2-expert-bank",
+        settings_overrides={"l2_expert_bank_enabled": True},
+        description="Make the default L2 expert-bank path explicit for comparisons.",
+    ),
+    "l3-disabled": ExperimentSpec(
+        name="l3-disabled",
+        settings_overrides={"local_slm_mode": "disabled"},
+        description="Disable local SLM routing for an explicit L3 ablation.",
+    ),
+    "l3-shadow": ExperimentSpec(
+        name="l3-shadow",
+        settings_overrides={"local_slm_mode": "shadow"},
+        description="Run local SLM in shadow mode without final routing authority.",
+    ),
+    "l3-guarded": ExperimentSpec(
+        name="l3-guarded",
+        settings_overrides={"local_slm_mode": "guarded"},
+        description="Enable guarded local SLM routing when preflight benchmark evidence exists.",
     ),
     "workload-locality": ExperimentSpec(
         name="workload-locality",

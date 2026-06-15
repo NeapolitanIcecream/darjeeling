@@ -1020,6 +1020,28 @@ def test_generate_experiment_comparison_report_summarizes_runs(tmp_path: Path) -
     assert "promoted_with_layer_regression" in html_text
 
 
+def test_no_audit_comparison_reports_zero_audit_cost(tmp_path: Path) -> None:
+    run_dir = tmp_path / "no-audit"
+    run_dir.mkdir()
+    _write_comparison_trace(
+        run_dir,
+        experiment="no-audit",
+        stream="zipf-heavy",
+        chosen_layer="L1",
+        final_frame=Frame(intent="intent_alpha"),
+        gold_frame=Frame(intent="intent_alpha"),
+    )
+
+    result = generate_experiment_comparison_report(
+        [run_dir],
+        tmp_path / "comparison",
+    )
+
+    rows = list(csv.DictReader(result.comparison_csv_path.open(encoding="utf-8")))
+    assert rows[0]["experiment"] == "no-audit"
+    assert rows[0]["audit_cost_per_100"] == "0.0"
+
+
 def _write_comparison_trace(
     run_dir: Path,
     *,
