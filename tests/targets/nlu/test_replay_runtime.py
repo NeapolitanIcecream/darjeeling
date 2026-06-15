@@ -12,7 +12,7 @@ from darjeeling.targets.nlu.layers.l2_student import (
 )
 from darjeeling.targets.nlu.layers.l3_local_slm import L3PromptArtifact
 from darjeeling.targets.nlu.replay import run_replay
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, TraceRecord
 from darjeeling.targets.nlu.settings import load_settings
 
 
@@ -102,6 +102,134 @@ def test_run_replay_writes_traces_with_rust_l1_and_l4_cache(tmp_path: Path) -> N
     assert beta_layers == ["L0", "L1", "L3", "L4"]
     assert traces[1]["layer_results"][2]["metadata"]["actual_mode"] == "disabled"
     assert traces[0]["gold_frame"] is not None
+
+
+def test_run_replay_resume_existing_appends_missing_stream_suffix(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    data_dir.mkdir()
+    run_dir.mkdir()
+    records = [
+        DataRecord(
+            request_id="r1",
+            utterance="alpha request",
+            gold_frame=Frame(intent="intent_alpha"),
+        ),
+        DataRecord(
+            request_id="r2",
+            utterance="beta request",
+            gold_frame=Frame(intent="intent_beta"),
+        ),
+        DataRecord(
+            request_id="r3",
+            utterance="gamma request",
+            gold_frame=Frame(intent="intent_gamma"),
+        ),
+    ]
+    (data_dir / "train.jsonl").write_text(
+        "".join(record.model_dump_json() + "\n" for record in records),
+        encoding="utf-8",
+    )
+    (run_dir / "teacher_cache.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "utterance": record.utterance,
+                        "teacher_frame": record.gold_frame.model_dump(mode="json"),
+                    }
+                )
+                for record in records
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    first = run_replay(
+        stream="sequential",
+        max_requests=1,
+        teacher_mode="cache",
+        run_dir=run_dir,
+        data_dir=data_dir,
+        settings=load_settings(),
+    )
+    assert first.requests == 1
+
+    resumed = run_replay(
+        stream="sequential",
+        max_requests=3,
+        teacher_mode="cache",
+        run_dir=run_dir,
+        data_dir=data_dir,
+        settings=load_settings(),
+        resume_existing=True,
+    )
+
+    assert resumed.requests == 3
+    traces = [
+        json.loads(line)
+        for line in (run_dir / "traces.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [trace["request_id"] for trace in traces] == ["r1", "r2", "r3"]
+    assert resumed.layer_counts["L4"] == 3
+
+
+def test_run_replay_resume_existing_rejects_mismatched_prefix(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "run"
+    data_dir.mkdir()
+    run_dir.mkdir()
+    records = [
+        DataRecord(
+            request_id="r1",
+            utterance="alpha request",
+            gold_frame=Frame(intent="intent_alpha"),
+        ),
+        DataRecord(
+            request_id="r2",
+            utterance="beta request",
+            gold_frame=Frame(intent="intent_beta"),
+        ),
+    ]
+    (data_dir / "train.jsonl").write_text(
+        "".join(record.model_dump_json() + "\n" for record in records),
+        encoding="utf-8",
+    )
+    (run_dir / "teacher_cache.jsonl").write_text(
+        json.dumps(
+            {
+                "utterance": "alpha request",
+                "teacher_frame": {"intent": "intent_alpha", "slots": {}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "traces.jsonl").write_text(
+        TraceRecord(
+            request_id="r2",
+            utterance="beta request",
+            gold_frame=Frame(intent="intent_beta"),
+            teacher_frame=Frame(intent="intent_beta"),
+            chosen_layer="L4",
+            final_frame=Frame(intent="intent_beta"),
+            layer_results=[],
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="existing trace prefix does not match"):
+        run_replay(
+            stream="sequential",
+            max_requests=2,
+            teacher_mode="cache",
+            run_dir=run_dir,
+            data_dir=data_dir,
+            settings=load_settings(),
+            resume_existing=True,
+        )
 
 
 def test_run_replay_uses_l2_artifact_between_l1_and_l4(tmp_path: Path) -> None:

@@ -100,6 +100,7 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 error_console = Console(stderr=True)
 _settings_path: Path | None = None
+_EXPERIMENT_RESUME_ENV = "DARJEELING_EXPERIMENT_RESUME_EXISTING"
 
 
 @app.callback()
@@ -134,6 +135,10 @@ def _current_git_commit() -> str | None:
         return None
     commit = completed.stdout.strip()
     return commit or None
+
+
+def _experiment_resume_existing() -> bool:
+    return os.environ.get(_EXPERIMENT_RESUME_ENV, "").lower() in {"1", "true", "yes"}
 
 
 @app.command()
@@ -214,6 +219,7 @@ def _execute_replay_run(
     data_dir: Path,
     target: str = "nlu",
     settings,
+    resume_existing: bool = False,
 ):
     target_spec = target_registry.get_target(target)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -240,6 +246,7 @@ def _execute_replay_run(
         data_dir=data_dir,
         settings=settings,
         compile_every=compile_every,
+        resume_existing=resume_existing,
     )
 
 
@@ -2060,6 +2067,13 @@ def experiment_suite(
             help="Append l3-guarded to the default suite after guarded L3 preflight passes.",
         ),
     ] = False,
+    resume_existing: Annotated[
+        bool,
+        typer.Option(
+            "--resume-existing/--no-resume-existing",
+            help="Resume from existing trace prefixes in run directories after interrupted live runs.",
+        ),
+    ] = False,
 ) -> None:
     """Run an experiment suite with subprocess-level parallelism."""
 
@@ -2076,6 +2090,7 @@ def experiment_suite(
         "data_dir": str(data_dir),
         "parallel": parallel,
         "include_guarded_l3": include_guarded_l3,
+        "resume_existing": resume_existing,
         "commit_hash": _current_git_commit(),
     }
     (run_root / "suite.json").write_text(
@@ -2090,6 +2105,7 @@ def experiment_suite(
         compile_every=compile_every,
         teacher=teacher,
         data_dir=data_dir,
+        resume_existing=resume_existing,
     )
     results = _run_experiment_suite_commands(commands, parallel=parallel)
     (run_root / "results.json").write_text(
@@ -2461,6 +2477,7 @@ def _experiment_suite_commands(
     compile_every: int,
     teacher: str,
     data_dir: Path,
+    resume_existing: bool = False,
 ) -> list[dict]:
     commands: list[dict] = []
     for experiment_name in experiments:
@@ -2484,14 +2501,15 @@ def _experiment_suite_commands(
                 str(data_dir),
             ]
         )
-        commands.append(
-            {
-                "experiment": experiment_name,
-                "command": command,
-                "run_dir": run_root / experiment_name,
-                "log_path": run_root / experiment_name / "suite.log",
-            }
-        )
+        command_spec = {
+            "experiment": experiment_name,
+            "command": command,
+            "run_dir": run_root / experiment_name,
+            "log_path": run_root / experiment_name / "suite.log",
+        }
+        if resume_existing:
+            command_spec["env"] = {_EXPERIMENT_RESUME_ENV: "1"}
+        commands.append(command_spec)
     return commands
 
 
@@ -2506,12 +2524,14 @@ def _run_experiment_suite_command(command_spec: dict) -> dict:
     log_path = Path(command_spec["log_path"])
     run_dir.mkdir(parents=True, exist_ok=True)
     command = [str(part) for part in command_spec["command"]]
+    env = os.environ.copy()
+    env.update(command_spec.get("env", {}))
     completed = subprocess.run(
         command,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         check=False,
     )
     log_path.write_text(completed.stdout or "", encoding="utf-8")
@@ -2592,7 +2612,9 @@ def _execute_experiment_run(
 ) -> None:
     settings = apply_experiment_settings(_load_cli_settings(), spec)
     run_dir.mkdir(parents=True, exist_ok=True)
-    _reset_experiment_run_state(run_dir)
+    resume_existing = _experiment_resume_existing()
+    if not resume_existing:
+        _reset_experiment_run_state(run_dir)
     (run_dir / "experiment.json").write_text(
         json.dumps(
             experiment_metadata(
@@ -2619,6 +2641,7 @@ def _execute_experiment_run(
             data_dir=data_dir,
             target="nlu",
             settings=settings,
+            resume_existing=resume_existing,
         )
         report_result = generate_run_report(run_dir)
     except (FileNotFoundError, LocalSLMError, MissingTeacherError, ValueError) as exc:

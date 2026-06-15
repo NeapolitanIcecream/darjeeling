@@ -171,6 +171,54 @@ def test_experiment_suite_can_append_guarded_l3_after_preflight(
     assert captured["commands"][-1]["experiment"] == "l3-guarded"
 
 
+def test_experiment_suite_resume_existing_passes_resume_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_run_suite(commands, *, parallel):
+        captured["commands"] = commands
+        return [
+            {
+                "experiment": command["experiment"],
+                "command": command["command"],
+                "run_dir": str(command["run_dir"]),
+                "log_path": str(command["log_path"]),
+                "return_code": 0,
+            }
+            for command in commands
+        ]
+
+    monkeypatch.setattr(cli, "_run_experiment_suite_commands", fake_run_suite)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "experiment",
+            "suite",
+            "--run-root",
+            str(tmp_path),
+            "--experiment",
+            "main-evolution",
+            "--max-requests",
+            "12",
+            "--compile-every",
+            "6",
+            "--resume-existing",
+            "--no-compare",
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = json.loads((tmp_path / "suite.json").read_text(encoding="utf-8"))
+    assert suite["resume_existing"] is True
+    assert captured["commands"][0]["env"] == {
+        "DARJEELING_EXPERIMENT_RESUME_EXISTING": "1"
+    }
+
+
 def test_experiment_suite_writes_results_json_before_reporting_failures(
     tmp_path: Path,
     monkeypatch,

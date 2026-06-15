@@ -53,6 +53,7 @@ def run_replay(
     settings: Settings,
     compile_every: int | None = None,
     target: NluTarget | None = None,
+    resume_existing: bool = False,
 ) -> ReplaySummary:
     target = target or NluTarget()
     records = load_processed_records(data_dir)
@@ -71,6 +72,11 @@ def run_replay(
     traces_path = run_dir / "traces.jsonl"
     trace_writer = TraceWriter(traces_path)
     layer_counts: dict[str, int] = {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0}
+    existing_traces = read_traces(traces_path) if resume_existing else []
+    if existing_traces:
+        _validate_resume_prefix(existing_traces, stream_items, traces_path=traces_path)
+        for trace in existing_traces:
+            layer_counts[trace.chosen_layer] = layer_counts.get(trace.chosen_layer, 0) + 1
 
     runtime_layers = _build_runtime_layers(
         target=target,
@@ -80,7 +86,8 @@ def run_replay(
         teacher_layer=l4,
     )
     try:
-        for index, item in enumerate(stream_items, start=1):
+        completed = len(existing_traces)
+        for index, item in enumerate(stream_items[completed:], start=completed + 1):
             record = item.record
             utterance = record.utterance
             route_result = route_nlu_layers(runtime_layers, utterance=utterance)
@@ -139,10 +146,30 @@ def run_replay(
         _close_runtime_layers(runtime_layers)
 
     return ReplaySummary(
-        requests=len(stream_items),
+        requests=len(read_traces(traces_path)),
         layer_counts=layer_counts,
         traces_path=traces_path,
     )
+
+
+def _validate_resume_prefix(
+    existing_traces: list[TraceRecord],
+    stream_items: list[StreamItem],
+    *,
+    traces_path: Path,
+) -> None:
+    if len(existing_traces) > len(stream_items):
+        raise ValueError(
+            f"cannot resume {traces_path}: existing traces exceed requested workload "
+            f"({len(existing_traces)} > {len(stream_items)})"
+        )
+    for index, (trace, item) in enumerate(zip(existing_traces, stream_items), start=1):
+        record = item.record
+        if trace.request_id != record.request_id or trace.utterance != record.utterance:
+            raise ValueError(
+                f"cannot resume {traces_path}: existing trace prefix does not match "
+                f"selected stream at position {index}"
+            )
 
 
 def load_processed_records(data_dir: Path, *, split: str = "train") -> list[DataRecord]:
