@@ -59,6 +59,13 @@ def test_experiment_suite_builds_parallel_subprocess_plan(
     assert suite["max_requests"] == 12
     assert suite["compile_every"] == 6
     assert suite["commit_hash"] == "abc123def456"
+    results = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    assert results["schema_version"] == "experiment-suite-results-v1"
+    assert [item["experiment"] for item in results["results"]] == [
+        "main-evolution",
+        "l2-family",
+    ]
+    assert all(item["return_code"] == 0 for item in results["results"])
     assert captured["parallel"] == 2
     assert [command["experiment"] for command in captured["commands"]] == [
         "main-evolution",
@@ -162,6 +169,48 @@ def test_experiment_suite_can_append_guarded_l3_after_preflight(
     assert suite["experiments"] == [*cli.DEFAULT_EXPERIMENT_SUITE, "l3-guarded"]
     assert suite["include_guarded_l3"] is True
     assert captured["commands"][-1]["experiment"] == "l3-guarded"
+
+
+def test_experiment_suite_writes_results_json_before_reporting_failures(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fake_run_suite(commands, *, parallel):
+        return [
+            {
+                "experiment": command["experiment"],
+                "command": command["command"],
+                "run_dir": str(command["run_dir"]),
+                "log_path": str(command["log_path"]),
+                "return_code": 2,
+            }
+            for command in commands
+        ]
+
+    monkeypatch.setattr(cli, "_run_experiment_suite_commands", fake_run_suite)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "experiment",
+            "suite",
+            "--run-root",
+            str(tmp_path),
+            "--experiment",
+            "main-evolution",
+            "--max-requests",
+            "12",
+            "--compile-every",
+            "6",
+            "--no-compare",
+        ],
+    )
+
+    assert result.exit_code == 2
+    results = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    assert results["results"][0]["experiment"] == "main-evolution"
+    assert results["results"][0]["return_code"] == 2
 
 
 @pytest.mark.parametrize(

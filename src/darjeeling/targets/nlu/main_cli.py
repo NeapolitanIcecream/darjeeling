@@ -2092,6 +2092,19 @@ def experiment_suite(
         data_dir=data_dir,
     )
     results = _run_experiment_suite_commands(commands, parallel=parallel)
+    (run_root / "results.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "experiment-suite-results-v1",
+                "suite_path": str(run_root / "suite.json"),
+                "results": results,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     failed = [result for result in results if result["return_code"] != 0]
     if failed:
         for result in failed:
