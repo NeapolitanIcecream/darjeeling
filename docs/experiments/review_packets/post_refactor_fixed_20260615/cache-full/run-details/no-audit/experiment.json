@@ -1,0 +1,13 @@
+{
+  "compile_every": 500,
+  "data_dir": "data/processed/massive_en_us",
+  "description": "Disable lower-layer audit while leaving the serving cascade unchanged.",
+  "experiment": "no-audit",
+  "max_requests": 3000,
+  "settings_overrides": {
+    "lower_layer_audit_mode": "disabled"
+  },
+  "stream": "zipf-heavy",
+  "substreams": [],
+  "teacher": "cache"
+}

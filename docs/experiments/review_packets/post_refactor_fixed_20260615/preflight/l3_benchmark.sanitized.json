@@ -1,0 +1,34 @@
+{
+  "accepted": 0,
+  "backend": {
+    "actual_device": "mps:0",
+    "device_policy": "auto",
+    "load_time_ms": 3479.8105410300195,
+    "loaded": true,
+    "model_name": "Qwen/Qwen2.5-0.5B-Instruct"
+  },
+  "confidence_avg": 0.3333333333333333,
+  "confidence_p50": 0.0,
+  "confidence_p95": 0.8999999999999999,
+  "config": {
+    "confidence_threshold": 0.7,
+    "device_policy": "auto",
+    "max_new_tokens": 64,
+    "mode": "guarded",
+    "model_name": "Qwen/Qwen2.5-0.5B-Instruct",
+    "prompt_version": "l3-prompt-v1"
+  },
+  "corpus": "default_l3_smoke",
+  "duration_ms": 7237.639207975008,
+  "failures": 0,
+  "generation_avg_ms": 2412.495000016255,
+  "generation_p50_ms": 1295.8918330259621,
+  "generation_p95_ms": 4414.114558277652,
+  "parse_failures": 0,
+  "repair_count": 2,
+  "requests": 3,
+  "schema_version": "l3-benchmark-v1",
+  "status": "success",
+  "throughput_qps": 0.4144997994227677,
+  "would_accept": 0
+}

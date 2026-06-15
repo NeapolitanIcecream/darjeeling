@@ -1,0 +1,15 @@
+{
+  "compile_every": 500,
+  "data_dir": "data/processed/massive_en_us",
+  "description": "Run the same configuration across multiple locality streams.",
+  "experiment": "workload-locality",
+  "max_requests": 3000,
+  "settings_overrides": {},
+  "stream": "zipf-mild",
+  "substreams": [
+    "uniform",
+    "zipf-mild",
+    "zipf-heavy"
+  ],
+  "teacher": "cache"
+}

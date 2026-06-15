@@ -1,0 +1,22 @@
+{
+  "commit_hash": "5850281df0b4",
+  "compile_every": 500,
+  "data_dir": "data/processed/massive_en_us",
+  "experiments": [
+    "main-evolution",
+    "workload-locality",
+    "no-guard",
+    "no-audit",
+    "no-l2",
+    "l2-global-student",
+    "l2-expert-bank",
+    "l3-disabled",
+    "l3-shadow",
+    "l3-guarded"
+  ],
+  "include_guarded_l3": true,
+  "max_requests": 3000,
+  "parallel": 1,
+  "schema_version": "experiment-suite-v1",
+  "teacher": "cache"
+}

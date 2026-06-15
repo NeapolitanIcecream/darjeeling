@@ -1,0 +1,17 @@
+{
+  "commit_hash": "f028add9a1b5",
+  "compile_every": 100,
+  "data_dir": "data/processed/massive_en_us",
+  "experiments": [
+    "no-l2",
+    "l2-global-student",
+    "l2-expert-bank",
+    "main-evolution"
+  ],
+  "include_guarded_l3": false,
+  "max_requests": 500,
+  "parallel": 1,
+  "resume_existing": true,
+  "schema_version": "experiment-suite-v1",
+  "teacher": "live"
+}

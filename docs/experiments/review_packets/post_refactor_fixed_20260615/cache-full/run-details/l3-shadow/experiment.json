@@ -1,0 +1,13 @@
+{
+  "compile_every": 500,
+  "data_dir": "data/processed/massive_en_us",
+  "description": "Run local SLM in shadow mode without final routing authority.",
+  "experiment": "l3-shadow",
+  "max_requests": 3000,
+  "settings_overrides": {
+    "local_slm_mode": "shadow"
+  },
+  "stream": "zipf-heavy",
+  "substreams": [],
+  "teacher": "cache"
+}

@@ -1,0 +1,153 @@
+{
+  "bottlenecks": [
+    {
+      "code": "weak_l2_guard_calibration",
+      "evidence": "L2 wrong accepts 6/13 (0.462) against teacher/gold-visible traces",
+      "label": "weak L2 guard calibration",
+      "severity": "warning"
+    }
+  ],
+  "cost_summary": {
+    "audit_l4": {
+      "calls": 1540.0,
+      "calls_per_100": 51.33333333333333,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.0,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "serving_fields_avoided": 101.0,
+    "serving_full_l4": {
+      "calls": 1359.0,
+      "calls_per_100": 45.300000000000004,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.008041039109230042,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "serving_residual_l4": {
+      "calls": 101.0,
+      "calls_per_100": 3.3666666666666663,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.01979200169444084,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "teacher_labeling_l4": {
+      "calls": 0.0,
+      "calls_per_100": 0.0,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.0,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    }
+  },
+  "field_summary": {
+    "correct_weak_fields_avoiding_full_l4": 92.0,
+    "correct_weak_fields_avoiding_full_l4_per_100": 3.0666666666666664,
+    "l4_conflict_rate": 0.0014220255964607362,
+    "l4_field_conflicts": 9.0,
+    "layers": {
+      "L0": {
+        "accepted": 3232.0,
+        "accuracy": 1.0,
+        "correct": 3232.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L1": {
+        "accepted": 0.0,
+        "accuracy": 1.0,
+        "correct": 0.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L2": {
+        "accepted": 125.0,
+        "accuracy": 0.888,
+        "correct": 111.0,
+        "wrong": 14.0,
+        "wrong_rate": 0.002212039816716701
+      },
+      "L3": {
+        "accepted": 0.0,
+        "accuracy": 1.0,
+        "correct": 0.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L4": {
+        "accepted": 2980.0,
+        "accuracy": 1.0,
+        "correct": 2980.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      }
+    },
+    "residual_l4_verified_fields": 92.0,
+    "residual_l4_verified_fields_per_100": 3.0666666666666664,
+    "total_expected_fields": 6329.0,
+    "weak_accepted_fields": 3357.0,
+    "weak_correct_fields": 3343.0,
+    "weak_field_accuracy": 0.9958296097706285,
+    "weak_field_coverage": 0.5304155474798546,
+    "weak_wrong_fields": 14.0,
+    "wrong_accepted_field_rate": 0.002212039816716701
+  },
+  "frame_exact_match": 0.998,
+  "gold_labeled_requests": 3000,
+  "l1_benchmark": {
+    "accepted": 0,
+    "accepted_share": 0.0,
+    "binary_path": "src/darjeeling/targets/nlu/native/l1_empty_programbank/target/debug/darjeeling-l1-programbank",
+    "binary_size_bytes": 992184,
+    "corpus": "trace_unique_utterances",
+    "crate_dir": "src/darjeeling/targets/nlu/native/l1_empty_programbank",
+    "duration_ms": 172.36362502444535,
+    "integration_avg_ms": 1.2875133234047098,
+    "integration_p50_ms": 0.02193753607571125,
+    "integration_p95_ms": 0.04966599517501891,
+    "native_avg_us": 0.0,
+    "native_max_us": 0,
+    "native_p50_us": 0.0,
+    "native_p95_us": 0.0,
+    "program_path_counts": {
+      "abstain": 128
+    },
+    "requests": 128,
+    "schema_version": "l1-benchmark-v1",
+    "source_size_bytes": 6430,
+    "status": "success",
+    "throughput_qps": 775.4769518443371
+  },
+  "l3_benchmark": null,
+  "layer_counts": {
+    "L0": 1527,
+    "L1": 0,
+    "L2": 13,
+    "L3": 0,
+    "L4": 1460
+  },
+  "layer_shares": {
+    "L0": 0.509,
+    "L1": 0.0,
+    "L2": 0.004333333333333333,
+    "L3": 0.0,
+    "L4": 0.4866666666666667
+  },
+  "promotion_summary": {
+    "attempts": 6,
+    "promoted_generations": 6,
+    "promoted_with_layer_regression": 0
+  },
+  "requests": 3000,
+  "schema_version": "nlu-run-quality-v1",
+  "total_latency_ms": {
+    "p50": 0.005770998541265726,
+    "p95": 3.0813979275990286
+  }
+}

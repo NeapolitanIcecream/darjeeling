@@ -1,0 +1,13 @@
+{
+  "compile_every": 500,
+  "data_dir": "data/processed/massive_en_us",
+  "description": "Disable local SLM routing for an explicit L3 ablation.",
+  "experiment": "l3-disabled",
+  "max_requests": 3000,
+  "settings_overrides": {
+    "local_slm_mode": "disabled"
+  },
+  "stream": "zipf-heavy",
+  "substreams": [],
+  "teacher": "cache"
+}

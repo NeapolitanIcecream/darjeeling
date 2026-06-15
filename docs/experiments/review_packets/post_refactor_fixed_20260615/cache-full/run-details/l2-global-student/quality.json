@@ -1,0 +1,153 @@
+{
+  "bottlenecks": [
+    {
+      "code": "weak_l2_guard_calibration",
+      "evidence": "L2 wrong accepts 6/13 (0.462) against teacher/gold-visible traces",
+      "label": "weak L2 guard calibration",
+      "severity": "warning"
+    }
+  ],
+  "cost_summary": {
+    "audit_l4": {
+      "calls": 1540.0,
+      "calls_per_100": 51.33333333333333,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.0,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "serving_fields_avoided": 0.0,
+    "serving_full_l4": {
+      "calls": 1460.0,
+      "calls_per_100": 48.66666666666667,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.00666698906570673,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "serving_residual_l4": {
+      "calls": 0.0,
+      "calls_per_100": 0.0,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.0,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "teacher_labeling_l4": {
+      "calls": 0.0,
+      "calls_per_100": 0.0,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.0,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    }
+  },
+  "field_summary": {
+    "correct_weak_fields_avoiding_full_l4": 0.0,
+    "correct_weak_fields_avoiding_full_l4_per_100": 0.0,
+    "l4_conflict_rate": 0.0,
+    "l4_field_conflicts": 0.0,
+    "layers": {
+      "L0": {
+        "accepted": 3232.0,
+        "accuracy": 1.0,
+        "correct": 3232.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L1": {
+        "accepted": 0.0,
+        "accuracy": 1.0,
+        "correct": 0.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L2": {
+        "accepted": 24.0,
+        "accuracy": 0.7916666666666666,
+        "correct": 19.0,
+        "wrong": 5.0,
+        "wrong_rate": 0.0007900142202559646
+      },
+      "L3": {
+        "accepted": 0.0,
+        "accuracy": 1.0,
+        "correct": 0.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L4": {
+        "accepted": 3072.0,
+        "accuracy": 1.0,
+        "correct": 3072.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      }
+    },
+    "residual_l4_verified_fields": 0.0,
+    "residual_l4_verified_fields_per_100": 0.0,
+    "total_expected_fields": 6329.0,
+    "weak_accepted_fields": 3256.0,
+    "weak_correct_fields": 3251.0,
+    "weak_field_accuracy": 0.9984643734643734,
+    "weak_field_coverage": 0.5144572602306842,
+    "weak_wrong_fields": 5.0,
+    "wrong_accepted_field_rate": 0.0007900142202559646
+  },
+  "frame_exact_match": 0.998,
+  "gold_labeled_requests": 3000,
+  "l1_benchmark": {
+    "accepted": 0,
+    "accepted_share": 0.0,
+    "binary_path": "src/darjeeling/targets/nlu/native/l1_empty_programbank/target/debug/darjeeling-l1-programbank",
+    "binary_size_bytes": 992184,
+    "corpus": "trace_unique_utterances",
+    "crate_dir": "src/darjeeling/targets/nlu/native/l1_empty_programbank",
+    "duration_ms": 197.28387508075684,
+    "integration_avg_ms": 1.4834075336693786,
+    "integration_p50_ms": 0.018270511645823717,
+    "integration_p95_ms": 0.026178988628089428,
+    "native_avg_us": 0.0,
+    "native_max_us": 0,
+    "native_p50_us": 0.0,
+    "native_p95_us": 0.0,
+    "program_path_counts": {
+      "abstain": 128
+    },
+    "requests": 128,
+    "schema_version": "l1-benchmark-v1",
+    "source_size_bytes": 6430,
+    "status": "success",
+    "throughput_qps": 673.236274399014
+  },
+  "l3_benchmark": null,
+  "layer_counts": {
+    "L0": 1527,
+    "L1": 0,
+    "L2": 13,
+    "L3": 0,
+    "L4": 1460
+  },
+  "layer_shares": {
+    "L0": 0.509,
+    "L1": 0.0,
+    "L2": 0.004333333333333333,
+    "L3": 0.0,
+    "L4": 0.4866666666666667
+  },
+  "promotion_summary": {
+    "attempts": 6,
+    "promoted_generations": 6,
+    "promoted_with_layer_regression": 0
+  },
+  "requests": 3000,
+  "schema_version": "nlu-run-quality-v1",
+  "total_latency_ms": {
+    "p50": 0.005770474672317505,
+    "p95": 2.9622749949339786
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "compile_every": 500,
+  "data_dir": "data/processed/massive_en_us",
+  "description": "Use the global L2 student without expert-bank wrapping.",
+  "experiment": "l2-global-student",
+  "max_requests": 3000,
+  "settings_overrides": {
+    "l2_expert_bank_enabled": false
+  },
+  "stream": "zipf-heavy",
+  "substreams": [],
+  "teacher": "cache"
+}

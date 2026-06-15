@@ -1,0 +1,11 @@
+{
+  "compile_every": 500,
+  "data_dir": "data/processed/massive_en_us",
+  "description": "Full cascade evolution curve on Zipf-heavy stream.",
+  "experiment": "main-evolution",
+  "max_requests": 3000,
+  "settings_overrides": {},
+  "stream": "zipf-heavy",
+  "substreams": [],
+  "teacher": "cache"
+}

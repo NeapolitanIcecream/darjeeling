@@ -1,0 +1,44 @@
+{
+  "excluded": [
+    "traces.jsonl",
+    "teacher_cache.jsonl",
+    "suite.log",
+    "reports/hard_cases.jsonl",
+    "reports/promotions.jsonl",
+    "reports/summary.md",
+    "reports/curves.html",
+    "reports/artifacts.csv",
+    "artifacts/**"
+  ],
+  "included": {
+    "per_run": [
+      "experiment.json",
+      "settings.sanitized.json",
+      "quality.json",
+      "metrics.csv"
+    ],
+    "preflight": [
+      "preflight/preflight-cache.json",
+      "preflight/preflight-live.json",
+      "preflight/preflight-l3-guarded.json",
+      "preflight/l3_benchmark.sanitized.json"
+    ],
+    "suites": [
+      "cache-full/suite.json",
+      "cache-full/results.sanitized.json",
+      "cache-full/comparison.csv",
+      "live-residual-500/suite.json",
+      "live-residual-500/results.sanitized.json",
+      "live-residual-500/comparison.csv"
+    ]
+  },
+  "packet_root": "docs/experiments/review_packets/post_refactor_fixed_20260615",
+  "sanitization": [
+    "Replaced absolute repository paths with $REPO in JSON artifacts.",
+    "Removed openai_base_url and openai_api_key_present from sanitized settings.",
+    "Dropped per-request L3 benchmark request_results.",
+    "Kept aggregate metrics, suite metadata, comparison rows, quality reports, and metrics CSVs."
+  ],
+  "schema_version": "darjeeling-review-packet-v1",
+  "source_run_root": "runs/post-refactor-fixed-20260615-0954"
+}

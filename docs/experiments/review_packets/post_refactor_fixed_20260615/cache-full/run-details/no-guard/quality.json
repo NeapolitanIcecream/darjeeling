@@ -1,0 +1,153 @@
+{
+  "bottlenecks": [
+    {
+      "code": "weak_l2_guard_calibration",
+      "evidence": "L2 wrong accepts 769/872 (0.882) against teacher/gold-visible traces",
+      "label": "weak L2 guard calibration",
+      "severity": "warning"
+    }
+  ],
+  "cost_summary": {
+    "audit_l4": {
+      "calls": 2399.0,
+      "calls_per_100": 79.96666666666667,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.0,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "serving_fields_avoided": 101.0,
+    "serving_full_l4": {
+      "calls": 500.0,
+      "calls_per_100": 16.666666666666664,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.0035913777537643927,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "serving_residual_l4": {
+      "calls": 101.0,
+      "calls_per_100": 3.3666666666666663,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.019332976080477238,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    },
+    "teacher_labeling_l4": {
+      "calls": 0.0,
+      "calls_per_100": 0.0,
+      "cost_usd": 0.0,
+      "cost_usd_per_100_requests": 0.0,
+      "p95_ms": 0.0,
+      "tokens": 0.0,
+      "tokens_per_100": 0.0
+    }
+  },
+  "field_summary": {
+    "correct_weak_fields_avoiding_full_l4": 92.0,
+    "correct_weak_fields_avoiding_full_l4_per_100": 3.0666666666666664,
+    "l4_conflict_rate": 0.0014220255964607362,
+    "l4_field_conflicts": 9.0,
+    "layers": {
+      "L0": {
+        "accepted": 3232.0,
+        "accuracy": 1.0,
+        "correct": 3232.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L1": {
+        "accepted": 0.0,
+        "accuracy": 1.0,
+        "correct": 0.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L2": {
+        "accepted": 1940.0,
+        "accuracy": 0.4850515463917526,
+        "correct": 941.0,
+        "wrong": 999.0,
+        "wrong_rate": 0.15784484120714173
+      },
+      "L3": {
+        "accepted": 0.0,
+        "accuracy": 1.0,
+        "correct": 0.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      },
+      "L4": {
+        "accepted": 1162.0,
+        "accuracy": 1.0,
+        "correct": 1162.0,
+        "wrong": 0.0,
+        "wrong_rate": 0.0
+      }
+    },
+    "residual_l4_verified_fields": 92.0,
+    "residual_l4_verified_fields_per_100": 3.0666666666666664,
+    "total_expected_fields": 6329.0,
+    "weak_accepted_fields": 5172.0,
+    "weak_correct_fields": 4173.0,
+    "weak_field_accuracy": 0.8068445475638051,
+    "weak_field_coverage": 0.8171907094327698,
+    "weak_wrong_fields": 999.0,
+    "wrong_accepted_field_rate": 0.15784484120714173
+  },
+  "frame_exact_match": 0.7436666666666667,
+  "gold_labeled_requests": 3000,
+  "l1_benchmark": {
+    "accepted": 0,
+    "accepted_share": 0.0,
+    "binary_path": "src/darjeeling/targets/nlu/native/l1_empty_programbank/target/debug/darjeeling-l1-programbank",
+    "binary_size_bytes": 992184,
+    "corpus": "trace_unique_utterances",
+    "crate_dir": "src/darjeeling/targets/nlu/native/l1_empty_programbank",
+    "duration_ms": 212.23175001796335,
+    "integration_avg_ms": 1.5940784587655799,
+    "integration_p50_ms": 0.03506249049678445,
+    "integration_p95_ms": 0.05732885329052807,
+    "native_avg_us": 0.0,
+    "native_max_us": 0,
+    "native_p50_us": 0.0,
+    "native_p95_us": 0.0,
+    "program_path_counts": {
+      "abstain": 128
+    },
+    "requests": 128,
+    "schema_version": "l1-benchmark-v1",
+    "source_size_bytes": 6430,
+    "status": "success",
+    "throughput_qps": 625.6849813924905
+  },
+  "l3_benchmark": null,
+  "layer_counts": {
+    "L0": 1527,
+    "L1": 0,
+    "L2": 872,
+    "L3": 0,
+    "L4": 601
+  },
+  "layer_shares": {
+    "L0": 0.509,
+    "L1": 0.0,
+    "L2": 0.2906666666666667,
+    "L3": 0.0,
+    "L4": 0.20033333333333334
+  },
+  "promotion_summary": {
+    "attempts": 6,
+    "promoted_generations": 6,
+    "promoted_with_layer_regression": 0
+  },
+  "requests": 3000,
+  "schema_version": "nlu-run-quality-v1",
+  "total_latency_ms": {
+    "p50": 0.005999929271638393,
+    "p95": 2.8468337550293654
+  }
+}
