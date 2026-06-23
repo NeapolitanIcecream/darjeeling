@@ -20,12 +20,20 @@ from darjeeling.targets.nlu.adapters.clinc150 import prepare_clinc150_dataset
 from darjeeling.targets.nlu.adapters.massive import prepare_massive_dataset
 from darjeeling.targets.nlu.clinc150_phase1 import (
     DEFAULT_CLINC150_PROMPTS,
+    DEFAULT_CLINC150_THRESHOLDS,
     build_clinc150_gate_records,
     build_clinc150_label_cards,
     clinc150_metrics_from_teacher_rows,
     compare_repeated_teacher_rows,
+    evaluate_clinc150_l2,
     load_teacher_rows,
     run_clinc150_teacher_live_eval,
+    sample_clinc150_records,
+    train_clinc150_l2,
+    training_examples_from_gold_records,
+    training_examples_from_teacher_rows,
+    write_clinc150_l2_eval_artifacts,
+    write_clinc150_l2_train_artifacts,
     write_clinc150_teacher_cost_ledger,
 )
 from darjeeling.targets.nlu.compiler.l2_distiller import l2_config_from_settings
@@ -69,6 +77,7 @@ from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     build_l1_binary,
 )
 from darjeeling.targets.nlu.layers.l2_student import (
+    L2StudentBundle,
     L2StudentConfig,
     train_l2_student,
     training_examples_from_teacher_traces,
@@ -91,7 +100,6 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
 from darjeeling.targets.nlu.replay import (
     load_processed_records,
     run_replay,
-    select_stream,
     task_schema_from_records,
     write_run_settings,
 )
@@ -135,6 +143,29 @@ def main(
 
 def _load_cli_settings():
     return load_settings(_settings_path)
+
+
+def _parse_float_tuple(value: str) -> tuple[float, ...]:
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if not parts:
+        raise typer.BadParameter("at least one float value is required")
+    try:
+        return tuple(float(part) for part in parts)
+    except ValueError as exc:
+        raise typer.BadParameter(f"invalid float list: {value}") from exc
+
+
+def _parse_int_tuple(value: str) -> tuple[int, ...]:
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if not parts:
+        raise typer.BadParameter("at least one integer value is required")
+    try:
+        result = tuple(int(part) for part in parts)
+    except ValueError as exc:
+        raise typer.BadParameter(f"invalid integer list: {value}") from exc
+    if any(part <= 0 for part in result):
+        raise typer.BadParameter("integer values must be positive")
+    return result
 
 
 def _current_git_commit() -> str | None:
@@ -458,7 +489,12 @@ def clinc150_teacher_eval(
     split: Annotated[str, typer.Option(help="Processed data split to evaluate.")] = "validation",
     stream: Annotated[
         str,
-        typer.Option(help="Sample stream type: sequential, uniform, zipf-mild, or zipf-heavy."),
+        typer.Option(
+            help=(
+                "Sample stream type: sequential, stratified, uniform, zipf-mild, "
+                "or zipf-heavy."
+            ),
+        ),
     ] = "sequential",
     max_requests: Annotated[int | None, typer.Option(min=1)] = None,
     prompt_version: Annotated[
@@ -480,19 +516,23 @@ def clinc150_teacher_eval(
             help="Resume from existing CLINC150 teacher eval details JSONL rows.",
         ),
     ] = False,
+    fail_on_gate: Annotated[
+        bool,
+        typer.Option(
+            "--fail-on-gate/--no-fail-on-gate",
+            help="Exit nonzero when CLINC150 gate-style teacher thresholds fail.",
+        ),
+    ] = True,
 ) -> None:
     """Run live CLINC150 teacher evaluation on a processed split or stream."""
 
     settings = _load_cli_settings()
     train_records = load_processed_records(data_dir, split="train")
     records = load_processed_records(data_dir, split=split)
-    sample_records = (
-        [
-            item.record
-            for item in select_stream(records, stream=stream, max_requests=max_requests)
-        ]
-        if max_requests is not None
-        else records
+    sample_records = sample_clinc150_records(
+        records,
+        stream=stream,
+        max_requests=max_requests,
     )
     cards = (
         build_clinc150_label_cards(train_records)
@@ -519,7 +559,7 @@ def clinc150_teacher_eval(
     console.print(f"wrote {result.artifacts.summary_json_path}")
     console.print(f"wrote {cost_ledger_path}")
     console.print_json(data=result.artifacts.summary)
-    if not result.clinc_metrics.get("passed_teacher_gate"):
+    if fail_on_gate and not result.clinc_metrics.get("passed_teacher_gate"):
         raise typer.Exit(code=3)
 
 
@@ -559,6 +599,163 @@ def clinc150_teacher_metrics(
     out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     console.print(f"wrote {out}")
     console.print_json(data=result)
+
+
+@clinc150_app.command("l2-train")
+def clinc150_l2_train(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for CLINC150 L2 artifacts."),
+    ],
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed CLINC150 data directory."),
+    ] = Path("data/processed/clinc150_data_full"),
+    source: Annotated[
+        str,
+        typer.Option(help="Training source: gold or teacher."),
+    ] = "gold",
+    split: Annotated[
+        str,
+        typer.Option(help="Processed split for gold training examples."),
+    ] = "train",
+    teacher_details: Annotated[
+        Path | None,
+        typer.Option(help="Teacher details JSONL for teacher-distilled training."),
+    ] = None,
+    sample_stream: Annotated[
+        str,
+        typer.Option(help="Gold sample stream: sequential, stratified, uniform, or zipf-heavy."),
+    ] = "stratified",
+    max_examples: Annotated[int | None, typer.Option(min=1)] = None,
+    accept_threshold: Annotated[float, typer.Option(min=0.0, max=1.0)] = 0.99,
+    random_state: Annotated[int, typer.Option()] = 17,
+    intent_model_family: Annotated[
+        str,
+        typer.Option(help="L2 intent model family: sgd_logreg or mlp."),
+    ] = "sgd_logreg",
+    max_features: Annotated[int, typer.Option(min=1)] = 50_000,
+    max_iter: Annotated[int, typer.Option(min=1)] = 1000,
+    frame_source: Annotated[
+        str,
+        typer.Option(help="L2 frame source: student or retrieval."),
+    ] = "student",
+    mlp_hidden_layer_sizes: Annotated[
+        str,
+        typer.Option(help="Comma-separated MLP hidden layer sizes."),
+    ] = "64",
+    mlp_alpha: Annotated[float, typer.Option(min=0.0)] = 0.0001,
+    mlp_early_stopping: Annotated[bool, typer.Option()] = False,
+) -> None:
+    """Train a target-local CLINC150 diagnostic or teacher-distilled L2 bundle."""
+
+    if source not in {"gold", "teacher"}:
+        raise typer.BadParameter("source must be gold or teacher")
+    if source == "teacher" and teacher_details is None:
+        raise typer.BadParameter("--teacher-details is required when --source=teacher")
+
+    source_path: Path | None = None
+    if source == "gold":
+        records = load_processed_records(data_dir, split=split)
+        sample_records = sample_clinc150_records(
+            records,
+            stream=sample_stream,
+            max_requests=max_examples,
+        )
+        examples = training_examples_from_gold_records(sample_records)
+    else:
+        source_path = teacher_details
+        rows = load_teacher_rows(teacher_details)
+        if max_examples is not None:
+            rows = rows[:max_examples]
+        examples = training_examples_from_teacher_rows(rows)
+
+    config = L2StudentConfig(
+        accept_threshold=accept_threshold,
+        random_state=random_state,
+        min_examples=4,
+        slot_model_family="none",
+        frame_source=frame_source,
+        intent_model_family=intent_model_family,
+        max_features=max_features,
+        max_iter=max_iter,
+        mlp_hidden_layer_sizes=_parse_int_tuple(mlp_hidden_layer_sizes),
+        mlp_alpha=mlp_alpha,
+        mlp_early_stopping=mlp_early_stopping,
+    )
+    bundle = train_clinc150_l2(examples, config=config)
+    artifact = write_clinc150_l2_train_artifacts(
+        bundle=bundle,
+        examples=examples,
+        out_dir=out_dir,
+        training_source=source,
+        source_path=source_path,
+        split=split if source == "gold" else None,
+        sample_stream=sample_stream if source == "gold" else None,
+        max_examples=max_examples,
+    )
+    console.print(f"wrote {artifact.bundle_path}")
+    console.print(f"wrote {artifact.summary_path}")
+    console.print_json(data=artifact.summary)
+
+
+@clinc150_app.command("l2-eval")
+def clinc150_l2_eval(
+    bundle_path: Annotated[
+        Path,
+        typer.Option(help="Path to a saved CLINC150 L2 bundle."),
+    ],
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for CLINC150 L2 eval artifacts."),
+    ],
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed CLINC150 data directory."),
+    ] = Path("data/processed/clinc150_data_full"),
+    split: Annotated[str, typer.Option(help="Processed split to evaluate.")] = "validation",
+    stream: Annotated[
+        str,
+        typer.Option(
+            help="Eval stream: sequential, stratified, uniform, zipf-mild, or zipf-heavy.",
+        ),
+    ] = "sequential",
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher_details: Annotated[
+        Path | None,
+        typer.Option(help="Paired teacher details JSONL for all-L4 fallback metrics."),
+    ] = None,
+    thresholds: Annotated[
+        str,
+        typer.Option(help="Comma-separated L2 accept thresholds."),
+    ] = ",".join(str(value) for value in DEFAULT_CLINC150_THRESHOLDS),
+    write_details: Annotated[
+        bool,
+        typer.Option("--write-details/--no-write-details"),
+    ] = False,
+) -> None:
+    """Evaluate a saved CLINC150 L2 bundle with L0 disabled and optional L4 fallback rows."""
+
+    records = load_processed_records(data_dir, split=split)
+    sample_records = sample_clinc150_records(
+        records,
+        stream=stream,
+        max_requests=max_requests,
+    )
+    teacher_rows = load_teacher_rows(teacher_details) if teacher_details is not None else None
+    result = evaluate_clinc150_l2(
+        bundle=L2StudentBundle.load(bundle_path),
+        records=sample_records,
+        teacher_rows=teacher_rows,
+        thresholds=_parse_float_tuple(thresholds),
+        include_prediction_rows=write_details,
+    )
+    artifact = write_clinc150_l2_eval_artifacts(result=result, out_dir=out_dir)
+    console.print(f"wrote {artifact.summary_path}")
+    console.print(f"wrote {artifact.cost_latency_path}")
+    if artifact.details_jsonl_path is not None:
+        console.print(f"wrote {artifact.details_jsonl_path}")
+    console.print_json(data=artifact.summary)
 
 
 @teacher_app.command("eval-live")

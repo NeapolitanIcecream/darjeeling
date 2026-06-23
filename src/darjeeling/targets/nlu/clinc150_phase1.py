@@ -76,6 +76,21 @@ class Clinc150TeacherEvalArtifact:
     clinc_metrics: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Clinc150L2TrainArtifact:
+    bundle_path: Path
+    summary_path: Path
+    summary: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Clinc150L2EvalArtifact:
+    summary_path: Path
+    details_jsonl_path: Path | None
+    cost_latency_path: Path
+    summary: dict[str, Any]
+
+
 def write_clinc150_teacher_cost_ledger(
     *,
     out_dir: Path,
@@ -270,6 +285,52 @@ def _label_description(intent: str) -> str:
     if intent == CLINC150_OOS_INTENT:
         return "unsupported or out-of-scope request"
     return intent.replace("_", " ")
+
+
+def build_clinc150_stratified_records(
+    records: list[DataRecord],
+    *,
+    max_requests: int,
+) -> list[DataRecord]:
+    if max_requests < 1:
+        raise ValueError("max_requests must be at least 1")
+    by_intent: dict[str, list[DataRecord]] = defaultdict(list)
+    for record in records:
+        by_intent[record.gold_frame.intent].append(record)
+
+    selected: list[DataRecord] = []
+    depth = 0
+    intents = sorted(by_intent)
+    while len(selected) < max_requests:
+        added = False
+        for intent in intents:
+            examples = by_intent[intent]
+            if depth >= len(examples):
+                continue
+            selected.append(examples[depth])
+            added = True
+            if len(selected) >= max_requests:
+                break
+        if not added:
+            break
+        depth += 1
+    return selected
+
+
+def sample_clinc150_records(
+    records: list[DataRecord],
+    *,
+    stream: str,
+    max_requests: int | None,
+) -> list[DataRecord]:
+    if max_requests is None:
+        if stream != "sequential":
+            max_requests = len(records)
+        else:
+            return records
+    if stream == "stratified":
+        return build_clinc150_stratified_records(records, max_requests=max_requests)
+    return stream_clinc150_records(records, stream=stream, max_requests=max_requests)
 
 
 def run_clinc150_teacher_live_eval(
@@ -573,17 +634,62 @@ def train_clinc150_l2(
     *,
     random_state: int = 17,
     accept_threshold: float = 0.99,
+    config: L2StudentConfig | None = None,
 ) -> L2StudentBundle:
+    l2_config = config or L2StudentConfig(
+        accept_threshold=accept_threshold,
+        random_state=random_state,
+        min_examples=4,
+        slot_model_family="none",
+        frame_source="student",
+        max_iter=1000,
+    )
     return train_l2_student(
         examples,
-        L2StudentConfig(
-            accept_threshold=accept_threshold,
-            random_state=random_state,
-            min_examples=4,
-            slot_model_family="none",
-            frame_source="student",
-            max_iter=1000,
-        ),
+        l2_config,
+    )
+
+
+def write_clinc150_l2_train_artifacts(
+    *,
+    bundle: L2StudentBundle,
+    examples: list[L2TrainingExample],
+    out_dir: Path,
+    training_source: str,
+    source_path: Path | None = None,
+    split: str | None = None,
+    sample_stream: str | None = None,
+    max_examples: int | None = None,
+) -> Clinc150L2TrainArtifact:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bundle_path = out_dir / "l2_student.joblib"
+    bundle.save(bundle_path)
+    intents: dict[str, int] = defaultdict(int)
+    for example in examples:
+        intents[example.teacher_frame.intent] += 1
+    summary = {
+        "schema_version": "clinc150-l2-train-v1",
+        "training_source": training_source,
+        "source_path": str(source_path) if source_path is not None else None,
+        "split": split,
+        "sample_stream": sample_stream,
+        "max_examples": max_examples,
+        "examples": len(examples),
+        "intent_count": len(intents),
+        "oos_examples": intents.get(CLINC150_OOS_INTENT, 0),
+        "intents": dict(sorted(intents.items())),
+        "bundle_path": str(bundle_path),
+        "config": bundle.config.model_dump(mode="json"),
+    }
+    summary_path = out_dir / "clinc150_l2_train_summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return Clinc150L2TrainArtifact(
+        bundle_path=bundle_path,
+        summary_path=summary_path,
+        summary=summary,
     )
 
 
@@ -593,15 +699,13 @@ def evaluate_clinc150_l2(
     records: list[DataRecord],
     teacher_rows: list[dict[str, Any]] | None = None,
     thresholds: tuple[float, ...] = DEFAULT_CLINC150_THRESHOLDS,
+    include_prediction_rows: bool = False,
 ) -> dict[str, Any]:
     teacher_by_request_id = {
         row["request_id"]: row
         for row in teacher_rows or []
     }
-    prediction_rows = [
-        _l2_prediction_row(bundle=bundle, record=record)
-        for record in records
-    ]
+    prediction_rows = clinc150_l2_prediction_rows(bundle=bundle, records=records)
     threshold_rows = [
         _l2_threshold_metrics(
             prediction_rows,
@@ -610,7 +714,7 @@ def evaluate_clinc150_l2(
         )
         for threshold in thresholds
     ]
-    return {
+    result = {
         "schema_version": "clinc150-l2-eval-v1",
         "requests": len(prediction_rows),
         "accuracy": _rate(
@@ -635,9 +739,20 @@ def evaluate_clinc150_l2(
             ),
             sum(1 for row in prediction_rows if row["gold_intent"] == CLINC150_OOS_INTENT),
         ),
+        "teacher_fallback_rows": sum(
+            1 for row in prediction_rows if row["request_id"] in teacher_by_request_id
+        ),
+        "all_l4_baseline": _all_l4_baseline_metrics(
+            prediction_rows,
+            teacher_by_request_id=teacher_by_request_id,
+        ),
         "thresholds": threshold_rows,
         "selected_threshold": select_l2_threshold(threshold_rows),
+        "cost_latency_table": _cost_latency_table(threshold_rows),
     }
+    if include_prediction_rows:
+        result["prediction_rows"] = prediction_rows
+    return result
 
 
 def select_l2_threshold(
@@ -645,16 +760,72 @@ def select_l2_threshold(
     *,
     min_precision: float = 0.99,
     max_oos_false_accept_rate: float = 0.02,
+    min_accuracy_delta_vs_all_l4: float = -0.005,
 ) -> dict[str, Any] | None:
     candidates = [
         row
         for row in threshold_rows
         if (row["accepted_precision"] is not None and row["accepted_precision"] >= min_precision)
         and row["lower_layer_oos_false_accept_rate"] <= max_oos_false_accept_rate
+        and (
+            row.get("accuracy_delta_vs_all_l4") is None
+            or row["accuracy_delta_vs_all_l4"] >= min_accuracy_delta_vs_all_l4
+        )
     ]
     if not candidates:
         return None
     return max(candidates, key=lambda row: (row["accepted_coverage"], -row["threshold"]))
+
+
+def write_clinc150_l2_eval_artifacts(
+    *,
+    result: dict[str, Any],
+    out_dir: Path,
+) -> Clinc150L2EvalArtifact:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prediction_rows = result.get("prediction_rows")
+    summary = {
+        key: value
+        for key, value in result.items()
+        if key != "prediction_rows"
+    }
+    summary_path = out_dir / "clinc150_l2_eval_summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    details_path = None
+    if isinstance(prediction_rows, list):
+        details_path = out_dir / "clinc150_l2_predictions.jsonl"
+        details_path.write_text(
+            "".join(
+                json.dumps(row, sort_keys=True) + "\n"
+                for row in prediction_rows
+            ),
+            encoding="utf-8",
+        )
+    cost_latency_path = out_dir / "clinc150_l2_cost_latency_table.json"
+    cost_latency_path.write_text(
+        json.dumps(summary.get("cost_latency_table", []), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return Clinc150L2EvalArtifact(
+        summary_path=summary_path,
+        details_jsonl_path=details_path,
+        cost_latency_path=cost_latency_path,
+        summary=summary,
+    )
+
+
+def clinc150_l2_prediction_rows(
+    *,
+    bundle: L2StudentBundle,
+    records: list[DataRecord],
+) -> list[dict[str, Any]]:
+    return [
+        _l2_prediction_row(bundle=bundle, record=record)
+        for record in records
+    ]
 
 
 def _l2_prediction_row(*, bundle: L2StudentBundle, record: DataRecord) -> dict[str, Any]:
@@ -710,6 +881,20 @@ def _l2_threshold_metrics(
     l4_calls = sum(1 for row in final_rows if row["l4_called"])
     l4_tokens = sum(float(row["l4_tokens"]) for row in final_rows)
     l4_cost = sum(float(row["l4_cost_usd"]) for row in final_rows)
+    all_l4_rows = [
+        teacher_by_request_id.get(row["request_id"])
+        for row in prediction_rows
+    ]
+    paired_teacher_rows = [row for row in all_l4_rows if row is not None]
+    all_l4_tokens = sum(float(row.get("tokens", 0.0)) for row in paired_teacher_rows)
+    all_l4_cost = sum(float(row.get("cost_usd", 0.0)) for row in paired_teacher_rows)
+    all_l4_latencies = [
+        float(row.get("latency_ms", 0.0))
+        for row in paired_teacher_rows
+    ]
+    teacher_parse_failures = sum(
+        1 for row in paired_teacher_rows if row.get("parse_failure")
+    )
     oos_counts = _oos_counts_from_frames(
         gold_intents=[row["gold_intent"] for row in prediction_rows],
         predicted_intents=[row["final_intent"] for row in final_rows],
@@ -733,11 +918,63 @@ def _l2_threshold_metrics(
             if final_accuracy is not None and all_l4_accuracy is not None
             else None
         ),
+        "paired_teacher_rows": len(paired_teacher_rows),
+        "paired_teacher_coverage": _rate(len(paired_teacher_rows), requests),
+        "parse_schema_failures": teacher_parse_failures,
+        "parse_schema_failure_rate": (
+            _rate(teacher_parse_failures, len(paired_teacher_rows))
+            if paired_teacher_rows
+            else None
+        ),
+        "all_l4_calls_per_100_requests": 100.0 if teacher_by_request_id else None,
         "l4_calls_per_100_requests": (l4_calls / requests * 100.0) if requests else 0.0,
+        "l4_call_reduction_rate": (
+            1.0 - (l4_calls / requests)
+            if teacher_by_request_id and requests
+            else None
+        ),
+        "all_l4_tokens_per_request": (
+            all_l4_tokens / requests
+            if teacher_by_request_id and requests
+            else None
+        ),
         "l4_tokens_per_request": l4_tokens / requests if requests else 0.0,
+        "l4_tokens_reduction_rate": (
+            1.0 - (l4_tokens / all_l4_tokens)
+            if all_l4_tokens > 0.0
+            else None
+        ),
+        "all_l4_cost_usd_per_request": (
+            all_l4_cost / requests
+            if teacher_by_request_id and requests
+            else None
+        ),
         "l4_cost_usd_per_request": l4_cost / requests if requests else 0.0,
+        "l4_cost_reduction_rate": (
+            1.0 - (l4_cost / all_l4_cost)
+            if all_l4_cost > 0.0
+            else None
+        ),
+        "all_l4_latency_p50_ms": (
+            _percentile(all_l4_latencies, 50)
+            if teacher_by_request_id
+            else None
+        ),
+        "all_l4_latency_p95_ms": (
+            _percentile(all_l4_latencies, 95)
+            if teacher_by_request_id
+            else None
+        ),
         "latency_p50_ms": _percentile(latencies, 50),
         "latency_p95_ms": _percentile(latencies, 95),
+        "latency_p50_reduction_rate": _reduction_rate(
+            _percentile(latencies, 50),
+            _percentile(all_l4_latencies, 50) if all_l4_latencies else None,
+        ),
+        "latency_p95_reduction_rate": _reduction_rate(
+            _percentile(latencies, 95),
+            _percentile(all_l4_latencies, 95) if all_l4_latencies else None,
+        ),
         "oos_precision": oos_precision,
         "oos_recall": oos_recall,
         "oos_f1": _f1(oos_precision, oos_recall),
@@ -811,6 +1048,79 @@ def stream_clinc150_records(
     ]
 
 
+def _all_l4_baseline_metrics(
+    prediction_rows: list[dict[str, Any]],
+    *,
+    teacher_by_request_id: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not teacher_by_request_id:
+        return None
+    aligned_rows = [
+        teacher_by_request_id.get(row["request_id"])
+        for row in prediction_rows
+    ]
+    paired_rows = [row for row in aligned_rows if row is not None]
+    requests = len(prediction_rows)
+    correct = sum(
+        1
+        for prediction_row, teacher_row in zip(prediction_rows, aligned_rows, strict=True)
+        if teacher_row is not None
+        and not teacher_row.get("parse_failure")
+        and teacher_row.get("teacher_frame") == prediction_row["gold_frame"]
+    )
+    parse_failures = sum(1 for row in paired_rows if row.get("parse_failure"))
+    tokens = sum(float(row.get("tokens", 0.0)) for row in paired_rows)
+    cost = sum(float(row.get("cost_usd", 0.0)) for row in paired_rows)
+    latencies = [float(row.get("latency_ms", 0.0)) for row in paired_rows]
+    return {
+        "requests": requests,
+        "paired_teacher_rows": len(paired_rows),
+        "paired_teacher_coverage": _rate(len(paired_rows), requests),
+        "accuracy": _rate(correct, requests),
+        "parse_schema_failures": parse_failures,
+        "parse_schema_failure_rate": _rate(parse_failures, len(paired_rows)),
+        "tokens_per_request": tokens / requests if requests else 0.0,
+        "cost_usd_per_request": cost / requests if requests else 0.0,
+        "latency_p50_ms": _percentile(latencies, 50),
+        "latency_p95_ms": _percentile(latencies, 95),
+        "retry_recovered_rows": sum(1 for row in paired_rows if row.get("retry_recovered")),
+        "unknown_usage_attempts": sum(
+            int(row.get("unknown_usage_attempts", 0))
+            for row in paired_rows
+        ),
+    }
+
+
+def _cost_latency_table(threshold_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    fields = (
+        "threshold",
+        "accepted_coverage",
+        "accepted_precision",
+        "final_cascade_accuracy",
+        "accuracy_delta_vs_all_l4",
+        "all_l4_calls_per_100_requests",
+        "l4_calls_per_100_requests",
+        "l4_call_reduction_rate",
+        "all_l4_tokens_per_request",
+        "l4_tokens_per_request",
+        "l4_tokens_reduction_rate",
+        "all_l4_cost_usd_per_request",
+        "l4_cost_usd_per_request",
+        "l4_cost_reduction_rate",
+        "all_l4_latency_p50_ms",
+        "latency_p50_ms",
+        "latency_p50_reduction_rate",
+        "all_l4_latency_p95_ms",
+        "latency_p95_ms",
+        "latency_p95_reduction_rate",
+        "parse_schema_failure_rate",
+    )
+    return [
+        {field: row.get(field) for field in fields}
+        for row in threshold_rows
+    ]
+
+
 def _gold_intent(row: dict[str, Any]) -> str | None:
     gold_frame = row.get("gold_frame")
     return gold_frame.get("intent") if isinstance(gold_frame, dict) else None
@@ -863,6 +1173,12 @@ def _f1(precision: float | None, recall: float | None) -> float | None:
     if precision + recall == 0.0:
         return 0.0
     return 2 * precision * recall / (precision + recall)
+
+
+def _reduction_rate(new_value: float, baseline_value: float | None) -> float | None:
+    if baseline_value is None or baseline_value <= 0.0:
+        return None
+    return 1.0 - (new_value / baseline_value)
 
 
 def _percentile(values: list[float], percentile: float) -> float:

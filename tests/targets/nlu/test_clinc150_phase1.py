@@ -8,6 +8,7 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     Clinc150IntentTeacher,
     build_clinc150_gate_records,
     build_clinc150_label_cards,
+    build_clinc150_stratified_records,
     clinc150_metrics_from_teacher_rows,
     compare_repeated_teacher_rows,
     evaluate_clinc150_l2,
@@ -16,6 +17,9 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     select_l2_threshold,
     train_clinc150_l2,
     training_examples_from_gold_records,
+    training_examples_from_teacher_rows,
+    write_clinc150_l2_eval_artifacts,
+    write_clinc150_l2_train_artifacts,
 )
 from darjeeling.targets.nlu.data import DataRecord
 from darjeeling.targets.nlu.layers.l4_cloud_llm import TeacherCallResult
@@ -60,6 +64,20 @@ def test_clinc150_label_cards_use_train_examples_only() -> None:
             "examples": ["not supported"],
         },
     ]
+
+
+def test_clinc150_stratified_sample_round_robins_intents() -> None:
+    records = [
+        _record("a1", "alpha one", "alpha"),
+        _record("a2", "alpha two", "alpha"),
+        _record("b1", "beta one", "beta"),
+        _record("b2", "beta two", "beta"),
+        _record("o1", "unsupported one", "out_of_scope", abstain=True),
+    ]
+
+    sample = build_clinc150_stratified_records(records, max_requests=5)
+
+    assert [record.request_id for record in sample] == ["a1", "b1", "o1", "a2", "b2"]
 
 
 def test_clinc150_teacher_metrics_split_in_scope_oos_and_gate() -> None:
@@ -122,6 +140,26 @@ def test_clinc150_repeat_consistency_compares_parsed_teacher_frames() -> None:
     assert result["consistency"] == pytest.approx(0.5)
 
 
+def test_clinc150_teacher_rows_convert_to_l2_examples_and_skip_failures() -> None:
+    rows = [
+        _teacher_row("r1", "alpha", "alpha"),
+        {
+            **_teacher_row("r2", "beta", "beta"),
+            "parse_failure": True,
+        },
+        {
+            **_teacher_row("r3", "gamma", "gamma"),
+            "teacher_frame": None,
+        },
+    ]
+
+    examples = training_examples_from_teacher_rows(rows)
+
+    assert len(examples) == 1
+    assert examples[0].utterance == "r1"
+    assert examples[0].teacher_frame == Frame(intent="alpha", slots={}, is_abstain=False)
+
+
 def test_clinc150_l2_eval_selects_high_precision_threshold() -> None:
     train_records = [
         _record("t1", "alpha train one", "alpha"),
@@ -169,6 +207,76 @@ def test_clinc150_l2_eval_selects_high_precision_threshold() -> None:
     )
     assert selected is not None
     assert selected["threshold"] == 0.9
+
+
+def test_clinc150_l2_eval_reports_fallback_cost_latency_and_artifacts(tmp_path) -> None:
+    train_records = [
+        _record("t1", "alpha train one", "alpha"),
+        _record("t2", "alpha train two", "alpha"),
+        _record("t3", "beta train one", "beta"),
+        _record("t4", "beta train two", "beta"),
+        _record("t5", "unsupported thing", "out_of_scope", abstain=True),
+        _record("t6", "not in supported intents", "out_of_scope", abstain=True),
+    ]
+    eval_records = [
+        _record("e1", "alpha train one", "alpha", split="validation"),
+        _record("e2", "beta train two", "beta", split="validation"),
+        _record(
+            "e3",
+            "not in supported intents",
+            "out_of_scope",
+            split="validation",
+            abstain=True,
+        ),
+    ]
+    teacher_rows = [
+        _teacher_row("e1", "alpha", "alpha", tokens=20, cost_usd=0.02, latency_ms=100),
+        _teacher_row("e2", "beta", "beta", tokens=30, cost_usd=0.03, latency_ms=200),
+        _teacher_row(
+            "e3",
+            "out_of_scope",
+            "out_of_scope",
+            abstain=True,
+            tokens=40,
+            cost_usd=0.04,
+            latency_ms=300,
+        ),
+    ]
+    bundle = train_clinc150_l2(
+        training_examples_from_gold_records(train_records),
+        accept_threshold=0.0,
+    )
+
+    train_artifact = write_clinc150_l2_train_artifacts(
+        bundle=bundle,
+        examples=training_examples_from_gold_records(train_records),
+        out_dir=tmp_path / "train",
+        training_source="gold",
+        split="train",
+    )
+    result = evaluate_clinc150_l2(
+        bundle=bundle,
+        records=eval_records,
+        teacher_rows=teacher_rows,
+        thresholds=(0.0,),
+        include_prediction_rows=True,
+    )
+    eval_artifact = write_clinc150_l2_eval_artifacts(
+        result=result,
+        out_dir=tmp_path / "eval",
+    )
+
+    threshold = result["thresholds"][0]
+    assert train_artifact.summary["examples"] == 6
+    assert train_artifact.bundle_path.exists()
+    assert result["all_l4_baseline"]["cost_usd_per_request"] == pytest.approx(0.03)
+    assert threshold["all_l4_calls_per_100_requests"] == pytest.approx(100.0)
+    assert threshold["l4_call_reduction_rate"] == pytest.approx(1.0)
+    assert threshold["l4_cost_reduction_rate"] == pytest.approx(1.0)
+    assert eval_artifact.summary_path.exists()
+    assert eval_artifact.cost_latency_path.exists()
+    assert eval_artifact.details_jsonl_path is not None
+    assert eval_artifact.details_jsonl_path.exists()
 
 
 def test_clinc150_teacher_eval_writes_manifest_details_and_cost_ledger(
@@ -314,6 +422,9 @@ def _teacher_row(
     teacher_intent: str,
     *,
     abstain: bool = False,
+    tokens: int = 0,
+    cost_usd: float = 0.0,
+    latency_ms: float = 0.0,
 ) -> dict:
     gold_frame = Frame(intent=gold_intent, slots={}, is_abstain=abstain).model_dump(mode="json")
     teacher_frame = Frame(
@@ -329,6 +440,9 @@ def _teacher_row(
         "parse_failure": False,
         "frame_exact": gold_frame == teacher_frame,
         "intent_correct": gold_intent == teacher_intent,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "latency_ms": latency_ms,
     }
 
 
