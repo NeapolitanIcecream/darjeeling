@@ -178,18 +178,18 @@ the 500-row gate, was `$0.6994568`, below the `$10` repair budget.
 
 ## L2 And Stream Phases
 
-Not run.
+Not run yet.
 
-The plan made a reliable all-L4 teacher/fallback a prerequisite for L2
-distillation and stream cascade claims. Because both allowed teacher prompts
-missed the gate by a large margin, running teacher-distilled L2, L2+L4 fallback,
-full validation, locked test, uniform replay, sequential learning, or zipf-heavy
-replay would not answer the intended mechanism question. It would instead
-measure behavior under an unreliable teacher.
+The original plan made a reliable all-L4 teacher/fallback a prerequisite for L2
+distillation and stream cascade claims. The pre-repair run did not satisfy that
+prerequisite, so L2 and stream phases were correctly skipped at that time. After
+the reliability repair, `clinc150-intent-v2-label-cards` passes the teacher
+gate, so the next experiment should run diagnostic L2, teacher-distilled L2,
+L2+L4 fallback, full validation, locked test, uniform replay, sequential
+learning, and zipf-heavy replay.
 
-Gold-trained diagnostic L2 was also not run as a final result because the plan's
-stop condition triggered before Phase C. Target-local helper code exists for a
-future diagnostic ceiling, but no diagnostic number is reported here.
+Gold-trained diagnostic L2 has still not been run as a final result. It remains
+a diagnostic ceiling only, not a Darjeeling runtime artifact.
 
 ## Conclusion
 
