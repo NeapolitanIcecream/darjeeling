@@ -108,6 +108,37 @@ Secondary diagnostics:
 - teacher-distilled L2 should show the actual Darjeeling mechanism path;
 - learning curves should show whether more teacher-visible traces help.
 
+## L0 Isolation
+
+The primary experiment is about L2. Disable or bypass L0 exact/cache behavior in
+the main CLINC150 L2 and cascade measurements.
+
+Reason:
+
+- L0 can absorb exact repeats or easy cached requests before L2 sees them.
+- That would make lower-layer savings look better while obscuring whether L2
+  itself learned useful behavior.
+- It would also make L2 accepted coverage and L4-call reduction harder to
+  interpret across streams with different repeat rates.
+
+Required reporting scope:
+
+- Report `L2-only shadow` and `L2+L4 fallback` as the primary results.
+- Treat `all-L4` as the quality/cost baseline.
+- Do not include L0 hits in primary accepted coverage, L4 call reduction, cost
+  reduction, or latency reduction claims.
+- If a full Darjeeling cascade with L0 enabled is useful, report it only as a
+  secondary appendix and keep it clearly separated from the primary L2 result.
+
+Implementation guidance:
+
+- Prefer the target-local CLINC150 L2 evaluation helpers, which already compare
+  L2 predictions to teacher fallback rows without requiring the general runtime
+  L0 layer.
+- If reusing a runtime path that normally enables L0, add a simple experiment
+  flag or target-local path to bypass L0 for this benchmark. Do not delete or
+  globally disable L0.
+
 ## Non-Goals
 
 - Do not continue MASSIVE work.
@@ -185,6 +216,8 @@ should be able to:
 - evaluate a saved L2 bundle on validation/test/streams;
 - evaluate thresholds with teacher rows as all-L4 fallback;
 - write JSON summaries, optional details JSONL, and a cost/latency table.
+- keep primary metrics on an L0-disabled path so accepted coverage and savings
+  are attributable to L2.
 
 Reusing existing functions in `clinc150_phase1.py` is preferred. If the existing
 helpers are enough, keep code changes small.
@@ -310,7 +343,7 @@ For each, report:
 - requests;
 - all-L4 accuracy;
 - L2-only accuracy;
-- final cascade accuracy;
+- final L2+L4 cascade accuracy with L0 disabled;
 - delta vs all-L4;
 - L2 accepted coverage;
 - L2 accepted precision;
@@ -323,6 +356,7 @@ For each, report:
 
 Use paired cached teacher rows when comparing routing/cascade decisions. Use
 live runs only for missing teacher rows or updated cost/latency claims.
+Keep L0 disabled or bypassed for these primary stream comparisons.
 
 ## Phase F: Failure Analysis And Iteration
 
