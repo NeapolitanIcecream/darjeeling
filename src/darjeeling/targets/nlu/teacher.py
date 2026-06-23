@@ -19,6 +19,8 @@ TEACHER_PROMPT_V5_VALUE_COPY = "teacher-v5-value-copy"
 TEACHER_PROMPT_V6_SCHEMA_CHECKLIST = "teacher-v6-schema-checklist"
 TEACHER_PROMPT_V7_EVIDENCE_STABLE = "teacher-v7-evidence-stable"
 TEACHER_PROMPT_V8_EVIDENCE_COMPACT = "teacher-v8-evidence-compact"
+CLINC150_PROMPT_V1 = "clinc150-intent-v1"
+CLINC150_PROMPT_V2_LABEL_CARDS = "clinc150-intent-v2-label-cards"
 SUPPORTED_TEACHER_PROMPT_VERSIONS = (
     TEACHER_PROMPT_V1,
     TEACHER_PROMPT_V2_INTENT_FIRST,
@@ -28,6 +30,8 @@ SUPPORTED_TEACHER_PROMPT_VERSIONS = (
     TEACHER_PROMPT_V6_SCHEMA_CHECKLIST,
     TEACHER_PROMPT_V7_EVIDENCE_STABLE,
     TEACHER_PROMPT_V8_EVIDENCE_COMPACT,
+    CLINC150_PROMPT_V1,
+    CLINC150_PROMPT_V2_LABEL_CARDS,
 )
 
 
@@ -69,6 +73,11 @@ class NluTeacherAdapter:
 
 def build_teacher_system_prompt(task_schema: TaskSchema, *, prompt_version: str) -> str:
     ensure_supported_teacher_prompt_version(prompt_version)
+    if is_clinc150_teacher_prompt_version(prompt_version):
+        return build_clinc150_intent_system_prompt(
+            task_schema,
+            prompt_version=prompt_version,
+        )
     if prompt_version == TEACHER_PROMPT_V2_INTENT_FIRST:
         return _build_intent_first_full_frame_prompt(task_schema, prompt_version=prompt_version)
     if prompt_version == TEACHER_PROMPT_V3_SLOT_CONSERVATIVE:
@@ -167,6 +176,25 @@ def parse_teacher_frame(raw_response: str) -> Frame:
         ) from exc
 
 
+def parse_clinc150_teacher_frame(raw_response: str, *, task_schema: TaskSchema) -> Frame:
+    try:
+        payload = json.loads(raw_response)
+    except json.JSONDecodeError as exc:
+        raise NluTeacherParseError(f"teacher returned invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise NluTeacherParseError("CLINC150 teacher response must be a JSON object")
+    if set(payload) != {"intent"}:
+        raise NluTeacherParseError(
+            "CLINC150 teacher response must contain exactly one field: intent"
+        )
+    intent = payload["intent"]
+    if not isinstance(intent, str) or not intent:
+        raise NluTeacherParseError("CLINC150 teacher response requires non-empty intent")
+    if intent not in task_schema.intent_names:
+        raise NluTeacherParseError(f"CLINC150 teacher returned unsupported intent: {intent}")
+    return Frame(intent=intent, slots={}, is_abstain=intent == "out_of_scope")
+
+
 def parse_teacher_intent(raw_response: str, *, task_schema: TaskSchema) -> str:
     try:
         payload = json.loads(raw_response)
@@ -191,6 +219,64 @@ def ensure_supported_teacher_prompt_version(prompt_version: str) -> None:
             f"unsupported teacher prompt version {prompt_version!r}; "
             f"supported versions: {supported}"
         )
+
+
+def is_clinc150_teacher_prompt_version(prompt_version: str) -> bool:
+    return prompt_version in {CLINC150_PROMPT_V1, CLINC150_PROMPT_V2_LABEL_CARDS}
+
+
+def build_clinc150_intent_system_prompt(
+    task_schema: TaskSchema,
+    *,
+    prompt_version: str,
+    label_cards: list[dict[str, object]] | None = None,
+) -> str:
+    ensure_supported_teacher_prompt_version(prompt_version)
+    if prompt_version == CLINC150_PROMPT_V1:
+        return "\n".join(
+            [
+                "You are the L4 teacher for a CLINC150 intent classification task.",
+                "Return strict JSON only.",
+                "Do not include explanations, markdown, slots, or extra fields.",
+                "The JSON object must have exactly this shape:",
+                '{"intent": "intent_name"}',
+                "Choose exactly one allowed intent.",
+                "Use out_of_scope only when the utterance does not fit any in-scope intent.",
+                "Allowed intents:",
+                json.dumps(task_schema.intent_names, ensure_ascii=False, sort_keys=True),
+                f"Prompt version: {prompt_version}.",
+            ]
+        )
+    cards = label_cards or _default_label_cards(task_schema.intent_names)
+    return "\n".join(
+        [
+            "You are the L4 teacher for a CLINC150 intent classification task.",
+            "Return strict JSON only.",
+            "Do not include explanations, markdown, slots, or extra fields.",
+            "The JSON object must have exactly this shape:",
+            '{"intent": "intent_name"}',
+            "Choose exactly one allowed intent.",
+            "Use out_of_scope only when the utterance does not fit any in-scope intent.",
+            "Use these label cards. Examples, when present, are train-split examples only:",
+            json.dumps(cards, ensure_ascii=False, sort_keys=True),
+            f"Prompt version: {prompt_version}.",
+        ]
+    )
+
+
+def _default_label_cards(intent_names: list[str]) -> list[dict[str, object]]:
+    return [
+        {
+            "intent": intent,
+            "description": (
+                "unsupported or out-of-scope request"
+                if intent == "out_of_scope"
+                else intent.replace("_", " ")
+            ),
+            "examples": [],
+        }
+        for intent in intent_names
+    ]
 
 
 def _build_intent_first_full_frame_prompt(

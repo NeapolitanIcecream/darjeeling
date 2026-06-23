@@ -11,6 +11,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     TaskSchema,
     TeacherCache,
     TeacherParseError,
+    parse_clinc150_teacher_frame,
     parse_teacher_frame,
     parse_teacher_patch,
 )
@@ -133,6 +134,14 @@ def test_teacher_prompt_versions_render_distinct_prompts() -> None:
         schema,
         prompt_version="teacher-v8-evidence-compact",
     )
+    clinc150_v1 = build_teacher_system_prompt(
+        TaskSchema(intent_names=["intent_alpha", "out_of_scope"], slot_names=[]),
+        prompt_version="clinc150-intent-v1",
+    )
+    clinc150_v2 = build_teacher_system_prompt(
+        TaskSchema(intent_names=["intent_alpha", "out_of_scope"], slot_names=[]),
+        prompt_version="clinc150-intent-v2-label-cards",
+    )
 
     assert "Prompt version: teacher-v1." in current
     assert "decide the intent first" in intent_first
@@ -144,6 +153,9 @@ def test_teacher_prompt_versions_render_distinct_prompts() -> None:
     assert "filler time/date words" in evidence_stable
     assert "Return strict JSON only:" in evidence_compact
     assert "omit it; do not change a clear intent" in evidence_compact
+    assert "CLINC150 intent classification" in clinc150_v1
+    assert '{"intent": "intent_name"}' in clinc150_v1
+    assert "label cards" in clinc150_v2
     prompts = {
         current,
         intent_first,
@@ -153,13 +165,32 @@ def test_teacher_prompt_versions_render_distinct_prompts() -> None:
         schema_checklist,
         evidence_stable,
         evidence_compact,
+        clinc150_v1,
+        clinc150_v2,
     }
-    assert len(prompts) == 8
+    assert len(prompts) == 10
 
 
 def test_teacher_prompt_version_rejects_unknown_version() -> None:
     with pytest.raises(ValueError, match="unsupported teacher prompt version 'teacher-typo'"):
         ensure_supported_teacher_prompt_version("teacher-typo")
+
+
+def test_parse_clinc150_teacher_frame_requires_single_allowed_intent() -> None:
+    schema = TaskSchema(intent_names=["balance", "out_of_scope"], slot_names=[])
+
+    frame = parse_clinc150_teacher_frame('{"intent":"out_of_scope"}', task_schema=schema)
+
+    assert frame.intent == "out_of_scope"
+    assert frame.slots == {}
+    assert frame.is_abstain is True
+    with pytest.raises(TeacherParseError, match="exactly one field"):
+        parse_clinc150_teacher_frame(
+            '{"intent":"balance","slots":{}}',
+            task_schema=schema,
+        )
+    with pytest.raises(TeacherParseError, match="unsupported intent"):
+        parse_clinc150_teacher_frame('{"intent":"not_allowed"}', task_schema=schema)
 
 
 def test_parse_teacher_patch_accepts_residual_patch_json() -> None:

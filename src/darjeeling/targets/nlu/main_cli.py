@@ -16,7 +16,17 @@ from rich.console import Console
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.targets import registry as target_registry
+from darjeeling.targets.nlu.adapters.clinc150 import prepare_clinc150_dataset
 from darjeeling.targets.nlu.adapters.massive import prepare_massive_dataset
+from darjeeling.targets.nlu.clinc150_phase1 import (
+    DEFAULT_CLINC150_PROMPTS,
+    build_clinc150_gate_records,
+    build_clinc150_label_cards,
+    clinc150_metrics_from_teacher_rows,
+    compare_repeated_teacher_rows,
+    load_teacher_rows,
+    run_clinc150_teacher_live_eval,
+)
 from darjeeling.targets.nlu.compiler.l2_distiller import l2_config_from_settings
 from darjeeling.targets.nlu.compiler.l2_target_evolution import (
     DEFAULT_TARGET_EVOLVE_ROUNDS,
@@ -80,6 +90,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
 from darjeeling.targets.nlu.replay import (
     load_processed_records,
     run_replay,
+    select_stream,
     task_schema_from_records,
     write_run_settings,
 )
@@ -299,6 +310,9 @@ app.add_typer(teacher_app, name="teacher")
 massive_app = typer.Typer(no_args_is_help=True)
 app.add_typer(massive_app, name="massive")
 
+clinc150_app = typer.Typer(no_args_is_help=True)
+app.add_typer(clinc150_app, name="clinc150")
+
 
 @massive_app.command("prepare")
 def prepare_massive(
@@ -312,6 +326,206 @@ def prepare_massive(
 
     result = prepare_massive_dataset(locale=locale, out_dir=out)
     console.print(f"prepared {result['records']} records in {out}")
+
+
+@clinc150_app.command("prepare")
+def prepare_clinc150(
+    out: Annotated[
+        Path,
+        typer.Option(help="Output directory for processed CLINC150 parquet/jsonl files."),
+    ] = Path("data/processed/clinc150_data_full"),
+    source: Annotated[
+        str | None,
+        typer.Option(help="Optional local path or URL for data_full.json."),
+    ] = None,
+    expected_sha256: Annotated[
+        str | None,
+        typer.Option(help="Expected SHA256 for data_full.json; pass empty to skip."),
+    ] = None,
+) -> None:
+    """Download or read pinned CLINC150 data_full and process it for NLU replay."""
+
+    checksum = expected_sha256 if expected_sha256 else None
+    if expected_sha256 is None:
+        from darjeeling.targets.nlu.adapters.clinc150 import CLINC150_DATA_FULL_SHA256
+
+        checksum = CLINC150_DATA_FULL_SHA256
+    result = prepare_clinc150_dataset(
+        out_dir=out,
+        source=source,
+        expected_sha256=checksum,
+    )
+    console.print(f"prepared {result['records']} CLINC150 records in {out}")
+    console.print_json(data=result)
+
+
+@clinc150_app.command("teacher-gate")
+def clinc150_teacher_gate(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for CLINC150 teacher gate artifacts."),
+    ] = Path("runs/clinc150-phase1/teacher-gate-500"),
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed CLINC150 data directory."),
+    ] = Path("data/processed/clinc150_data_full"),
+    prompt_version: Annotated[
+        list[str] | None,
+        typer.Option("--prompt-version", help="Prompt version to evaluate; repeatable."),
+    ] = None,
+    max_workers: Annotated[
+        int,
+        typer.Option(min=1, help="Parallel live teacher calls."),
+    ] = 1,
+) -> None:
+    """Run the fixed 500-request CLINC150 validation teacher gate."""
+
+    settings = _load_cli_settings()
+    train_records = load_processed_records(data_dir, split="train")
+    validation_records = load_processed_records(data_dir, split="validation")
+    gate_records = build_clinc150_gate_records(validation_records)
+    task_schema = task_schema_from_records(validation_records)
+    label_cards = build_clinc150_label_cards(train_records)
+    prompt_versions = prompt_version or list(DEFAULT_CLINC150_PROMPTS)
+    results = []
+    for version in prompt_versions:
+        result = run_clinc150_teacher_live_eval(
+            records=gate_records,
+            task_schema=task_schema,
+            settings=settings,
+            split="validation",
+            stream="clinc150-gate-500",
+            prompt_version=version,
+            out_dir=out_dir / version,
+            label_cards=label_cards if version.endswith("label-cards") else None,
+            max_workers=max_workers,
+        )
+        results.append(
+            {
+                "prompt_version": version,
+                "summary_path": str(result.artifacts.summary_json_path),
+                "metrics_path": str(result.clinc_metrics_path),
+                **result.clinc_metrics,
+            }
+        )
+    comparison = {
+        "schema_version": "clinc150-teacher-gate-comparison-v1",
+        "request_ids": [record.request_id for record in gate_records],
+        "prompt_versions": prompt_versions,
+        "rows": results,
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    comparison_path = out_dir / "clinc150_teacher_gate_comparison.json"
+    comparison_path.write_text(
+        json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    console.print(f"wrote {comparison_path}")
+    console.print_json(data=comparison)
+    if not any(row.get("passed_teacher_gate") for row in results):
+        raise typer.Exit(code=3)
+
+
+@clinc150_app.command("teacher-eval")
+def clinc150_teacher_eval(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for CLINC150 teacher artifacts."),
+    ],
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed CLINC150 data directory."),
+    ] = Path("data/processed/clinc150_data_full"),
+    split: Annotated[str, typer.Option(help="Processed data split to evaluate.")] = "validation",
+    stream: Annotated[
+        str,
+        typer.Option(help="Sample stream type: sequential, uniform, zipf-mild, or zipf-heavy."),
+    ] = "sequential",
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    prompt_version: Annotated[
+        str,
+        typer.Option(help="CLINC150 teacher prompt version."),
+    ] = "clinc150-intent-v1",
+    label_cards: Annotated[
+        bool,
+        typer.Option(help="Include train-only label cards for label-card prompt."),
+    ] = True,
+    max_workers: Annotated[
+        int,
+        typer.Option(min=1, help="Parallel live teacher calls."),
+    ] = 1,
+) -> None:
+    """Run live CLINC150 teacher evaluation on a processed split or stream."""
+
+    settings = _load_cli_settings()
+    train_records = load_processed_records(data_dir, split="train")
+    records = load_processed_records(data_dir, split=split)
+    sample_records = (
+        [
+            item.record
+            for item in select_stream(records, stream=stream, max_requests=max_requests)
+        ]
+        if max_requests is not None
+        else records
+    )
+    cards = (
+        build_clinc150_label_cards(train_records)
+        if label_cards and prompt_version.endswith("label-cards")
+        else None
+    )
+    result = run_clinc150_teacher_live_eval(
+        records=sample_records,
+        task_schema=task_schema_from_records(records),
+        settings=settings,
+        split=split,
+        stream=stream,
+        prompt_version=prompt_version,
+        out_dir=out_dir,
+        label_cards=cards,
+        max_workers=max_workers,
+    )
+    console.print(f"wrote {result.artifacts.summary_json_path}")
+    console.print_json(data=result.artifacts.summary)
+    if not result.clinc_metrics.get("passed_teacher_gate"):
+        raise typer.Exit(code=3)
+
+
+@clinc150_app.command("teacher-repeat")
+def clinc150_teacher_repeat(
+    first: Annotated[Path, typer.Argument(help="First teacher details JSONL.")],
+    second: Annotated[Path, typer.Argument(help="Second teacher details JSONL.")],
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Optional JSON output path for consistency metrics."),
+    ] = None,
+) -> None:
+    """Compare two CLINC150 teacher detail files for repeated-call consistency."""
+
+    result = compare_repeated_teacher_rows(load_teacher_rows(first), load_teacher_rows(second))
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    console.print_json(data=result)
+
+
+@clinc150_app.command("teacher-metrics")
+def clinc150_teacher_metrics(
+    details: Annotated[Path, typer.Argument(help="Teacher details JSONL.")],
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Optional JSON output path for CLINC150 teacher metrics."),
+    ] = None,
+) -> None:
+    """Compute CLINC150-specific metrics from teacher detail rows."""
+
+    rows = load_teacher_rows(details)
+    result = clinc150_metrics_from_teacher_rows(rows)
+    if out is None:
+        out = details.parent / "clinc150_teacher_metrics.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    console.print(f"wrote {out}")
+    console.print_json(data=result)
 
 
 @teacher_app.command("eval-live")

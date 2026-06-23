@@ -26,9 +26,13 @@ from darjeeling.targets.nlu.teacher import (
     build_teacher_intent_system_prompt,
     build_teacher_slots_system_prompt,
     ensure_supported_teacher_prompt_version,
+    is_clinc150_teacher_prompt_version,
 )
 from darjeeling.targets.nlu.teacher import (
     build_teacher_system_prompt as build_nlu_teacher_system_prompt,
+)
+from darjeeling.targets.nlu.teacher import (
+    parse_clinc150_teacher_frame as parse_nlu_clinc150_teacher_frame,
 )
 from darjeeling.targets.nlu.teacher import (
     parse_teacher_frame as parse_nlu_teacher_frame,
@@ -52,6 +56,7 @@ __all__ = [
     "create_chat_completion_with_retry",
     "has_valid_teacher_cache",
     "parse_teacher_intent",
+    "parse_clinc150_teacher_frame",
     "parse_teacher_frame",
     "parse_teacher_patch",
     "require_live_or_cached_teacher",
@@ -156,7 +161,11 @@ class CloudLLMTeacher:
         )
         raw_response = _extract_chat_content(response)
         return TeacherCallResult(
-            frame=parse_teacher_frame(raw_response),
+            frame=(
+                parse_clinc150_teacher_frame(raw_response, task_schema=task_schema)
+                if is_clinc150_teacher_prompt_version(self.settings.teacher_prompt_version)
+                else parse_teacher_frame(raw_response)
+            ),
             raw_response=raw_response,
             usage=_extract_usage(response),
             model=getattr(response, "model", self.settings.openai_model),
@@ -556,6 +565,13 @@ def build_teacher_system_prompt(task_schema: TaskSchema, settings: Settings) -> 
 def parse_teacher_frame(raw_response: str) -> Frame:
     try:
         return parse_nlu_teacher_frame(raw_response)
+    except NluTeacherParseError as exc:
+        raise TeacherParseError(str(exc)) from exc
+
+
+def parse_clinc150_teacher_frame(raw_response: str, *, task_schema: TaskSchema) -> Frame:
+    try:
+        return parse_nlu_clinc150_teacher_frame(raw_response, task_schema=task_schema)
     except NluTeacherParseError as exc:
         raise TeacherParseError(str(exc)) from exc
 
