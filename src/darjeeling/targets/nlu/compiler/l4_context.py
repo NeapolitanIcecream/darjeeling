@@ -11,6 +11,7 @@ from darjeeling.targets.nlu.compiler.focus_tasks import (
     focus_task_document_with_fields,
 )
 from darjeeling.targets.nlu.schemas import TeacherTrace
+from darjeeling.targets.nlu.teacher import build_teacher_system_prompt
 
 FORBIDDEN_CONTEXT_TERMS = (
     "gold_frame",
@@ -94,13 +95,16 @@ def build_residual_teacher_context(
             "Return strict JSON only.",
             "Do not include explanations or markdown.",
             "The JSON object must have this shape:",
-            '{"accepted_intent": null, "accepted_slots": {}, "complete": true, "metadata": {"verified_fields": [], "removed_fields": []}}',
-            "complete=true means every accepted field was verified, corrected, or removed, and the frame is complete.",
+            '{"accepted_intent": null, "accepted_slots": {}, "complete": true, '
+            '"metadata": {"verified_fields": [], "removed_fields": []}}',
+            "complete=true means every accepted field was verified, corrected, or removed, "
+            "and the frame is complete.",
             "If any accepted field was not checked, return complete=false.",
             "Put verified accepted field keys in metadata.verified_fields.",
             "Put removed accepted slot field keys in metadata.removed_fields.",
             "Return corrected fields in accepted_intent or accepted_slots.",
-            "Only include fields that are missing, corrected, removed, or necessary to finish verification.",
+            "Only include fields that are missing, corrected, removed, or necessary to finish "
+            "verification.",
             "Use field key `intent` for intent and `slots.<slot_name>` for slots.",
             "Use only these intents:",
             json.dumps(task_schema.intent_names, ensure_ascii=False, sort_keys=True),
@@ -140,20 +144,9 @@ def build_residual_teacher_context(
 
 
 def build_teacher_stable_prefix(*, task_schema: Any, settings: Any) -> str:
-    return "\n".join(
-        [
-            "You are the L4 teacher for Darjeeling, a schema-constrained frame task.",
-            "Return strict JSON only.",
-            "Do not include explanations or markdown.",
-            "The JSON object must have this shape:",
-            '{"intent": "intent_name", "slots": {"slot_name": "slot value"}, "is_abstain": false}',
-            "Use only these intents:",
-            json.dumps(task_schema.intent_names, ensure_ascii=False, sort_keys=True),
-            "Use only these slot names when slots are present:",
-            json.dumps(task_schema.slot_names, ensure_ascii=False, sort_keys=True),
-            "If no slot is present, return an empty slots object.",
-            f"Prompt version: {settings.teacher_prompt_version}.",
-        ]
+    return build_teacher_system_prompt(
+        task_schema,
+        prompt_version=settings.teacher_prompt_version,
     )
 
 

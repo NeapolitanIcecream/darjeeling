@@ -10,10 +10,15 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     CloudLLMTeacher,
     TaskSchema,
     TeacherCache,
+    TeacherParseError,
     parse_teacher_frame,
     parse_teacher_patch,
 )
 from darjeeling.targets.nlu.settings import load_settings
+from darjeeling.targets.nlu.teacher import (
+    build_teacher_system_prompt,
+    ensure_supported_teacher_prompt_version,
+)
 
 
 class FakeCompletions:
@@ -91,6 +96,72 @@ def test_parse_teacher_frame_requires_frame_json() -> None:
     assert frame.slots == {"slot_alpha": "value alpha"}
 
 
+def test_parse_teacher_frame_rejects_malformed_json() -> None:
+    with pytest.raises(TeacherParseError, match="invalid JSON"):
+        parse_teacher_frame("not-json")
+
+
+def test_teacher_prompt_versions_render_distinct_prompts() -> None:
+    schema = TaskSchema(intent_names=["intent_alpha"], slot_names=["slot_alpha"])
+
+    current = build_teacher_system_prompt(schema, prompt_version="teacher-v1")
+    intent_first = build_teacher_system_prompt(
+        schema,
+        prompt_version="teacher-v2-intent-first",
+    )
+    slot_conservative = build_teacher_system_prompt(
+        schema,
+        prompt_version="teacher-v3-slot-conservative",
+    )
+    slot_evidence = build_teacher_system_prompt(
+        schema,
+        prompt_version="teacher-v4-slot-evidence",
+    )
+    value_copy = build_teacher_system_prompt(
+        schema,
+        prompt_version="teacher-v5-value-copy",
+    )
+    schema_checklist = build_teacher_system_prompt(
+        schema,
+        prompt_version="teacher-v6-schema-checklist",
+    )
+    evidence_stable = build_teacher_system_prompt(
+        schema,
+        prompt_version="teacher-v7-evidence-stable",
+    )
+    evidence_compact = build_teacher_system_prompt(
+        schema,
+        prompt_version="teacher-v8-evidence-compact",
+    )
+
+    assert "Prompt version: teacher-v1." in current
+    assert "decide the intent first" in intent_first
+    assert "Prefer an empty slots object over a guessed slot." in slot_conservative
+    assert "Add a slot only when the utterance gives specific evidence" in slot_evidence
+    assert "copy the exact words from the utterance" in value_copy
+    assert "Use this private checklist" in schema_checklist
+    assert "do not change intent because a slot is uncertain" in evidence_stable
+    assert "filler time/date words" in evidence_stable
+    assert "Return strict JSON only:" in evidence_compact
+    assert "omit it; do not change a clear intent" in evidence_compact
+    prompts = {
+        current,
+        intent_first,
+        slot_conservative,
+        slot_evidence,
+        value_copy,
+        schema_checklist,
+        evidence_stable,
+        evidence_compact,
+    }
+    assert len(prompts) == 8
+
+
+def test_teacher_prompt_version_rejects_unknown_version() -> None:
+    with pytest.raises(ValueError, match="unsupported teacher prompt version 'teacher-typo'"):
+        ensure_supported_teacher_prompt_version("teacher-typo")
+
+
 def test_parse_teacher_patch_accepts_residual_patch_json() -> None:
     patch = parse_teacher_patch(
         '{"accepted_intent":"intent_alpha","accepted_slots":{"slot_alpha":"value alpha"}}',
@@ -158,6 +229,39 @@ def test_live_teacher_call_appends_cache(tmp_path: Path) -> None:
     assert payload["usage"]["total_tokens"] == 18
     assert payload["context_hash"]
     assert payload["prompt_cache_key"].startswith("darjeeling:teacher-v1:")
+
+
+def test_live_teacher_intent_first_prompt_makes_two_calls(tmp_path: Path) -> None:
+    settings = load_settings().model_copy(
+        update={
+            "teacher_prompt_version": "teacher-v2-intent-first",
+            "teacher_max_tokens": 128,
+        }
+    )
+    fake_client = FakeClient()
+    cache = TeacherCache.load(tmp_path / "teacher_cache.jsonl")
+    schema = TaskSchema(intent_names=["intent_beta"], slot_names=[])
+    layer = CachedTeacherLayer(
+        cache,
+        allow_live=True,
+        use_cache=True,
+        settings=settings,
+        task_schema=schema,
+        teacher=CloudLLMTeacher(settings, client=fake_client),
+    )
+
+    result = layer.try_answer("beta sample request")
+
+    assert result.accepted
+    assert result.frame is not None
+    assert result.frame.intent == "intent_beta"
+    assert result.metadata["prompt_version"] == "teacher-v2-intent-first"
+    assert result.metadata["usage"]["total_tokens"] == 36
+    assert len(fake_client.completions.calls) == 2
+    assert fake_client.completions.calls[0]["max_completion_tokens"] == 64
+    assert fake_client.completions.calls[1]["max_completion_tokens"] == 128
+    assert "Step 1" in fake_client.completions.calls[0]["messages"][0]["content"]
+    assert "Step 2" in fake_client.completions.calls[1]["messages"][0]["content"]
 
 
 def test_live_residual_teacher_call_uses_residual_budget_and_metadata(

@@ -94,6 +94,11 @@ from darjeeling.targets.nlu.settings import (
     load_settings,
 )
 from darjeeling.targets.nlu.target import NluTargetSpec
+from darjeeling.targets.nlu.teacher_eval import (
+    DEFAULT_TEACHER_PROMPT_COMPARISON,
+    run_teacher_live_vs_gold,
+    run_teacher_prompt_comparison,
+)
 from darjeeling.targets.nlu.trace import read_traces
 
 app = typer.Typer(no_args_is_help=True)
@@ -288,6 +293,9 @@ app.add_typer(l2_app, name="l2")
 l3_app = typer.Typer(no_args_is_help=True)
 app.add_typer(l3_app, name="l3")
 
+teacher_app = typer.Typer(no_args_is_help=True)
+app.add_typer(teacher_app, name="teacher")
+
 massive_app = typer.Typer(no_args_is_help=True)
 app.add_typer(massive_app, name="massive")
 
@@ -304,6 +312,114 @@ def prepare_massive(
 
     result = prepare_massive_dataset(locale=locale, out_dir=out)
     console.print(f"prepared {result['records']} records in {out}")
+
+
+@teacher_app.command("eval-live")
+def teacher_eval_live(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for teacher-live-vs-gold artifacts."),
+    ] = Path("runs/teacher-live-vs-gold"),
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed data directory produced by massive prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+    split: Annotated[str, typer.Option(help="Processed data split to evaluate.")] = "validation",
+    stream: Annotated[
+        str,
+        typer.Option(help="Sample stream type: sequential, uniform, zipf-mild, or zipf-heavy."),
+    ] = "sequential",
+    max_requests: Annotated[int, typer.Option(min=1)] = 100,
+    prompt_version: Annotated[
+        str | None,
+        typer.Option(help="Teacher prompt version; defaults to settings."),
+    ] = None,
+    min_frame_exact_match: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Fail the quality gate if frame exact match is below this value.",
+        ),
+    ] = 0.0,
+) -> None:
+    """Run live L4 directly against MASSIVE gold without cascade replay."""
+
+    settings = _load_cli_settings()
+    effective_prompt_version = prompt_version or settings.teacher_prompt_version
+    try:
+        result = run_teacher_live_vs_gold(
+            data_dir=data_dir,
+            split=split,
+            stream=stream,
+            max_requests=max_requests,
+            prompt_version=effective_prompt_version,
+            settings=settings,
+            out_dir=out_dir,
+            min_frame_exact_match=min_frame_exact_match,
+        )
+    except (FileNotFoundError, MissingTeacherError, ValueError) as exc:
+        error_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    console.print(f"wrote {result.summary_json_path}")
+    console.print_json(data=result.summary)
+    if result.summary.get("passed") is False:
+        raise typer.Exit(code=3)
+
+
+@teacher_app.command("compare-prompts")
+def teacher_compare_prompts(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for teacher prompt comparison artifacts."),
+    ] = Path("runs/teacher-prompt-comparison"),
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed data directory produced by massive prepare."),
+    ] = DEFAULT_PROCESSED_DATA_DIR,
+    split: Annotated[str, typer.Option(help="Processed data split to evaluate.")] = "validation",
+    stream: Annotated[
+        str,
+        typer.Option(help="Sample stream type: sequential, uniform, zipf-mild, or zipf-heavy."),
+    ] = "sequential",
+    max_requests: Annotated[int, typer.Option(min=1)] = 100,
+    prompt_version: Annotated[
+        list[str] | None,
+        typer.Option("--prompt-version", help="Prompt version to evaluate; repeatable."),
+    ] = None,
+    min_frame_exact_match: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Fail the comparison if any prompt is below this frame exact threshold.",
+        ),
+    ] = 0.0,
+) -> None:
+    """Compare live teacher prompt versions on the same MASSIVE sample."""
+
+    settings = _load_cli_settings()
+    prompt_versions = prompt_version or list(DEFAULT_TEACHER_PROMPT_COMPARISON)
+    try:
+        result = run_teacher_prompt_comparison(
+            data_dir=data_dir,
+            split=split,
+            stream=stream,
+            max_requests=max_requests,
+            prompt_versions=prompt_versions,
+            settings=settings,
+            out_dir=out_dir,
+            min_frame_exact_match=min_frame_exact_match,
+        )
+    except (FileNotFoundError, MissingTeacherError, ValueError) as exc:
+        error_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    console.print(f"wrote {result.comparison_json_path}")
+    console.print_json(data=result.summary)
+    if any(row.get("passed") is False for row in result.summary.get("rows", [])):
+        raise typer.Exit(code=3)
 
 
 @l1_app.command("build")
@@ -2071,7 +2187,10 @@ def experiment_suite(
         bool,
         typer.Option(
             "--resume-existing/--no-resume-existing",
-            help="Resume from existing trace prefixes in run directories after interrupted live runs.",
+            help=(
+                "Resume from existing trace prefixes in run directories after interrupted "
+                "live runs."
+            ),
         ),
     ] = False,
 ) -> None:

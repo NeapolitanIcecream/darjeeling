@@ -6,6 +6,70 @@ from typer.testing import CliRunner
 
 from darjeeling.targets.nlu import main_cli as cli
 from darjeeling.targets.nlu.compiler.l2_tuner import L2TuneResult
+from darjeeling.targets.nlu.teacher_eval import TeacherLiveEvalArtifactResult
+
+
+def test_teacher_eval_live_command_dispatches_quality_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_run_teacher_live_vs_gold(**kwargs):
+        captured.update(kwargs)
+        out_dir = kwargs["out_dir"]
+        out_dir.mkdir(parents=True)
+        summary_path = out_dir / "teacher_live_vs_gold.summary.json"
+        detail_csv = out_dir / "teacher_live_vs_gold.details.csv"
+        detail_jsonl = out_dir / "teacher_live_vs_gold.details.jsonl"
+        summary_path.write_text("{}\n", encoding="utf-8")
+        detail_csv.write_text("", encoding="utf-8")
+        detail_jsonl.write_text("", encoding="utf-8")
+        return TeacherLiveEvalArtifactResult(
+            out_dir=out_dir,
+            summary_json_path=summary_path,
+            details_csv_path=detail_csv,
+            details_jsonl_path=detail_jsonl,
+            summary={
+                "benchmark": "teacher-live-vs-gold",
+                "prompt_version": kwargs["prompt_version"],
+                "passed": True,
+            },
+        )
+
+    monkeypatch.setattr(cli, "run_teacher_live_vs_gold", fake_run_teacher_live_vs_gold)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "teacher",
+            "eval-live",
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--data-dir",
+            str(tmp_path / "data"),
+            "--split",
+            "validation",
+            "--stream",
+            "sequential",
+            "--max-requests",
+            "3",
+            "--prompt-version",
+            "teacher-v2-intent-first",
+            "--min-frame-exact-match",
+            "0.7",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["out_dir"] == tmp_path / "out"
+    assert captured["data_dir"] == tmp_path / "data"
+    assert captured["split"] == "validation"
+    assert captured["stream"] == "sequential"
+    assert captured["max_requests"] == 3
+    assert captured["prompt_version"] == "teacher-v2-intent-first"
+    assert captured["min_frame_exact_match"] == 0.7
 
 
 def test_experiment_suite_builds_parallel_subprocess_plan(

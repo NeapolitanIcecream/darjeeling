@@ -428,6 +428,137 @@ def _gold_frame_exact_match(traces: list[TraceRecord]) -> float | str:
     return round(exact / len(labeled), 6)
 
 
+def _metric_source_section() -> str:
+    return "\n".join(
+        [
+            "## Metric Sources",
+            "",
+            "- teacher-replay metrics: `current_objective`, `candidate_objective`, and "
+            "`promotion` rows compare artifacts against `teacher_frame` on teacher-visible "
+            "traces; they do not use `gold_frame`.",
+            "- gold-evaluation diagnostics: `gold_eval` and `gold_diagnostics` rows compare "
+            "`teacher_frame` or `final_frame` with `gold_frame` only for benchmark reports.",
+        ]
+    )
+
+
+def _metric_source_metric_rows() -> list[dict[str, Any]]:
+    return [
+        _metric_row("metric_source", "", "", "current_objective", "teacher_replay"),
+        _metric_row("metric_source", "", "", "candidate_objective", "teacher_replay"),
+        _metric_row("metric_source", "", "", "promotion", "teacher_replay"),
+        _metric_row("metric_source", "", "", "gold_eval", "gold_evaluation"),
+        _metric_row("metric_source", "", "", "gold_diagnostics", "gold_evaluation"),
+    ]
+
+
+def _gold_diagnostics_section(traces: list[TraceRecord]) -> str:
+    stats = _gold_diagnostic_stats(traces)
+    if stats["gold_labeled_requests"] == 0:
+        return "## Gold Evaluation Diagnostics\n\nNo gold-labeled traces found."
+    lines = [
+        "## Gold Evaluation Diagnostics",
+        "",
+        "These diagnostics are report-only and are not compiler, training, promotion, "
+        "or candidate-selection inputs.",
+        "",
+        "| metric | value |",
+        "| --- | ---: |",
+    ]
+    for metric in [
+        "gold_labeled_requests",
+        "teacher_gold_labeled_requests",
+        "teacher_vs_gold_frame_exact",
+        "teacher_vs_gold_intent_accuracy",
+        "final_vs_teacher_frame_exact",
+        "final_vs_gold_frame_exact",
+        "final_agrees_teacher_not_gold_count",
+        "final_agrees_gold_not_teacher_count",
+    ]:
+        lines.append(f"| {metric} | {_format_layer_summary_value(metric, stats[metric])} |")
+    return "\n".join(lines)
+
+
+def _gold_diagnostic_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]]:
+    stats = _gold_diagnostic_stats(traces)
+    return [
+        _metric_row(
+            "gold_diagnostics",
+            "",
+            "",
+            metric,
+            "" if value is None else round(float(value), 6) if isinstance(value, float) else value,
+        )
+        for metric, value in stats.items()
+    ]
+
+
+def _gold_diagnostic_stats(traces: list[TraceRecord]) -> dict[str, Any]:
+    gold_labeled = [trace for trace in traces if trace.gold_frame is not None]
+    teacher_gold_labeled = [
+        trace for trace in gold_labeled if trace.teacher_frame is not None
+    ]
+    teacher_labeled = [trace for trace in traces if trace.teacher_frame is not None]
+    teacher_gold_exact = sum(
+        trace.teacher_frame == trace.gold_frame for trace in teacher_gold_labeled
+    )
+    teacher_gold_intent = sum(
+        trace.teacher_frame is not None
+        and trace.gold_frame is not None
+        and trace.teacher_frame.intent == trace.gold_frame.intent
+        for trace in teacher_gold_labeled
+    )
+    final_teacher_exact = sum(
+        trace.teacher_frame is not None and trace.final_frame == trace.teacher_frame
+        for trace in teacher_gold_labeled
+    )
+    final_gold_exact = sum(trace.final_frame == trace.gold_frame for trace in gold_labeled)
+    final_agrees_teacher_not_gold = sum(
+        trace.teacher_frame is not None
+        and trace.gold_frame is not None
+        and trace.final_frame == trace.teacher_frame
+        and trace.final_frame != trace.gold_frame
+        for trace in teacher_gold_labeled
+    )
+    final_agrees_gold_not_teacher = sum(
+        trace.teacher_frame is not None
+        and trace.gold_frame is not None
+        and trace.final_frame == trace.gold_frame
+        and trace.final_frame != trace.teacher_frame
+        for trace in teacher_gold_labeled
+    )
+    return {
+        "requests": len(traces),
+        "gold_labeled_requests": len(gold_labeled),
+        "teacher_labeled_requests": len(teacher_labeled),
+        "teacher_gold_labeled_requests": len(teacher_gold_labeled),
+        "teacher_vs_gold_frame_exact": _ratio_or_none(
+            teacher_gold_exact,
+            len(teacher_gold_labeled),
+        ),
+        "teacher_vs_gold_intent_accuracy": _ratio_or_none(
+            teacher_gold_intent,
+            len(teacher_gold_labeled),
+        ),
+        "final_vs_teacher_frame_exact": _ratio_or_none(
+            final_teacher_exact,
+            len(teacher_gold_labeled),
+        ),
+        "final_vs_gold_frame_exact": _ratio_or_none(
+            final_gold_exact,
+            len(gold_labeled),
+        ),
+        "final_agrees_teacher_not_gold_count": final_agrees_teacher_not_gold,
+        "final_agrees_gold_not_teacher_count": final_agrees_gold_not_teacher,
+    }
+
+
+def _ratio_or_none(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator
+
+
 def _total_latencies_ms(traces: list[TraceRecord]) -> list[float]:
     return [sum(result.latency_ms for result in trace.layer_results) for trace in traces]
 
@@ -459,7 +590,9 @@ def _write_summary_md(
         "- `hard_cases.jsonl`\n"
         "- `quality.json`\n"
         "- `promotions.jsonl`\n\n"
+        f"{_metric_source_section()}\n\n"
         f"{_layer_summary_section(traces)}\n\n"
+        f"{_gold_diagnostics_section(traces)}\n\n"
         f"{_field_summary_section(traces)}\n\n"
         f"{_cost_summary_section(traces)}\n\n"
         f"{_l2_unguarded_section(traces)}\n\n"
@@ -552,6 +685,7 @@ def _metrics_rows(
     rows.extend(_field_summary_metric_rows(traces))
     rows.extend(_cost_summary_metric_rows(traces))
     rows.extend(_evolution_summary_metric_rows(promotion_records))
+    rows.extend(_metric_source_metric_rows())
 
     gold_labeled = [trace for trace in traces if trace.gold_frame is not None]
     if gold_labeled:
@@ -565,6 +699,7 @@ def _metrics_rows(
                 round(exact / len(gold_labeled), 6),
             )
         )
+    rows.extend(_gold_diagnostic_metric_rows(traces))
 
     rows.extend(_latency_metric_rows(traces))
     rows.extend(_l2_unguarded_metric_rows(traces))
@@ -663,6 +798,14 @@ def _layer_summary_metric_rows(traces: list[TraceRecord]) -> list[dict[str, Any]
 
 def _field_summary_section(traces: list[TraceRecord]) -> str:
     stats = _field_summary_stats(traces)
+    correct_weak_fields_per_100 = _format_layer_summary_value(
+        "coverage",
+        stats["correct_weak_fields_avoiding_full_l4_per_100"],
+    )
+    residual_l4_verified_fields_per_100 = _format_layer_summary_value(
+        "coverage",
+        stats["residual_l4_verified_fields_per_100"],
+    )
     lines = [
         "## Field Summary",
         "",
@@ -677,9 +820,9 @@ def _field_summary_section(traces: list[TraceRecord]) -> str:
         "- L4 conflict rate: "
         f"{_format_layer_summary_value('wrong_accept_rate', stats['l4_conflict_rate'])}",
         "- correct weak fields avoiding full L4 / 100 requests: "
-        f"{_format_layer_summary_value('coverage', stats['correct_weak_fields_avoiding_full_l4_per_100'])}",
+        f"{correct_weak_fields_per_100}",
         "- residual L4 verified fields / 100 requests: "
-        f"{_format_layer_summary_value('coverage', stats['residual_l4_verified_fields_per_100'])}",
+        f"{residual_l4_verified_fields_per_100}",
         "",
         "| layer | accepted_fields | field_accuracy | wrong_field_rate |",
         "| --- | ---: | ---: | ---: |",
@@ -1237,7 +1380,8 @@ def _evolution_summary_section(promotion_records: list[dict[str, Any]]) -> str:
     lines = [
         "## Evolution Summary",
         "",
-        "| generation | full_L4/100 | residual_L4/100 | L4_calls/100 | cost/100 | p95_ms | frame_em | "
+        "| generation | full_L4/100 | residual_L4/100 | L4_calls/100 | cost/100 | "
+        "p95_ms | frame_em | "
         "L0_share | L1_share | L2_share | L3_share | L4_share |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
@@ -1999,6 +2143,7 @@ def _write_quality_json(
             "p95": _percentile(_total_latencies_ms(traces), 95),
         },
         "field_summary": _field_summary_stats(traces),
+        "gold_diagnostics": _gold_diagnostic_stats(traces),
         "cost_summary": _cost_summary_stats(traces),
         "promotion_summary": {
             "attempts": len(promotion_records),
@@ -2690,9 +2835,15 @@ def _l1_artifact_html(run_dir: Path, current_manifest: ArtifactManifest | None) 
 def _promotion_report_section(run_dir: Path) -> str:
     records = _load_promotion_records(run_dir)
     if not records:
-        return "## Promotion\n\nNo promotion records found."
+        return "## Promotion Teacher-Replay Metrics\n\nNo promotion records found."
 
-    lines = ["## Promotion", ""]
+    lines = [
+        "## Promotion Teacher-Replay Metrics",
+        "",
+        "Current and candidate objectives in this section are computed against "
+        "`teacher_frame`; `gold_frame` is not used by promotion replay.",
+        "",
+    ]
     for record in records[-5:]:
         candidate_objective = record.get("candidate_objective") or {}
         current_objective = record.get("current_objective") or {}

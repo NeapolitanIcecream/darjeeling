@@ -166,6 +166,61 @@ def test_generate_run_report_includes_l3_benchmark_artifact(tmp_path: Path) -> N
     assert "L3 Hardware Benchmark" in curves
 
 
+def test_generate_run_report_splits_teacher_replay_and_gold_diagnostics(
+    tmp_path: Path,
+) -> None:
+    traces = [
+        TraceRecord(
+            request_id="r1",
+            utterance="alpha",
+            gold_frame=Frame(intent="intent_alpha"),
+            teacher_frame=Frame(intent="intent_alpha"),
+            chosen_layer="L4",
+            final_frame=Frame(intent="intent_alpha"),
+            layer_results=[_l4_result(Frame(intent="intent_alpha"))],
+        ),
+        TraceRecord(
+            request_id="r2",
+            utterance="teacher wrong",
+            gold_frame=Frame(intent="intent_beta"),
+            teacher_frame=Frame(intent="intent_alpha"),
+            chosen_layer="L4",
+            final_frame=Frame(intent="intent_alpha"),
+            layer_results=[_l4_result(Frame(intent="intent_alpha"))],
+        ),
+        TraceRecord(
+            request_id="r3",
+            utterance="final corrects teacher",
+            gold_frame=Frame(intent="intent_beta"),
+            teacher_frame=Frame(intent="intent_alpha"),
+            chosen_layer="L2",
+            final_frame=Frame(intent="intent_beta"),
+            layer_results=[_l4_result(Frame(intent="intent_alpha"))],
+        ),
+    ]
+    (tmp_path / "traces.jsonl").write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in traces),
+        encoding="utf-8",
+    )
+    (tmp_path / "settings.json").write_text("{}\n", encoding="utf-8")
+
+    result = generate_run_report(tmp_path)
+
+    summary = result.summary_path.read_text(encoding="utf-8")
+    metrics = result.metrics_csv_path.read_text(encoding="utf-8")
+    quality = json.loads(result.quality_json_path.read_text(encoding="utf-8"))
+    assert "## Metric Sources" in summary
+    assert "teacher-replay metrics" in summary
+    assert "## Gold Evaluation Diagnostics" in summary
+    assert "final_agrees_teacher_not_gold_count | 1" in summary
+    assert "gold_diagnostics" in metrics
+    assert "metric_source" in metrics
+    assert "teacher_vs_gold_frame_exact,0.333333" in metrics
+    assert quality["gold_diagnostics"]["teacher_vs_gold_frame_exact"] == 1 / 3
+    assert quality["gold_diagnostics"]["final_agrees_teacher_not_gold_count"] == 1
+    assert quality["gold_diagnostics"]["final_agrees_gold_not_teacher_count"] == 1
+
+
 def test_generate_run_report_writes_hard_cases_jsonl_from_latest_generation(
     tmp_path: Path,
 ) -> None:
@@ -223,6 +278,16 @@ def test_generate_run_report_writes_hard_cases_jsonl_from_latest_generation(
     assert "beta smooth request" in hard_cases
     assert "gold_frame" not in hard_cases
     assert "`hard_cases.jsonl`" in summary
+
+
+def _l4_result(frame: Frame) -> LayerResult:
+    return LayerResult(
+        layer="L4",
+        accepted=True,
+        frame=frame,
+        latency_ms=1.0,
+        reason="teacher",
+    )
 
 
 def test_promotion_report_section_summarizes_generation_records(tmp_path: Path) -> None:
@@ -724,11 +789,13 @@ def test_generate_run_report_includes_evolution_and_artifact_summary_tables(
     metrics = result.metrics_csv_path.read_text(encoding="utf-8")
     assert "## Evolution Summary" in summary
     assert (
-        "| generation | full_L4/100 | residual_L4/100 | L4_calls/100 | cost/100 | p95_ms | frame_em | "
+        "| generation | full_L4/100 | residual_L4/100 | L4_calls/100 | cost/100 | "
+        "p95_ms | frame_em | "
         "L0_share | L1_share | L2_share | L3_share | L4_share |"
     ) in summary
     assert (
-        "| 1 | 25.000 | 0.000 | 25.000 | 2.500000 | 500.000 | 0.900 | 0.250 | 0.250 | 0.250 | 0.000 | 0.250 |"
+        "| 1 | 25.000 | 0.000 | 25.000 | 2.500000 | 500.000 | 0.900 | "
+        "0.250 | 0.250 | 0.250 | 0.000 | 0.250 |"
     ) in summary
     assert "## Artifact Summary" in summary
     assert (

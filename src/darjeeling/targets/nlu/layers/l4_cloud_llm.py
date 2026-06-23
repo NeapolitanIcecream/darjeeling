@@ -11,21 +11,30 @@ from typing import Any
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.runtime.timing import elapsed_ms
 from darjeeling.targets.nlu.compiler.l4_context import (
+    assert_no_forbidden_context,
     build_residual_teacher_context,
     build_teacher_context,
+    context_hash,
 )
 from darjeeling.targets.nlu.data import normalize_utterance
 from darjeeling.targets.nlu.patches import FIELD_INTENT, slot_field_key
 from darjeeling.targets.nlu.schemas import Frame, FramePatch, LayerResult, TaskSchema
 from darjeeling.targets.nlu.settings import Settings
 from darjeeling.targets.nlu.teacher import (
+    TEACHER_PROMPT_V2_INTENT_FIRST,
     NluTeacherParseError,
+    build_teacher_intent_system_prompt,
+    build_teacher_slots_system_prompt,
+    ensure_supported_teacher_prompt_version,
 )
 from darjeeling.targets.nlu.teacher import (
     build_teacher_system_prompt as build_nlu_teacher_system_prompt,
 )
 from darjeeling.targets.nlu.teacher import (
     parse_teacher_frame as parse_nlu_teacher_frame,
+)
+from darjeeling.targets.nlu.teacher import (
+    parse_teacher_intent as parse_nlu_teacher_intent,
 )
 
 TEACHER_MODES = {"live", "cache", "live-or-cache"}
@@ -42,6 +51,7 @@ __all__ = [
     "build_teacher_system_prompt",
     "create_chat_completion_with_retry",
     "has_valid_teacher_cache",
+    "parse_teacher_intent",
     "parse_teacher_frame",
     "parse_teacher_patch",
     "require_live_or_cached_teacher",
@@ -124,6 +134,9 @@ class CloudLLMTeacher:
         )
 
     def answer(self, utterance: str, task_schema: TaskSchema) -> TeacherCallResult:
+        ensure_supported_teacher_prompt_version(self.settings.teacher_prompt_version)
+        if self.settings.teacher_prompt_version == TEACHER_PROMPT_V2_INTENT_FIRST:
+            return self._answer_intent_first(utterance, task_schema)
         context = build_teacher_context(
             utterance=utterance,
             task_schema=task_schema,
@@ -149,6 +162,78 @@ class CloudLLMTeacher:
             model=getattr(response, "model", self.settings.openai_model),
             context_hash=context.context_hash,
             prompt_cache_key=context.prompt_cache_key,
+        )
+
+    def _answer_intent_first(
+        self,
+        utterance: str,
+        task_schema: TaskSchema,
+    ) -> TeacherCallResult:
+        intent_messages = _intent_first_intent_messages(
+            utterance=utterance,
+            task_schema=task_schema,
+            prompt_version=self.settings.teacher_prompt_version,
+        )
+        schema_version = getattr(task_schema, "schema_version", "schema-unknown")
+        intent_prompt_cache_key = (
+            f"darjeeling:{self.settings.teacher_prompt_version}-intent:{schema_version}"
+        )
+        intent_response = create_chat_completion_with_retry(
+            self.client(),
+            self.settings,
+            response_check=_extract_chat_content,
+            model=self.settings.openai_model,
+            messages=intent_messages,
+            response_format={"type": "json_object"},
+            max_completion_tokens=min(self.settings.teacher_max_tokens, 64),
+            prompt_cache_key=intent_prompt_cache_key,
+            prompt_cache_retention=self.settings.prompt_cache_retention,
+            timeout=self.settings.openai_timeout_s,
+        )
+        raw_intent_response = _extract_chat_content(intent_response)
+        intent = parse_teacher_intent(raw_intent_response, task_schema=task_schema)
+        slots_messages = _intent_first_slots_messages(
+            utterance=utterance,
+            intent=intent,
+            task_schema=task_schema,
+            prompt_version=self.settings.teacher_prompt_version,
+        )
+        slots_prompt_cache_key = (
+            f"darjeeling:{self.settings.teacher_prompt_version}-slots:{schema_version}"
+        )
+        slots_response = create_chat_completion_with_retry(
+            self.client(),
+            self.settings,
+            response_check=_extract_chat_content,
+            model=self.settings.openai_model,
+            messages=slots_messages,
+            response_format={"type": "json_object"},
+            max_completion_tokens=self.settings.teacher_max_tokens,
+            prompt_cache_key=slots_prompt_cache_key,
+            prompt_cache_retention=self.settings.prompt_cache_retention,
+            timeout=self.settings.openai_timeout_s,
+        )
+        raw_slots_response = _extract_chat_content(slots_response)
+        frame = parse_teacher_frame(raw_slots_response)
+        if frame.intent != intent:
+            raise TeacherParseError(
+                "teacher-v2-intent-first slot response changed intent "
+                f"from {intent!r} to {frame.intent!r}"
+            )
+        return TeacherCallResult(
+            frame=frame,
+            raw_response=json.dumps(
+                {
+                    "intent_response": raw_intent_response,
+                    "slots_response": raw_slots_response,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            usage=_merge_usage(_extract_usage(intent_response), _extract_usage(slots_response)),
+            model=getattr(slots_response, "model", self.settings.openai_model),
+            context_hash=context_hash([intent_messages, slots_messages]),
+            prompt_cache_key=f"{intent_prompt_cache_key}+{slots_prompt_cache_key}",
         )
 
     def residual_patch(
@@ -328,6 +413,7 @@ class CachedTeacherLayer:
                         "teacher_source": "live",
                         "l4_call_kind": "full",
                         "model": call_result.model,
+                        "prompt_version": self.settings.teacher_prompt_version,
                         "usage": call_result.usage,
                         "context_hash": call_result.context_hash,
                         "prompt_cache_key": call_result.prompt_cache_key,
@@ -474,6 +560,13 @@ def parse_teacher_frame(raw_response: str) -> Frame:
         raise TeacherParseError(str(exc)) from exc
 
 
+def parse_teacher_intent(raw_response: str, *, task_schema: TaskSchema) -> str:
+    try:
+        return parse_nlu_teacher_intent(raw_response, task_schema=task_schema)
+    except NluTeacherParseError as exc:
+        raise TeacherParseError(str(exc)) from exc
+
+
 def parse_teacher_patch(raw_response: str, *, task_schema: TaskSchema) -> FramePatch:
     try:
         payload = json.loads(raw_response)
@@ -539,6 +632,73 @@ def _extract_usage(response: Any) -> dict[str, Any]:
         for key in ["prompt_tokens", "completion_tokens", "total_tokens"]
         if hasattr(usage, key)
     }
+
+
+def _merge_usage(*usage_payloads: dict[str, Any]) -> dict[str, Any]:
+    keys = {
+        key
+        for payload in usage_payloads
+        for key, value in payload.items()
+        if isinstance(value, int | float) and not isinstance(value, bool)
+    }
+    merged = {
+        key: sum(float(payload.get(key, 0.0)) for payload in usage_payloads)
+        for key in sorted(keys)
+    }
+    return {
+        key: int(value) if value.is_integer() else value
+        for key, value in merged.items()
+    }
+
+
+def _intent_first_intent_messages(
+    *,
+    utterance: str,
+    task_schema: TaskSchema,
+    prompt_version: str,
+) -> list[dict[str, str]]:
+    stable_prefix = build_teacher_intent_system_prompt(
+        task_schema,
+        prompt_version=prompt_version,
+    )
+    dynamic_tail = json.dumps(
+        {"utterance": utterance},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    messages = [
+        {"role": "system", "content": stable_prefix},
+        {"role": "user", "content": dynamic_tail},
+    ]
+    assert_no_forbidden_context(messages)
+    return messages
+
+
+def _intent_first_slots_messages(
+    *,
+    utterance: str,
+    intent: str,
+    task_schema: TaskSchema,
+    prompt_version: str,
+) -> list[dict[str, str]]:
+    stable_prefix = build_teacher_slots_system_prompt(
+        task_schema,
+        prompt_version=prompt_version,
+    )
+    dynamic_tail = json.dumps(
+        {
+            "intent": intent,
+            "utterance": utterance,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    messages = [
+        {"role": "system", "content": stable_prefix},
+        {"role": "user", "content": dynamic_tail},
+    ]
+    assert_no_forbidden_context(messages)
+    return messages
 
 
 def _validate_patch_schema(patch: FramePatch, task_schema: TaskSchema) -> None:

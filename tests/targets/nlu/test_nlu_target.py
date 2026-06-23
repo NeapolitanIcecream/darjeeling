@@ -275,7 +275,7 @@ def test_nlu_l1_dsl_rejects_unknown_operator() -> None:
 
 
 def test_nlu_teacher_adapter_builds_prompt_and_parses_frame() -> None:
-    adapter = NluTeacherAdapter(prompt_version="teacher-test")
+    adapter = NluTeacherAdapter(prompt_version="teacher-v1")
     task_schema = TaskSchema(
         intent_names=["intent_alpha"],
         slot_names=["slot_alpha"],
@@ -299,7 +299,7 @@ def test_nlu_teacher_adapter_builds_prompt_and_parses_frame() -> None:
         "is_abstain": False,
     }
     assert adapter.cache_key_parts(task_schema=task_schema) == {
-        "prompt_version": "teacher-test",
+        "prompt_version": "teacher-v1",
         "schema_version": "task-schema-v1",
     }
 

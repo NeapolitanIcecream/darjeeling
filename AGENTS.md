@@ -7,3 +7,16 @@
 - Keep the target/core split low-abstraction: prefer ordinary Python objects, explicit static registries, and moving target code behind the boundary before inventing shared frameworks. Do not add plugin systems, dependency-injection containers, or schema DSLs unless the user explicitly asks for them.
 - Task-specific isolated L1/L2/L3 workspaces and generated target artifacts are owned by the L4 agent flow. Repository coding agents must not directly edit them; change the repo-level harnesses, prompts, tests, adapters, or contracts that govern those workspaces instead.
 - Experiment artifacts and experiment docs may record dataset-specific evidence and failure examples, but that evidence must not become a core default or reusable core rule.
+
+## Plans, Prompts, And Experiment Handoffs
+
+- When asked to create a development or experiment plan for another agent, put the substantive context in a repository document, not in the chat prompt. The plan document should be self-contained enough that a new agent can execute it without relying on prior session history.
+- Keep handoff prompts short. They should tell the next agent which files to read and what objective to complete, while the plan document carries the background, constraints, budget, hypotheses, experimental design, validation commands, and done criteria.
+- When an agent completes an assigned plan or experiment, it should organize the completed changes and create a git commit unless the user explicitly asks not to.
+- Do not treat an under-supported result as final by merely downgrading the wording of the conclusion. If the expected outcome requires stronger evidence, write a plan for how to obtain that evidence.
+- For experiment plans, define the desired decision up front, such as adopting a candidate, rejecting it, or keeping the current default after sufficient search. Include what evidence would support each decision.
+- When a budget is provided for live or paid experiments, design experiments that use the budget responsibly to answer the question. Do not stop after a token pilot unless the evidence is already strong; require hypotheses, iteration, validation samples, and cost accounting.
+- Low abstraction tax does not mean too few experiments. It means using simple static variants, small helpers, existing CLI/report paths, and direct files instead of new frameworks or broad infrastructure.
+- For open-ended development or research tasks, work autonomously through hypothesis, experiment, result, and iteration loops. When a result is weak or a problem appears, first propose and test the next reasonable hypothesis yourself rather than stopping for human decisions.
+- Escalate to the user only when a decision changes the product goal, budget, risk tolerance, or scope boundary. Do not ask the user to choose among routine implementation tactics, prompt variants, test designs, or debugging steps that can be evaluated with local evidence.
+- Treat failures and negative results as inputs to the next iteration. Record what failed, why it likely failed, what was changed, and what evidence would falsify the next attempt.
