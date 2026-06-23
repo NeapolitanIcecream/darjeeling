@@ -1,6 +1,10 @@
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from darjeeling.targets.nlu.clinc150_phase1 import (
+    Clinc150IntentTeacher,
     build_clinc150_gate_records,
     build_clinc150_label_cards,
     clinc150_metrics_from_teacher_rows,
@@ -11,7 +15,8 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     training_examples_from_gold_records,
 )
 from darjeeling.targets.nlu.data import DataRecord
-from darjeeling.targets.nlu.schemas import Frame
+from darjeeling.targets.nlu.schemas import Frame, TaskSchema
+from darjeeling.targets.nlu.settings import load_settings
 
 
 def test_clinc150_gate_sample_is_intent_stratified_with_oos_tail() -> None:
@@ -73,6 +78,27 @@ def test_clinc150_teacher_metrics_split_in_scope_oos_and_gate() -> None:
     assert metrics["oos_precision"] == pytest.approx(1.0)
     assert metrics["oos_recall"] == pytest.approx(0.5)
     assert metrics["passed_teacher_gate"] is True
+
+
+def test_clinc150_teacher_uses_configured_completion_budget() -> None:
+    settings = load_settings().model_copy(
+        update={
+            "teacher_prompt_version": "clinc150-intent-v1",
+            "teacher_max_tokens": 192,
+            "openai_model": "test-model",
+        }
+    )
+    fake_client = _FakeClincClient()
+    schema = TaskSchema(intent_names=["balance", "out_of_scope"], slot_names=[])
+
+    result = Clinc150IntentTeacher(settings, client=fake_client).answer(
+        "what is my balance",
+        schema,
+    )
+
+    assert result.frame.intent == "balance"
+    assert fake_client.completions.calls[0]["max_completion_tokens"] == 192
+    assert fake_client.completions.calls[0]["response_format"] == {"type": "json_object"}
 
 
 def test_clinc150_repeat_consistency_compares_parsed_teacher_frames() -> None:
@@ -179,3 +205,26 @@ def _teacher_row(
         "frame_exact": gold_frame == teacher_frame,
         "intent_correct": gold_intent == teacher_intent,
     }
+
+
+class _FakeClincCompletions:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            model=kwargs["model"],
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps({"intent": "balance"}))
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=8, total_tokens=18),
+        )
+
+
+class _FakeClincClient:
+    def __init__(self) -> None:
+        self.completions = _FakeClincCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)

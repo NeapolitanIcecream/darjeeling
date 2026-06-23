@@ -125,6 +125,20 @@ from concurrent API instability, but it did not complete in a bounded time and
 was interrupted before writing artifacts. That supports treating live teacher
 latency/reliability as a blocker rather than continuing the experiment.
 
+Post-run root-cause note:
+
+- The CLINC teacher implementation capped `max_completion_tokens` at 64.
+- Successful rows were already close to that cap: v1 success p95 completion
+  tokens was about 60, and v2 success p95 was about 62.
+- For reasoning models, reasoning tokens share the completion budget with
+  visible JSON output. A 64-token cap can therefore yield empty visible content
+  even when the model could classify the request.
+
+This means the empty-response failures should be treated first as a teacher-call
+configuration defect, not as evidence that CLINC150 itself is unsuitable. The
+cap has been removed in follow-up code; the teacher gate should be rerun before
+making a final CLINC150 benchmark decision.
+
 ## L2 And Stream Phases
 
 Not run.
@@ -153,8 +167,10 @@ Supported conclusion:
 
 Recommended next step:
 
-Run a bounded teacher-infrastructure repair before reconsidering CLINC150, or
-move to another candidate with the same teacher-gate discipline. Do not continue
+Rerun the bounded teacher gate after the completion-token cap repair, with
+attempt-level failure accounting if needed. If the repaired teacher passes the
+gate, continue to diagnostic L2 and cascade phases. If it still fails, reject or
+replace the benchmark with the same teacher-gate discipline. Do not continue
 open-ended CLINC prompt search, do not resume MASSIVE prompt search, and do not
 promote CLINC-specific labels, OOS rules, thresholds, or metrics into core.
 

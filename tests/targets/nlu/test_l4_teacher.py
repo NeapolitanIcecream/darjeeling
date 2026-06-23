@@ -289,7 +289,7 @@ def test_live_teacher_intent_first_prompt_makes_two_calls(tmp_path: Path) -> Non
     assert result.metadata["prompt_version"] == "teacher-v2-intent-first"
     assert result.metadata["usage"]["total_tokens"] == 36
     assert len(fake_client.completions.calls) == 2
-    assert fake_client.completions.calls[0]["max_completion_tokens"] == 64
+    assert fake_client.completions.calls[0]["max_completion_tokens"] == 128
     assert fake_client.completions.calls[1]["max_completion_tokens"] == 128
     assert "Step 1" in fake_client.completions.calls[0]["messages"][0]["content"]
     assert "Step 2" in fake_client.completions.calls[1]["messages"][0]["content"]

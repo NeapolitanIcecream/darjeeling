@@ -194,7 +194,7 @@ class CloudLLMTeacher:
             model=self.settings.openai_model,
             messages=intent_messages,
             response_format={"type": "json_object"},
-            max_completion_tokens=min(self.settings.teacher_max_tokens, 64),
+            max_completion_tokens=self.settings.teacher_max_tokens,
             prompt_cache_key=intent_prompt_cache_key,
             prompt_cache_retention=self.settings.prompt_cache_retention,
             timeout=self.settings.openai_timeout_s,

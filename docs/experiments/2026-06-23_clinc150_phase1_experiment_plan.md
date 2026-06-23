@@ -103,6 +103,10 @@ Constraints:
 - Output must be strict JSON with exactly one allowed intent and no extra fields.
 - Unknown labels and parse/schema failures are hard failures.
 - Temperature and model settings should be recorded.
+- Do not put a tight cap on teacher `max_completion_tokens`. Reasoning tokens count
+  against the completion budget for reasoning models, so a small cap can produce
+  empty visible JSON even for easy classification calls. Use a generous configured
+  cap, then report actual token usage and cost from artifacts.
 
 Run a 500-request validation gate:
 
@@ -225,4 +229,3 @@ The Phase 1 mechanism claim is supported only if:
 
 When complete, organize the changes and create a git commit unless the user
 explicitly says not to.
-
