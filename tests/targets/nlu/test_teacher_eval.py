@@ -105,10 +105,13 @@ def test_teacher_live_vs_gold_writes_summary_and_detail_artifacts(tmp_path: Path
     artifacts = write_teacher_live_eval_artifacts(result, out_dir=tmp_path)
 
     summary = json.loads(artifacts.summary_json_path.read_text(encoding="utf-8"))
+    ledger = json.loads(artifacts.cost_ledger_path.read_text(encoding="utf-8"))
     detail_rows = list(csv.DictReader(artifacts.details_csv_path.open(encoding="utf-8")))
     details_jsonl = artifacts.details_jsonl_path.read_text(encoding="utf-8")
     assert summary["benchmark"] == "teacher-live-vs-gold"
     assert summary["frame_exact_match"] == 1.0
+    assert ledger["observed_attempt_cost_usd"] == summary["full_l4"]["cost_usd"]
+    assert ledger["request_costs"][0]["request_id"] == "r1"
     assert detail_rows[0]["request_id"] == "r1"
     assert '"request_id": "r1"' in details_jsonl
 
@@ -134,6 +137,108 @@ def test_teacher_live_vs_gold_records_teacher_call_failure() -> None:
     assert result.summary["parse_failure_count"] == 1
     assert result.summary["full_l4"]["cost_usd"] == 0.0
     assert result.rows[0]["error"] == "request timed out"
+
+
+def test_teacher_live_vs_gold_counts_retry_attempt_diagnostics_and_cost() -> None:
+    attempts = [
+        {
+            "attempt": 1,
+            "latency_ms": 1.0,
+            "success": False,
+            "error_type": "TeacherParseError",
+            "error_message": "teacher response content is empty",
+            "response_model": "fake-teacher",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+            "finish_reason": "length",
+            "visible_content_length": 0,
+        },
+        {
+            "attempt": 2,
+            "latency_ms": 1.0,
+            "success": True,
+            "error_type": "",
+            "error_message": "",
+            "response_model": "fake-teacher",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+            "finish_reason": "stop",
+            "visible_content_length": 24,
+        },
+    ]
+
+    result = evaluate_live_teacher_vs_gold(
+        records=[
+            DataRecord(
+                request_id="r1",
+                utterance="alpha",
+                gold_frame=Frame(intent="intent_alpha"),
+            )
+        ],
+        task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=[]),
+        settings=load_settings(),
+        split="validation",
+        stream="sequential",
+        prompt_version="teacher-v1",
+        teacher=SequenceTeacher(
+            [_call(Frame(intent="intent_alpha"), tokens=18, attempt_diagnostics=attempts)]
+        ),
+    )
+
+    row = result.rows[0]
+    summary = result.summary
+    assert row["attempt_count"] == 2
+    assert row["empty_response_attempts"] == 1
+    assert row["retry_recovered"] is True
+    assert row["tokens"] == 19
+    assert row["final_response_tokens"] == 18
+    assert row["cost_usd"] == pytest.approx((11 * 0.40 + 8 * 1.60) / 1_000_000)
+    assert row["final_response_cost_usd"] == pytest.approx((9 * 0.40 + 9 * 1.60) / 1_000_000)
+    assert summary["attempt_count"] == 2
+    assert summary["retry_recovered_rows"] == 1
+    assert summary["empty_response_attempts"] == 1
+    assert summary["full_l4"]["api_attempts"] == 2
+    assert summary["full_l4"]["tokens"] == 19
+    assert summary["full_l4"]["final_response_tokens"] == 18
+
+
+def test_teacher_live_vs_gold_counts_final_empty_failure_usage() -> None:
+    error = TeacherParseError("teacher response content is empty")
+    error.attempt_diagnostics = [
+        {
+            "attempt": 1,
+            "latency_ms": 1.0,
+            "success": False,
+            "error_type": "TeacherParseError",
+            "error_message": "teacher response content is empty",
+            "response_model": "fake-teacher",
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+            "finish_reason": "length",
+            "visible_content_length": 0,
+        }
+    ]
+
+    result = evaluate_live_teacher_vs_gold(
+        records=[
+            DataRecord(
+                request_id="r1",
+                utterance="alpha",
+                gold_frame=Frame(intent="intent_alpha"),
+            )
+        ],
+        task_schema=TaskSchema(intent_names=["intent_alpha"], slot_names=[]),
+        settings=load_settings(),
+        split="validation",
+        stream="sequential",
+        prompt_version="teacher-v1",
+        teacher=SequenceTeacher([error]),
+    )
+
+    row = result.rows[0]
+    assert row["parse_failure"] is True
+    assert row["final_empty_response_failure"] is True
+    assert row["cost_usd"] == pytest.approx((5 * 0.40) / 1_000_000)
+    assert row["unknown_usage_attempts"] == 0
+    assert result.summary["final_empty_response_failures"] == 1
+    assert result.summary["full_l4"]["cost_usd"] == pytest.approx((5 * 0.40) / 1_000_000)
 
 
 def test_teacher_prompt_comparison_uses_same_sample_for_each_prompt(tmp_path: Path) -> None:
@@ -194,7 +299,12 @@ def test_teacher_prompt_comparison_uses_same_sample_for_each_prompt(tmp_path: Pa
     assert payload["rows"][1]["frame_exact_match"] == 0.5
 
 
-def _call(frame: Frame, *, tokens: int) -> TeacherCallResult:
+def _call(
+    frame: Frame,
+    *,
+    tokens: int,
+    attempt_diagnostics: list[dict] | None = None,
+) -> TeacherCallResult:
     return TeacherCallResult(
         frame=frame,
         raw_response=frame.model_dump_json(),
@@ -206,4 +316,5 @@ def _call(frame: Frame, *, tokens: int) -> TeacherCallResult:
         model="fake-teacher",
         context_hash=f"ctx-{tokens}",
         prompt_cache_key=f"cache-{tokens}",
+        attempt_diagnostics=attempt_diagnostics or [],
     )

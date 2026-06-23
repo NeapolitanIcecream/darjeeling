@@ -1,0 +1,53 @@
+{
+  "schema_version": "clinc150-teacher-reliability-cost-ledger-v1",
+  "run_root": "runs/clinc150-teacher-reliability-20260623",
+  "budget_limit_usd": 10.0,
+  "observed_spend_usd": 0.6994568,
+  "estimated_remaining_budget_usd": 9.3005432,
+  "entries": [
+    {
+      "id": "smoke-v2-50",
+      "kind": "paid_teacher_eval_smoke",
+      "prompt_version": "clinc150-intent-v2-label-cards",
+      "requests": 50,
+      "max_workers": 2,
+      "openai_max_retries": 3,
+      "observed_cost_usd": 0.0572396,
+      "parsed_requests": 49,
+      "parse_failure_count": 1,
+      "retry_recovered_rows": 25,
+      "empty_response_attempts": 0,
+      "final_empty_response_failures": 0,
+      "artifact": "runs/clinc150-teacher-reliability-20260623/smoke-v2-50/cost_ledger.json"
+    },
+    {
+      "id": "smoke-v2-50-lowconcurrency",
+      "kind": "paid_teacher_eval_smoke",
+      "prompt_version": "clinc150-intent-v2-label-cards",
+      "requests": 50,
+      "max_workers": 1,
+      "openai_max_retries": 6,
+      "observed_cost_usd": 0.0443756,
+      "parsed_requests": 50,
+      "parse_failure_count": 0,
+      "retry_recovered_rows": 4,
+      "empty_response_attempts": 0,
+      "final_empty_response_failures": 0,
+      "artifact": "runs/clinc150-teacher-reliability-20260623/smoke-v2-50-lowconcurrency/cost_ledger.json"
+    },
+    {
+      "id": "teacher-gate-500",
+      "kind": "paid_teacher_gate",
+      "prompt_versions": [
+        "clinc150-intent-v1",
+        "clinc150-intent-v2-label-cards"
+      ],
+      "requests_per_prompt": 500,
+      "max_workers": 2,
+      "openai_max_retries": 6,
+      "observed_cost_usd": 0.5978416,
+      "passed_prompt_version": "clinc150-intent-v2-label-cards",
+      "artifact": "runs/clinc150-teacher-reliability-20260623/teacher-gate-500/cost_ledger.json"
+    }
+  ]
+}

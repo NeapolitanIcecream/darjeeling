@@ -385,6 +385,31 @@ def test_live_teacher_retries_empty_completion_content(tmp_path: Path) -> None:
     assert len(fake_client.completions.calls) == 2
 
 
+def test_live_teacher_records_attempt_diagnostics_for_empty_retry() -> None:
+    settings = load_settings().model_copy(
+        update={
+            "openai_max_retries": 1,
+            "openai_retry_base_delay_s": 0.0,
+        }
+    )
+    fake_client = EmptyThenValidClient()
+    teacher = CloudLLMTeacher(settings, client=fake_client)
+
+    result = teacher.answer(
+        "beta sample request",
+        TaskSchema(intent_names=["intent_beta"], slot_names=[]),
+    )
+
+    assert result.frame.intent == "intent_beta"
+    assert [attempt["attempt"] for attempt in result.attempt_diagnostics] == [1, 2]
+    assert result.attempt_diagnostics[0]["success"] is False
+    assert result.attempt_diagnostics[0]["error_message"] == "teacher response content is empty"
+    assert result.attempt_diagnostics[0]["visible_content_length"] == 0
+    assert result.attempt_diagnostics[0]["usage"]["total_tokens"] == 1
+    assert result.attempt_diagnostics[1]["success"] is True
+    assert result.attempt_diagnostics[1]["usage"]["total_tokens"] == 18
+
+
 def test_cache_hit_does_not_call_live_teacher(tmp_path: Path) -> None:
     (tmp_path / "teacher_cache.jsonl").write_text(
         json.dumps(

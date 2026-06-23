@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import darjeeling.targets.nlu.clinc150_phase1 as clinc150_phase1
 from darjeeling.targets.nlu.clinc150_phase1 import (
     Clinc150IntentTeacher,
     build_clinc150_gate_records,
@@ -10,11 +11,14 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     clinc150_metrics_from_teacher_rows,
     compare_repeated_teacher_rows,
     evaluate_clinc150_l2,
+    load_teacher_rows,
+    run_clinc150_teacher_live_eval,
     select_l2_threshold,
     train_clinc150_l2,
     training_examples_from_gold_records,
 )
 from darjeeling.targets.nlu.data import DataRecord
+from darjeeling.targets.nlu.layers.l4_cloud_llm import TeacherCallResult
 from darjeeling.targets.nlu.schemas import Frame, TaskSchema
 from darjeeling.targets.nlu.settings import load_settings
 
@@ -167,6 +171,127 @@ def test_clinc150_l2_eval_selects_high_precision_threshold() -> None:
     assert selected["threshold"] == 0.9
 
 
+def test_clinc150_teacher_eval_writes_manifest_details_and_cost_ledger(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _FakeSequenceClincTeacher.responses = [
+        _clinc_call("alpha", tokens=18),
+        _clinc_call("beta", tokens=20),
+    ]
+    _FakeSequenceClincTeacher.utterances = []
+    monkeypatch.setattr(clinc150_phase1, "Clinc150IntentTeacher", _FakeSequenceClincTeacher)
+    records = [
+        _record("r1", "alpha request", "alpha", split="validation"),
+        _record("r2", "beta request", "beta", split="validation"),
+    ]
+
+    result = run_clinc150_teacher_live_eval(
+        records=records,
+        task_schema=TaskSchema(intent_names=["alpha", "beta"], slot_names=[]),
+        settings=load_settings(),
+        split="validation",
+        stream="sequential",
+        prompt_version="clinc150-intent-v1",
+        out_dir=tmp_path,
+    )
+
+    rows = load_teacher_rows(result.artifacts.details_jsonl_path)
+    ledger = json.loads(result.artifacts.cost_ledger_path.read_text(encoding="utf-8"))
+    assert _FakeSequenceClincTeacher.utterances == ["alpha request", "beta request"]
+    assert [row["request_id"] for row in rows] == ["r1", "r2"]
+    assert (tmp_path / "teacher_live_vs_gold.run.json").exists()
+    assert ledger["observed_attempt_cost_usd"] == result.artifacts.summary["full_l4"]["cost_usd"]
+    assert result.clinc_metrics["attempt_count"] == 2
+
+
+def test_clinc150_teacher_eval_resume_skips_completed_rows(tmp_path, monkeypatch) -> None:
+    _FakeSequenceClincTeacher.responses = [
+        _clinc_call("alpha", tokens=18),
+        _clinc_call("beta", tokens=20),
+    ]
+    _FakeSequenceClincTeacher.utterances = []
+    monkeypatch.setattr(clinc150_phase1, "Clinc150IntentTeacher", _FakeSequenceClincTeacher)
+    records = [
+        _record("r1", "alpha request", "alpha", split="validation"),
+        _record("r2", "beta request", "beta", split="validation"),
+    ]
+    schema = TaskSchema(intent_names=["alpha", "beta"], slot_names=[])
+
+    initial = run_clinc150_teacher_live_eval(
+        records=records,
+        task_schema=schema,
+        settings=load_settings(),
+        split="validation",
+        stream="sequential",
+        prompt_version="clinc150-intent-v1",
+        out_dir=tmp_path,
+    )
+    rows = load_teacher_rows(initial.artifacts.details_jsonl_path)
+    initial.artifacts.details_jsonl_path.write_text(
+        json.dumps(rows[0], sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _FakeSequenceClincTeacher.responses = [_clinc_call("beta", tokens=20)]
+    _FakeSequenceClincTeacher.utterances = []
+
+    resumed = run_clinc150_teacher_live_eval(
+        records=records,
+        task_schema=schema,
+        settings=load_settings(),
+        split="validation",
+        stream="sequential",
+        prompt_version="clinc150-intent-v1",
+        out_dir=tmp_path,
+        resume_existing=True,
+    )
+
+    resumed_rows = load_teacher_rows(resumed.artifacts.details_jsonl_path)
+    assert _FakeSequenceClincTeacher.utterances == ["beta request"]
+    assert [row["request_id"] for row in resumed_rows] == ["r1", "r2"]
+
+
+def test_clinc150_teacher_eval_resume_rejects_mismatched_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _FakeSequenceClincTeacher.responses = [
+        _clinc_call("alpha", tokens=18),
+        _clinc_call("beta", tokens=20),
+    ]
+    monkeypatch.setattr(clinc150_phase1, "Clinc150IntentTeacher", _FakeSequenceClincTeacher)
+    records = [
+        _record("r1", "alpha request", "alpha", split="validation"),
+        _record("r2", "beta request", "beta", split="validation"),
+    ]
+    schema = TaskSchema(intent_names=["alpha", "beta"], slot_names=[])
+    run_clinc150_teacher_live_eval(
+        records=records,
+        task_schema=schema,
+        settings=load_settings(),
+        split="validation",
+        stream="sequential",
+        prompt_version="clinc150-intent-v1",
+        out_dir=tmp_path,
+    )
+    manifest_path = tmp_path / "teacher_live_vs_gold.run.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["model"] = "different-model"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="model"):
+        run_clinc150_teacher_live_eval(
+            records=records,
+            task_schema=schema,
+            settings=load_settings(),
+            split="validation",
+            stream="sequential",
+            prompt_version="clinc150-intent-v1",
+            out_dir=tmp_path,
+            resume_existing=True,
+        )
+
+
 def _record(
     request_id: str,
     utterance: str,
@@ -228,3 +353,41 @@ class _FakeClincClient:
     def __init__(self) -> None:
         self.completions = _FakeClincCompletions()
         self.chat = SimpleNamespace(completions=self.completions)
+
+
+def _clinc_call(
+    intent: str,
+    *,
+    tokens: int,
+    attempt_diagnostics: list[dict] | None = None,
+) -> TeacherCallResult:
+    frame = Frame(intent=intent, slots={}, is_abstain=intent == "out_of_scope")
+    return TeacherCallResult(
+        frame=frame,
+        raw_response=json.dumps({"intent": intent}),
+        usage={
+            "prompt_tokens": tokens // 2,
+            "completion_tokens": tokens - tokens // 2,
+            "total_tokens": tokens,
+        },
+        model="fake-clinc-teacher",
+        context_hash="",
+        prompt_cache_key="fake-cache-key",
+        attempt_diagnostics=attempt_diagnostics or [],
+    )
+
+
+class _FakeSequenceClincTeacher:
+    responses: list[TeacherCallResult | Exception] = []
+    utterances: list[str] = []
+
+    def __init__(self, settings, *, label_cards=None) -> None:
+        del settings, label_cards
+
+    def answer(self, utterance: str, task_schema: TaskSchema):
+        del task_schema
+        self.__class__.utterances.append(utterance)
+        response = self.__class__.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response

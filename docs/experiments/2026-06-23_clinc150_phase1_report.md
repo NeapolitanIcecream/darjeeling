@@ -4,14 +4,20 @@ Date: 2026-06-23
 
 ## Decision
 
-CLINC150 `data_full` is **rejected for the current Phase 1 mechanism-validation
-run** because the live L4 teacher gate did not pass either allowed prompt.
+Update after reliability repair:
 
-This is not evidence that CLINC150 is intrinsically unusable. It is evidence
-that, with the current live `gpt-5.5` teacher path, CLINC150 did not satisfy the
-plan's prerequisite for building teacher-distilled L2 or cascade stream
-experiments. Per the plan, teacher-distilled L2, L2+L4 cascade, locked test, and
-stream experiments were not run after the gate failed.
+CLINC150 `data_full` is **unpaused for Phase 1 continuation**. The repaired
+live teacher gate passed with `clinc150-intent-v2-label-cards` on the planned
+500-request validation gate.
+
+This report originally rejected CLINC150 for the current Phase 1
+mechanism-validation run because the pre-repair live L4 teacher gate did not
+pass either allowed prompt. That rejection is superseded by
+`docs/experiments/2026-06-23_clinc150_teacher_reliability_report.md`.
+
+The repaired gate clears the all-L4 teacher prerequisite for diagnostic L2,
+teacher-distilled L2, and cascade stream experiments. It does not by itself
+validate the full Darjeeling Phase 1 mechanism claim.
 
 ## Data Source
 
@@ -56,7 +62,7 @@ CLINC-specific source parsing, OOS mapping, label-card prompts, OOS metrics, gat
 thresholds, and L2 diagnostic helpers stay in the NLU target. Darjeeling core was
 not changed.
 
-## Teacher Gate
+## Original Pre-Repair Teacher Gate
 
 Gate sample:
 
@@ -99,8 +105,8 @@ No prompt passed. No teacher was locked.
 
 ## Failure Analysis
 
-The largest failure source was live teacher reliability, not parsed label
-accuracy alone:
+In the original pre-repair run, the largest failure source was live teacher
+reliability, not parsed label accuracy alone:
 
 - v1 parse/schema failures: 71/500, including 70 empty-response failures and 1
   timeout.
@@ -139,6 +145,37 @@ configuration defect, not as evidence that CLINC150 itself is unsuitable. The
 cap has been removed in follow-up code; the teacher gate should be rerun before
 making a final CLINC150 benchmark decision.
 
+## Reliability Repair Rerun
+
+Run root: `runs/clinc150-teacher-reliability-20260623`
+
+Report:
+`docs/experiments/2026-06-23_clinc150_teacher_reliability_report.md`
+
+Cost ledger:
+`docs/experiments/2026-06-23_clinc150_teacher_reliability_cost_ledger.json`
+
+The repaired path added attempt-level diagnostics, incremental details JSONL
+writes, CLINC150 live-eval resume, and observed-attempt cost accounting. Paid
+runs used `TEACHER_MAX_TOKENS=256`, `OPENAI_TIMEOUT_S=120`, and bounded
+project-level retries.
+
+500-request teacher gate results:
+
+| prompt | parsed | overall acc. | in-scope acc. | parse/schema failure | empty attempts | final empty failures | retry recovered rows | cost | passed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `clinc150-intent-v1` | 499/500 | 92.8% | 94.4% | 0.2% | 5 | 0 | 146 | $0.1996008 | no |
+| `clinc150-intent-v2-label-cards` | 500/500 | 97.4% | 98.4% | 0.0% | 0 | 0 | 31 | $0.3982408 | yes |
+
+The v2 label-card prompt passed the planned teacher-gate thresholds:
+
+- overall accuracy >= 95%;
+- in-scope accuracy >= 97%;
+- parse/schema failure <= 0.5%.
+
+Observed spend for the reliability repair, including two bounded smoke runs and
+the 500-row gate, was `$0.6994568`, below the `$10` repair budget.
+
 ## L2 And Stream Phases
 
 Not run.
@@ -156,23 +193,25 @@ future diagnostic ceiling, but no diagnostic number is reported here.
 
 ## Conclusion
 
-This run does **not** validate the Phase 1 mechanism claim.
+The original pre-repair run did **not** validate the Phase 1 mechanism claim.
+The repaired teacher gate now supports continuing CLINC150 Phase 1, but the
+mechanism claim still requires diagnostic L2, teacher-distilled L2, cascade, and
+stream evidence.
 
 Supported conclusion:
 
-> CLINC150 `data_full` has a low implementation-cost target-local path, but the
-> current live `gpt-5.5` CLINC teacher setup did not pass the required reliability
-> gate. Darjeeling should not use these teacher traces to claim L2 externalization
-> or L4 cost reduction.
+> CLINC150 `data_full` has a low implementation-cost target-local path, and the
+> repaired `gpt-5.5` v2 label-card CLINC teacher setup now passes the required
+> reliability gate. Darjeeling may continue to diagnostic L2 and teacher-distilled
+> L2, but should not claim L2 externalization or L4 cost reduction until the
+> later phases pass.
 
 Recommended next step:
 
-Rerun the bounded teacher gate after the completion-token cap repair, with
-attempt-level failure accounting if needed. If the repaired teacher passes the
-gate, continue to diagnostic L2 and cascade phases. If it still fails, reject or
-replace the benchmark with the same teacher-gate discipline. Do not continue
-open-ended CLINC prompt search, do not resume MASSIVE prompt search, and do not
-promote CLINC-specific labels, OOS rules, thresholds, or metrics into core.
+Continue to diagnostic L2 and cascade phases with `clinc150-intent-v2-label-cards`
+as the locked teacher prompt. Do not continue open-ended CLINC prompt search, do
+not resume MASSIVE prompt search, and do not promote CLINC-specific labels, OOS
+rules, thresholds, or metrics into core.
 
 ## Commands Run
 

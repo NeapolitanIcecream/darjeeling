@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,6 +21,7 @@ from darjeeling.targets.nlu.layers.l2_student import (
 from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     MissingTeacherError,
     TeacherCallResult,
+    _attach_teacher_error_context,
     _extract_chat_content,
     _extract_usage,
     create_chat_completion_with_retry,
@@ -38,13 +40,19 @@ from darjeeling.targets.nlu.teacher_eval import (
     TEACHER_EVAL_DETAILS_JSONL_FILENAME,
     TeacherLiveEvalArtifactResult,
     TeacherLiveEvalResult,
+    _observed_l4_cost_usd,
     _teacher_eval_error_row,
     _teacher_eval_row,
     _teacher_eval_summary,
+    append_teacher_live_eval_jsonl_row,
+    load_teacher_live_eval_resume_rows,
+    teacher_live_eval_run_identity,
     write_teacher_live_eval_artifacts,
+    write_teacher_live_eval_run_manifest,
 )
 
 DEFAULT_CLINC150_PROMPTS = (CLINC150_PROMPT_V1, CLINC150_PROMPT_V2_LABEL_CARDS)
+CLINC150_COST_LEDGER_FILENAME = "cost_ledger.json"
 DEFAULT_CLINC150_THRESHOLDS = (
     0.0,
     0.5,
@@ -66,6 +74,57 @@ class Clinc150TeacherEvalArtifact:
     artifacts: TeacherLiveEvalArtifactResult
     clinc_metrics_path: Path
     clinc_metrics: dict[str, Any]
+
+
+def write_clinc150_teacher_cost_ledger(
+    *,
+    out_dir: Path,
+    artifacts: list[Clinc150TeacherEvalArtifact],
+    run_kind: str,
+    budget_limit_usd: float = 10.0,
+) -> Path:
+    entries = []
+    for artifact in artifacts:
+        prompt_ledger = json.loads(
+            artifact.artifacts.cost_ledger_path.read_text(encoding="utf-8")
+        )
+        entries.append(
+            {
+                "prompt_version": artifact.prompt_version,
+                "summary_path": str(artifact.artifacts.summary_json_path),
+                "details_jsonl_path": str(artifact.artifacts.details_jsonl_path),
+                "cost_ledger_path": str(artifact.artifacts.cost_ledger_path),
+                "observed_attempt_cost_usd": prompt_ledger.get(
+                    "observed_attempt_cost_usd",
+                    0.0,
+                ),
+                "observed_final_response_cost_usd": prompt_ledger.get(
+                    "observed_final_response_cost_usd",
+                    0.0,
+                ),
+                "retry_overhead_cost_usd": prompt_ledger.get("retry_overhead_cost_usd", 0.0),
+                "attempt_count": prompt_ledger.get("attempt_count", 0),
+                "empty_response_attempts": prompt_ledger.get("empty_response_attempts", 0),
+                "final_empty_response_failures": prompt_ledger.get(
+                    "final_empty_response_failures",
+                    0,
+                ),
+                "unknown_usage_attempts": prompt_ledger.get("unknown_usage_attempts", 0),
+            }
+        )
+    observed_spend = sum(float(entry["observed_attempt_cost_usd"]) for entry in entries)
+    ledger = {
+        "schema_version": "clinc150-teacher-reliability-cost-ledger-v1",
+        "run_kind": run_kind,
+        "run_root": str(out_dir),
+        "budget_limit_usd": budget_limit_usd,
+        "observed_spend_usd": observed_spend,
+        "estimated_remaining_budget_usd": budget_limit_usd - observed_spend,
+        "entries": entries,
+    }
+    path = out_dir / CLINC150_COST_LEDGER_FILENAME
+    path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 class Clinc150IntentTeacher:
@@ -113,10 +172,13 @@ class Clinc150IntentTeacher:
                 ),
             },
         ]
+        attempt_diagnostics: list[dict[str, Any]] = []
         response = create_chat_completion_with_retry(
             self.client(),
             self.settings,
             response_check=_extract_chat_content,
+            attempt_diagnostics=attempt_diagnostics,
+            attempt_metadata={"call_kind": "clinc150_intent"},
             model=self.settings.openai_model,
             messages=messages,
             response_format={"type": "json_object"},
@@ -126,13 +188,27 @@ class Clinc150IntentTeacher:
             timeout=self.settings.openai_timeout_s,
         )
         raw_response = _extract_chat_content(response)
+        usage = _extract_usage(response)
+        model = getattr(response, "model", self.settings.openai_model)
+        try:
+            frame = parse_clinc150_teacher_frame(raw_response, task_schema=task_schema)
+        except Exception as exc:
+            _attach_teacher_error_context(
+                exc,
+                attempt_diagnostics=attempt_diagnostics,
+                usage=usage,
+                model=model,
+                raw_response=raw_response,
+            )
+            raise
         return TeacherCallResult(
-            frame=parse_clinc150_teacher_frame(raw_response, task_schema=task_schema),
+            frame=frame,
             raw_response=raw_response,
-            usage=_extract_usage(response),
-            model=getattr(response, "model", self.settings.openai_model),
+            usage=usage,
+            model=model,
             context_hash="",
             prompt_cache_key=f"darjeeling:{prompt_version}:{task_schema.schema_version}",
+            attempt_diagnostics=attempt_diagnostics,
         )
 
 
@@ -185,6 +261,11 @@ def build_clinc150_label_cards(
     ]
 
 
+def _label_cards_hash(label_cards: list[dict[str, object]] | None) -> str:
+    payload = json.dumps(label_cards or [], ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _label_description(intent: str) -> str:
     if intent == CLINC150_OOS_INTENT:
         return "unsupported or out-of-scope request"
@@ -202,11 +283,36 @@ def run_clinc150_teacher_live_eval(
     out_dir: Path,
     label_cards: list[dict[str, object]] | None = None,
     max_workers: int = 1,
+    resume_existing: bool = False,
     min_overall_accuracy: float = 0.95,
     min_in_scope_accuracy: float = 0.97,
     max_parse_failure_rate: float = 0.005,
 ) -> Clinc150TeacherEvalArtifact:
     settings_for_prompt = settings.model_copy(update={"teacher_prompt_version": prompt_version})
+    run_identity = teacher_live_eval_run_identity(
+        records=records,
+        task_schema=task_schema,
+        settings=settings_for_prompt,
+        split=split,
+        stream=stream,
+        prompt_version=prompt_version,
+        extra={
+            "target": "clinc150",
+            "label_cards_hash": _label_cards_hash(label_cards),
+            "artifact_schema_version": "clinc150-teacher-live-eval-v1",
+        },
+    )
+    existing_rows = (
+        load_teacher_live_eval_resume_rows(
+            out_dir=out_dir,
+            expected_run_identity=run_identity,
+        )
+        if resume_existing
+        else []
+    )
+    write_teacher_live_eval_run_manifest(out_dir=out_dir, run_identity=run_identity)
+    if not resume_existing:
+        (out_dir / TEACHER_EVAL_DETAILS_JSONL_FILENAME).write_text("", encoding="utf-8")
     rows = _evaluate_clinc150_teacher_rows(
         records=records,
         task_schema=task_schema,
@@ -214,7 +320,10 @@ def run_clinc150_teacher_live_eval(
         prompt_version=prompt_version,
         label_cards=label_cards,
         max_workers=max_workers,
+        out_dir=out_dir,
+        existing_rows=existing_rows,
     )
+    rows = sorted(rows, key=lambda row: int(row["index"]))
     summary = _teacher_eval_summary(
         rows,
         settings=settings_for_prompt,
@@ -255,11 +364,26 @@ def _evaluate_clinc150_teacher_rows(
     prompt_version: str,
     label_cards: list[dict[str, object]] | None,
     max_workers: int,
+    out_dir: Path,
+    existing_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    details_path = out_dir / TEACHER_EVAL_DETAILS_JSONL_FILENAME
+    rows_by_request_id = {
+        str(row["request_id"]): row
+        for row in existing_rows or []
+    }
     indexed = list(enumerate(records, start=1))
+    missing_indexed = [
+        (index, record)
+        for index, record in indexed
+        if record.request_id not in rows_by_request_id
+    ]
+    if not missing_indexed:
+        return [rows_by_request_id[record.request_id] for _index, record in indexed]
+
     if max_workers <= 1:
-        return [
-            _clinc150_teacher_row(
+        for index, record in missing_indexed:
+            row = _clinc150_teacher_row(
                 index=index,
                 record=record,
                 task_schema=task_schema,
@@ -267,10 +391,10 @@ def _evaluate_clinc150_teacher_rows(
                 prompt_version=prompt_version,
                 label_cards=label_cards,
             )
-            for index, record in indexed
-        ]
+            rows_by_request_id[record.request_id] = row
+            append_teacher_live_eval_jsonl_row(details_path, row)
+        return [rows_by_request_id[record.request_id] for _index, record in indexed]
 
-    rows_by_index: dict[int, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
@@ -282,11 +406,13 @@ def _evaluate_clinc150_teacher_rows(
                 prompt_version=prompt_version,
                 label_cards=label_cards,
             ): index
-            for index, record in indexed
+            for index, record in missing_indexed
         }
         for future in as_completed(futures):
-            rows_by_index[futures[future]] = future.result()
-    return [rows_by_index[index] for index, _record in indexed]
+            row = future.result()
+            rows_by_request_id[str(row["request_id"])] = row
+            append_teacher_live_eval_jsonl_row(details_path, row)
+    return [rows_by_request_id[record.request_id] for _index, record in indexed]
 
 
 def _clinc150_teacher_row(
@@ -310,7 +436,8 @@ def _clinc150_teacher_row(
             task_schema=task_schema,
             call_result=call_result,
             latency_ms=latency_ms,
-            cost_usd=cost_model.layer_cost_usd("L4", call_result.usage),
+            cost_usd=_observed_l4_cost_usd(cost_model, call_result.usage),
+            cost_model=cost_model,
             prompt_version=prompt_version,
             default_model=settings.openai_model,
         )
@@ -322,6 +449,7 @@ def _clinc150_teacher_row(
             task_schema=task_schema,
             error=exc,
             latency_ms=latency_ms,
+            cost_model=cost_model,
             prompt_version=prompt_version,
             default_model=settings.openai_model,
         )
@@ -350,6 +478,13 @@ def clinc150_metrics_from_teacher_rows(
     oos_counts = _oos_counts(rows)
     oos_precision = _rate(oos_counts["true_positive"], oos_counts["predicted_positive"])
     oos_recall = _rate(oos_counts["true_positive"], oos_counts["gold_positive"])
+    attempt_count = sum(int(row.get("attempt_count", 1)) for row in rows)
+    empty_response_attempts = sum(int(row.get("empty_response_attempts", 0)) for row in rows)
+    retry_recovered_rows = sum(1 for row in rows if row.get("retry_recovered"))
+    final_empty_response_failures = sum(
+        1 for row in rows if row.get("final_empty_response_failure")
+    )
+    unknown_usage_attempts = sum(int(row.get("unknown_usage_attempts", 0)) for row in rows)
     return {
         "requests": requests,
         "parsed_requests": len(parsed),
@@ -358,6 +493,16 @@ def clinc150_metrics_from_teacher_rows(
         "overall_accuracy": overall_accuracy,
         "in_scope_accuracy": in_scope_accuracy,
         "parse_schema_failure_rate": parse_failure_rate,
+        "attempt_count": attempt_count,
+        "retry_recovered_rows": retry_recovered_rows,
+        "empty_response_attempts": empty_response_attempts,
+        "final_empty_response_failures": final_empty_response_failures,
+        "unknown_usage_attempts": unknown_usage_attempts,
+        "observed_attempt_cost_usd": sum(float(row.get("cost_usd", 0.0)) for row in rows),
+        "observed_final_response_cost_usd": sum(
+            float(row.get("final_response_cost_usd", row.get("cost_usd", 0.0)))
+            for row in rows
+        ),
         "oos_precision": oos_precision,
         "oos_recall": oos_recall,
         "oos_f1": _f1(oos_precision, oos_recall),

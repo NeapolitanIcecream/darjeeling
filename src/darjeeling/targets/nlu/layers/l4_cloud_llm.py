@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -82,6 +82,7 @@ class TeacherCallResult:
     model: str
     context_hash: str
     prompt_cache_key: str
+    attempt_diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class TeacherPatchCallResult:
     model: str
     context_hash: str
     prompt_cache_key: str
+    attempt_diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
 def has_valid_teacher_cache(cache_path: Path) -> bool:
@@ -147,10 +149,13 @@ class CloudLLMTeacher:
             task_schema=task_schema,
             settings=self.settings,
         )
+        attempt_diagnostics: list[dict[str, Any]] = []
         response = create_chat_completion_with_retry(
             self.client(),
             self.settings,
             response_check=_extract_chat_content,
+            attempt_diagnostics=attempt_diagnostics,
+            attempt_metadata={"call_kind": "full"},
             model=self.settings.openai_model,
             messages=context.messages,
             response_format={"type": "json_object"},
@@ -160,17 +165,31 @@ class CloudLLMTeacher:
             timeout=self.settings.openai_timeout_s,
         )
         raw_response = _extract_chat_content(response)
-        return TeacherCallResult(
-            frame=(
+        usage = _extract_usage(response)
+        model = getattr(response, "model", self.settings.openai_model)
+        try:
+            frame = (
                 parse_clinc150_teacher_frame(raw_response, task_schema=task_schema)
                 if is_clinc150_teacher_prompt_version(self.settings.teacher_prompt_version)
                 else parse_teacher_frame(raw_response)
-            ),
+            )
+        except Exception as exc:
+            _attach_teacher_error_context(
+                exc,
+                attempt_diagnostics=attempt_diagnostics,
+                usage=usage,
+                model=model,
+                raw_response=raw_response,
+            )
+            raise
+        return TeacherCallResult(
+            frame=frame,
             raw_response=raw_response,
-            usage=_extract_usage(response),
-            model=getattr(response, "model", self.settings.openai_model),
+            usage=usage,
+            model=model,
             context_hash=context.context_hash,
             prompt_cache_key=context.prompt_cache_key,
+            attempt_diagnostics=attempt_diagnostics,
         )
 
     def _answer_intent_first(
@@ -187,10 +206,13 @@ class CloudLLMTeacher:
         intent_prompt_cache_key = (
             f"darjeeling:{self.settings.teacher_prompt_version}-intent:{schema_version}"
         )
+        intent_attempt_diagnostics: list[dict[str, Any]] = []
         intent_response = create_chat_completion_with_retry(
             self.client(),
             self.settings,
             response_check=_extract_chat_content,
+            attempt_diagnostics=intent_attempt_diagnostics,
+            attempt_metadata={"call_kind": "intent"},
             model=self.settings.openai_model,
             messages=intent_messages,
             response_format={"type": "json_object"},
@@ -200,7 +222,17 @@ class CloudLLMTeacher:
             timeout=self.settings.openai_timeout_s,
         )
         raw_intent_response = _extract_chat_content(intent_response)
-        intent = parse_teacher_intent(raw_intent_response, task_schema=task_schema)
+        try:
+            intent = parse_teacher_intent(raw_intent_response, task_schema=task_schema)
+        except Exception as exc:
+            _attach_teacher_error_context(
+                exc,
+                attempt_diagnostics=intent_attempt_diagnostics,
+                usage=_extract_usage(intent_response),
+                model=getattr(intent_response, "model", self.settings.openai_model),
+                raw_response=raw_intent_response,
+            )
+            raise
         slots_messages = _intent_first_slots_messages(
             utterance=utterance,
             intent=intent,
@@ -210,10 +242,13 @@ class CloudLLMTeacher:
         slots_prompt_cache_key = (
             f"darjeeling:{self.settings.teacher_prompt_version}-slots:{schema_version}"
         )
+        slots_attempt_diagnostics: list[dict[str, Any]] = []
         slots_response = create_chat_completion_with_retry(
             self.client(),
             self.settings,
             response_check=_extract_chat_content,
+            attempt_diagnostics=slots_attempt_diagnostics,
+            attempt_metadata={"call_kind": "slots"},
             model=self.settings.openai_model,
             messages=slots_messages,
             response_format={"type": "json_object"},
@@ -223,12 +258,23 @@ class CloudLLMTeacher:
             timeout=self.settings.openai_timeout_s,
         )
         raw_slots_response = _extract_chat_content(slots_response)
-        frame = parse_teacher_frame(raw_slots_response)
-        if frame.intent != intent:
-            raise TeacherParseError(
-                "teacher-v2-intent-first slot response changed intent "
-                f"from {intent!r} to {frame.intent!r}"
+        combined_attempt_diagnostics = intent_attempt_diagnostics + slots_attempt_diagnostics
+        try:
+            frame = parse_teacher_frame(raw_slots_response)
+            if frame.intent != intent:
+                raise TeacherParseError(
+                    "teacher-v2-intent-first slot response changed intent "
+                    f"from {intent!r} to {frame.intent!r}"
+                )
+        except Exception as exc:
+            _attach_teacher_error_context(
+                exc,
+                attempt_diagnostics=combined_attempt_diagnostics,
+                usage=_merge_usage(_extract_usage(intent_response), _extract_usage(slots_response)),
+                model=getattr(slots_response, "model", self.settings.openai_model),
+                raw_response=raw_slots_response,
             )
+            raise
         return TeacherCallResult(
             frame=frame,
             raw_response=json.dumps(
@@ -243,6 +289,7 @@ class CloudLLMTeacher:
             model=getattr(slots_response, "model", self.settings.openai_model),
             context_hash=context_hash([intent_messages, slots_messages]),
             prompt_cache_key=f"{intent_prompt_cache_key}+{slots_prompt_cache_key}",
+            attempt_diagnostics=combined_attempt_diagnostics,
         )
 
     def residual_patch(
@@ -260,10 +307,13 @@ class CloudLLMTeacher:
             task_schema=task_schema,
             settings=self.settings,
         )
+        attempt_diagnostics: list[dict[str, Any]] = []
         response = create_chat_completion_with_retry(
             self.client(),
             self.settings,
             response_check=_extract_chat_content,
+            attempt_diagnostics=attempt_diagnostics,
+            attempt_metadata={"call_kind": "residual"},
             model=self.settings.openai_model,
             messages=context.messages,
             response_format={"type": "json_object"},
@@ -276,13 +326,27 @@ class CloudLLMTeacher:
             timeout=self.settings.openai_timeout_s,
         )
         raw_response = _extract_chat_content(response)
+        usage = _extract_usage(response)
+        model = getattr(response, "model", self.settings.openai_model)
+        try:
+            patch = parse_teacher_patch(raw_response, task_schema=task_schema)
+        except Exception as exc:
+            _attach_teacher_error_context(
+                exc,
+                attempt_diagnostics=attempt_diagnostics,
+                usage=usage,
+                model=model,
+                raw_response=raw_response,
+            )
+            raise
         return TeacherPatchCallResult(
-            patch=parse_teacher_patch(raw_response, task_schema=task_schema),
+            patch=patch,
             raw_response=raw_response,
-            usage=_extract_usage(response),
-            model=getattr(response, "model", self.settings.openai_model),
+            usage=usage,
+            model=model,
             context_hash=context.context_hash,
             prompt_cache_key=context.prompt_cache_key,
+            attempt_diagnostics=attempt_diagnostics,
         )
 
 
@@ -527,19 +591,42 @@ def create_chat_completion_with_retry(
     settings: Settings,
     *,
     response_check: Callable[[Any], Any] | None = None,
+    attempt_diagnostics: list[dict[str, Any]] | None = None,
+    attempt_metadata: Mapping[str, Any] | None = None,
     **kwargs: Any,
 ) -> Any:
     attempts = max(1, settings.openai_max_retries + 1)
     last_exc: Exception | None = None
     for attempt in range(attempts):
+        started = time.perf_counter()
+        response: Any | None = None
         try:
             response = client.chat.completions.create(**kwargs)
             if response_check is not None:
                 response_check(response)
+            _record_chat_attempt(
+                attempt_diagnostics,
+                attempt=attempt + 1,
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+                response=response,
+                success=True,
+                metadata=attempt_metadata,
+            )
             return response
         except Exception as exc:
             last_exc = exc
+            _record_chat_attempt(
+                attempt_diagnostics,
+                attempt=attempt + 1,
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+                response=response,
+                success=False,
+                error=exc,
+                metadata=attempt_metadata,
+            )
             if attempt >= attempts - 1:
+                if attempt_diagnostics is not None:
+                    exc.attempt_diagnostics = list(attempt_diagnostics)
                 raise
             delay = _openai_retry_delay(settings, attempt)
             if delay > 0:
@@ -547,6 +634,77 @@ def create_chat_completion_with_retry(
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("OpenAI retry loop exited without a response")
+
+
+def _record_chat_attempt(
+    diagnostics: list[dict[str, Any]] | None,
+    *,
+    attempt: int,
+    latency_ms: float,
+    response: Any | None,
+    success: bool,
+    error: Exception | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    if diagnostics is None:
+        return
+    record = {
+        "attempt": attempt,
+        "latency_ms": latency_ms,
+        "success": success,
+        "error_type": "" if error is None else type(error).__name__,
+        "error_message": "" if error is None else str(error),
+        "response_model": _extract_response_model(response),
+        "usage": _extract_usage(response) if response is not None else {},
+        "finish_reason": _extract_finish_reason(response),
+        "visible_content_length": _extract_visible_content_length(response),
+    }
+    if metadata:
+        record.update(dict(metadata))
+    diagnostics.append(record)
+
+
+def _attach_teacher_error_context(
+    error: Exception,
+    *,
+    attempt_diagnostics: list[dict[str, Any]],
+    usage: dict[str, Any],
+    model: str,
+    raw_response: str,
+) -> None:
+    error.attempt_diagnostics = list(attempt_diagnostics)
+    error.teacher_usage = usage
+    error.teacher_model = model
+    error.teacher_raw_response = raw_response
+
+
+def _extract_response_model(response: Any | None) -> str | None:
+    if response is None:
+        return None
+    model = getattr(response, "model", None)
+    return str(model) if model else None
+
+
+def _extract_finish_reason(response: Any | None) -> str | None:
+    if response is None:
+        return None
+    try:
+        reason = response.choices[0].finish_reason
+    except Exception:
+        return None
+    return str(reason) if reason is not None else None
+
+
+def _extract_visible_content_length(response: Any | None) -> int | None:
+    if response is None:
+        return None
+    try:
+        content = response.choices[0].message.content
+    except Exception:
+        return None
+    if not isinstance(content, str):
+        return None
+    return len(content)
 
 
 def _openai_retry_delay(settings: Settings, attempt: int) -> float:

@@ -26,6 +26,7 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     compare_repeated_teacher_rows,
     load_teacher_rows,
     run_clinc150_teacher_live_eval,
+    write_clinc150_teacher_cost_ledger,
 )
 from darjeeling.targets.nlu.compiler.l2_distiller import l2_config_from_settings
 from darjeeling.targets.nlu.compiler.l2_target_evolution import (
@@ -377,6 +378,13 @@ def clinc150_teacher_gate(
         int,
         typer.Option(min=1, help="Parallel live teacher calls."),
     ] = 1,
+    resume_existing: Annotated[
+        bool,
+        typer.Option(
+            "--resume-existing/--no-resume-existing",
+            help="Resume from existing CLINC150 teacher gate details JSONL rows.",
+        ),
+    ] = False,
 ) -> None:
     """Run the fixed 500-request CLINC150 validation teacher gate."""
 
@@ -388,6 +396,7 @@ def clinc150_teacher_gate(
     label_cards = build_clinc150_label_cards(train_records)
     prompt_versions = prompt_version or list(DEFAULT_CLINC150_PROMPTS)
     results = []
+    artifacts = []
     for version in prompt_versions:
         result = run_clinc150_teacher_live_eval(
             records=gate_records,
@@ -399,12 +408,16 @@ def clinc150_teacher_gate(
             out_dir=out_dir / version,
             label_cards=label_cards if version.endswith("label-cards") else None,
             max_workers=max_workers,
+            resume_existing=resume_existing,
         )
+        artifacts.append(result)
         results.append(
             {
                 "prompt_version": version,
                 "summary_path": str(result.artifacts.summary_json_path),
                 "metrics_path": str(result.clinc_metrics_path),
+                "details_jsonl_path": str(result.artifacts.details_jsonl_path),
+                "cost_ledger_path": str(result.artifacts.cost_ledger_path),
                 **result.clinc_metrics,
             }
         )
@@ -420,7 +433,13 @@ def clinc150_teacher_gate(
         json.dumps(comparison, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    cost_ledger_path = write_clinc150_teacher_cost_ledger(
+        out_dir=out_dir,
+        artifacts=artifacts,
+        run_kind="teacher-gate",
+    )
     console.print(f"wrote {comparison_path}")
+    console.print(f"wrote {cost_ledger_path}")
     console.print_json(data=comparison)
     if not any(row.get("passed_teacher_gate") for row in results):
         raise typer.Exit(code=3)
@@ -454,6 +473,13 @@ def clinc150_teacher_eval(
         int,
         typer.Option(min=1, help="Parallel live teacher calls."),
     ] = 1,
+    resume_existing: Annotated[
+        bool,
+        typer.Option(
+            "--resume-existing/--no-resume-existing",
+            help="Resume from existing CLINC150 teacher eval details JSONL rows.",
+        ),
+    ] = False,
 ) -> None:
     """Run live CLINC150 teacher evaluation on a processed split or stream."""
 
@@ -483,8 +509,15 @@ def clinc150_teacher_eval(
         out_dir=out_dir,
         label_cards=cards,
         max_workers=max_workers,
+        resume_existing=resume_existing,
+    )
+    cost_ledger_path = write_clinc150_teacher_cost_ledger(
+        out_dir=out_dir,
+        artifacts=[result],
+        run_kind="teacher-eval",
     )
     console.print(f"wrote {result.artifacts.summary_json_path}")
+    console.print(f"wrote {cost_ledger_path}")
     console.print_json(data=result.artifacts.summary)
     if not result.clinc_metrics.get("passed_teacher_gate"):
         raise typer.Exit(code=3)
