@@ -309,11 +309,14 @@ hashes where practical.
 Codex quota is the resource to use aggressively. Paid benchmark L4/API calls are
 different from Codex session quota:
 
-- default to `$0` new paid benchmark L4 spend by using replay artifacts;
-- paid calls are allowed only if they answer a concrete experimental question;
-- cap new paid benchmark L4 spend at `$20` for this sprint unless the user has
+- use replay artifacts first for debugging, harness repair, and cheap
+  iteration;
+- do not avoid paid L4 calls when they answer a concrete experimental question,
+  unlock a higher-quality validation, or materially reduce uncertainty;
+- cap new paid benchmark L4 spend at `$100` for this sprint unless the user has
   separately approved more;
-- ledger all paid calls with observed usage/cost;
+- estimate the intended paid run cost before launching it, then ledger all paid
+  calls with observed usage/cost from artifacts;
 - do not mix Codex session usage with benchmark serving spend.
 
 ## Locked-Test Policy
