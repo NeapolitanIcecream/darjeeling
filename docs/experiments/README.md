@@ -153,3 +153,16 @@ recorded L1 outputs, not requirements pushed into the generated L1 artifact.
 The first implementation branch produced useful data infrastructure but the
 frontier plot design was too mixed; the repair plan narrows each standard
 frontier figure to one split, one candidate, and one explicit knob.
+
+## Overnight Autonomous Research
+
+Plan:
+[2026-06-24_overnight_autonomous_research_plan.md](2026-06-24_overnight_autonomous_research_plan.md)
+
+Current decision: planned.
+
+This is a high-autonomy overnight sprint intended to use the remaining weekly
+Codex quota before 2026-06-25 08:00 Asia/Shanghai. It should not stop after a
+single successful patch; it should continue hypothesis, experiment,
+implementation, validation, and reporting cycles across L1, L2, evidence, and
+related-work tracks while respecting the target/core boundary.
