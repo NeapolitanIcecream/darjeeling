@@ -110,6 +110,35 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
     assert commands[0]["return_code"] == 0
 
 
+def test_l1_coding_agent_writes_extra_context_payloads(tmp_path: Path) -> None:
+    result = run_l1_coding_agent_job(
+        config=L1CodingAgentJobConfig(
+            mode="dry-run",
+            source_crate_dir=DEFAULT_NLU_L1_CRATE_DIR,
+            job_dir=tmp_path / "job",
+            run_validation=False,
+            extra_context_payloads={
+                "target_feedback.json": {
+                    "schema_version": "target-feedback-v1",
+                    "visible_rows": 3,
+                },
+                "target_notes.md": "Use only visible feedback.\n",
+            },
+        ),
+        teacher_train=[_teacher_trace()],
+        hard_cases=[],
+        current_metrics={},
+        objective={},
+    )
+
+    feedback = json.loads((result.context_dir / "target_feedback.json").read_text())
+
+    assert feedback == {"schema_version": "target-feedback-v1", "visible_rows": 3}
+    assert (result.context_dir / "target_notes.md").read_text() == (
+        "Use only visible feedback.\n"
+    )
+
+
 def test_l1_coding_agent_adapter_respects_disabled_mode(tmp_path: Path) -> None:
     settings = load_settings()
     settings.l1_agent_mode = "disabled"
@@ -372,6 +401,7 @@ def test_l1_agent_session_uses_workspace_root_and_records_policy(
     assert result.succeeded
     assert result.stop_reason == "max_rounds_exhausted"
     assert result.rounds_completed == 1
+    assert "--skip-git-repo-check" in command
     assert Path(command[command.index("--cd") + 1]) == round_workspace_root.resolve()
     assert (result.workspace_crate_dir / "AGENT_SESSION_MARKER").exists()
     assert (workspace_root / "runs" / "agent_note.txt").exists()

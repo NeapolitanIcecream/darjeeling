@@ -9,12 +9,15 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     Clinc150L4ReplayOracle,
     build_clinc150_calibration_splits,
     build_clinc150_gate_records,
+    build_clinc150_l1_phrase_support_summary,
+    build_clinc150_l1_visible_feedback,
     build_clinc150_label_cards,
     build_clinc150_oos_heavy_slice,
     build_clinc150_stratified_records,
     clinc150_autoresearch_traces_from_teacher_rows,
     clinc150_calibration_guard_rules,
     clinc150_guard_accepts,
+    clinc150_l1_teacher_traces_from_teacher_rows,
     clinc150_metrics_from_teacher_rows,
     compare_repeated_teacher_rows,
     evaluate_clinc150_guard_rule,
@@ -382,6 +385,121 @@ def test_clinc150_autoresearch_traces_are_teacher_visible_only() -> None:
     assert payload["teacher_frame"]["intent"] == "alpha"
     assert payload["metadata"]["gold_frame_withheld"] is True
     assert "frame_exact" not in json.dumps(payload)
+
+
+def test_clinc150_l1_teacher_traces_are_teacher_visible_only() -> None:
+    traces = clinc150_l1_teacher_traces_from_teacher_rows(
+        [
+            _teacher_row("r1", "alpha", "alpha"),
+            {
+                **_teacher_row("r2", "beta", "beta"),
+                "parse_failure": True,
+            },
+        ]
+    )
+
+    assert len(traces) == 1
+    payload = traces[0].model_dump(mode="json")
+    assert "gold_frame" not in json.dumps(payload)
+    assert payload["teacher_frame"]["intent"] == "alpha"
+    assert payload["metadata"]["reference_withheld"] is True
+    assert payload["layer_results"][0]["layer"] == "L1"
+    assert payload["layer_results"][0]["accepted"] is False
+
+
+def test_clinc150_l1_phrase_support_reports_conflicts_and_negative_counts() -> None:
+    rows = [
+        _teacher_row("r1", "alpha", "alpha"),
+        _teacher_row("r2", "alpha", "alpha"),
+        _teacher_row("r3", "beta", "beta"),
+    ]
+    for row in rows:
+        row["utterance"] = "shared phrase"
+
+    summary = build_clinc150_l1_phrase_support_summary(rows)
+
+    shared = next(row for row in summary["top_positive_phrases"] if row["phrase"] == "shared")
+    conflict = next(row for row in summary["intent_conflict_phrases"] if row["phrase"] == "shared")
+    assert shared["top_intent"] == "alpha"
+    assert shared["positive_support"] == 2
+    assert shared["negative_support"] == 1
+    assert conflict["conflicting_intents"] == ["alpha", "beta"]
+
+
+def test_clinc150_l1_visible_feedback_sanitizes_accepted_error_fields(tmp_path) -> None:
+    details_path = tmp_path / "details.jsonl"
+    details_path.write_text(
+        json.dumps(
+            {
+                "request_id": "v1",
+                "utterance": "visible validation row",
+                "gold_intent": "beta",
+                "gold_oos": False,
+                "l1_accepted": True,
+                "l1_correct": False,
+                "l1_intent": "alpha",
+                "program_path": "programs/alpha",
+                "reason": "matched weak cue",
+                "l1_outcome": "wrong_accept",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    support_summary = build_clinc150_l1_phrase_support_summary(
+        [_teacher_row("t1", "alpha", "alpha")]
+    )
+
+    feedback = build_clinc150_l1_visible_feedback(
+        round_index=2,
+        train_rows=[_teacher_row("t1", "alpha", "alpha")],
+        support_summary=support_summary,
+        split_summary={"general_dev": {"request_ids": ["t1"]}},
+        visible_slices={
+            "train_dev": [_record("t1", "alpha train", "alpha")],
+            "validation_oos_heavy": [],
+            "validation_intent_conflict": [],
+        },
+        prior_rounds=[
+            {
+                "round": 1,
+                "hypothesis": "first",
+                "candidate_eligible": False,
+                "failure_classification": "accepted_errors_low_precision",
+                "next_action": "continue",
+                "evaluations": {
+                    "visible_validation": {
+                        "details_jsonl_path": str(details_path),
+                        "summary": {
+                            "requests": 1,
+                            "l1_only": {
+                                "accepted": 1,
+                                "accepted_coverage": 1.0,
+                                "accepted_precision": 0.0,
+                                "wrong_accepts": 1,
+                                "lower_layer_oos_false_accepts": 0,
+                                "lower_layer_oos_false_accept_rate": 0.0,
+                            },
+                            "l1_l4_cascade": {"accuracy_delta_vs_all_l4": -1.0},
+                        },
+                    }
+                },
+            }
+        ],
+        thresholds={
+            "min_precision": 0.99,
+            "max_oos_false_accept_rate": 0.02,
+            "min_accuracy_delta_vs_all_l4": -0.005,
+            "min_coverage": 0.10,
+        },
+    )
+
+    serialized = json.dumps(feedback, sort_keys=True)
+    errors = feedback["previous_round"]["visible_accepted_errors"]["visible_validation"]
+    assert "gold_intent" not in serialized
+    assert errors[0]["reference_intent"] == "beta"
+    assert errors[0]["candidate_intent"] == "alpha"
 
 
 def test_clinc150_calibration_splits_are_deterministic_and_train_derived() -> None:

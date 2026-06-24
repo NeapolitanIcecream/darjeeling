@@ -45,6 +45,7 @@ class L1CodingAgentJobConfig:
     approval_policy: str = "never"
     dry_run_patches: tuple[Path, ...] = ()
     run_validation: bool = True
+    extra_context_payloads: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,7 @@ class L4CodingAgentAdapter:
         hard_cases: list[TeacherTrace] | None = None,
         current_metrics: dict[str, Any] | None = None,
         objective: dict[str, Any] | None = None,
+        extra_context_payloads: dict[str, Any] | None = None,
         dry_run_patch: Path | None = None,
         run_validation: bool = True,
     ) -> L1CodingAgentJobResult:
@@ -106,6 +108,7 @@ class L4CodingAgentAdapter:
                 if path is not None
             ),
             run_validation=run_validation,
+            extra_context_payloads=extra_context_payloads or {},
         )
         return run_l1_coding_agent_job(
             config=config,
@@ -172,6 +175,7 @@ def run_l1_coding_agent_job(
             hard_cases=hard_cases,
             current_metrics=current_metrics,
             objective=objective,
+            extra_context_payloads=config.extra_context_payloads,
         )
         round_prompt_path.write_text(
             _build_l1_agent_prompt(
@@ -375,6 +379,7 @@ def _write_context_files(
     hard_cases: list[TeacherTrace],
     current_metrics: dict[str, Any],
     objective: dict[str, Any],
+    extra_context_payloads: dict[str, Any] | None = None,
 ) -> None:
     context_dir.mkdir(parents=True, exist_ok=True)
     payloads = {
@@ -393,6 +398,7 @@ def _write_context_files(
         "constraints.md": _constraints_text(),
         "commands.md": _commands_text(),
     }
+    payloads.update(extra_context_payloads or {})
     assert_no_forbidden_context(payloads)
     for name, payload in payloads.items():
         path = context_dir / name
@@ -646,6 +652,7 @@ def _run_codex_cli_job(
             "-a",
             config.approval_policy,
             "exec",
+            *(["--skip-git-repo-check"] if config.mode == "agent-session" else []),
             "--cd",
             str(cwd.resolve()),
             "--json",

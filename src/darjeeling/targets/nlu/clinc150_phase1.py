@@ -10,10 +10,19 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from darjeeling.compiler.evolution_policy import EvolutionRunPolicy
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.targets.nlu.adapters.clinc150 import CLINC150_OOS_INTENT
+from darjeeling.targets.nlu.compiler.l1_program_compiler import (
+    L1CodingAgentJobConfig,
+    run_l1_coding_agent_job,
+)
 from darjeeling.targets.nlu.data import DataRecord
-from darjeeling.targets.nlu.layers.l1_rust_programbank import RustL1Response
+from darjeeling.targets.nlu.layers.l1_rust_programbank import (
+    RustL1Response,
+    RustL1Worker,
+    build_l1_binary,
+)
 from darjeeling.targets.nlu.layers.l2_student import (
     L2StudentBundle,
     L2StudentConfig,
@@ -2157,6 +2166,1039 @@ def run_clinc150_l2_autoresearch(
     )
     result["summary_path"] = str(summary_path)
     return result
+
+
+def clinc150_l1_teacher_traces_from_teacher_rows(rows: list[dict[str, Any]]) -> list[TeacherTrace]:
+    traces: list[TeacherTrace] = []
+    for row in rows:
+        if row.get("parse_failure") or row.get("teacher_frame") is None:
+            continue
+        teacher_frame = Frame.model_validate(row["teacher_frame"])
+        traces.append(
+            TeacherTrace(
+                request_id=str(row["request_id"]),
+                utterance=str(row["utterance"]),
+                teacher_frame=teacher_frame,
+                chosen_layer="L4",
+                final_frame=teacher_frame,
+                layer_results=[
+                    LayerResult(
+                        layer="L1",
+                        accepted=False,
+                        frame=None,
+                        latency_ms=0.0,
+                        reason="baseline L1 abstain before ProgramBank evolution",
+                    ),
+                    LayerResult(
+                        layer="L4",
+                        accepted=True,
+                        frame=teacher_frame,
+                        latency_ms=float(row.get("latency_ms", 0.0)),
+                        cost_usd=float(row.get("cost_usd", 0.0)),
+                        metadata={
+                            "model": row.get("model"),
+                            "tokens": row.get("tokens", 0),
+                            "attempt_count": row.get("attempt_count", 1),
+                            "retry_recovered": row.get("retry_recovered", False),
+                            "replay_oracle_row": True,
+                        },
+                    ),
+                ],
+                l4_usage={
+                    "tokens": row.get("tokens", 0),
+                    "cost_usd": row.get("cost_usd", 0.0),
+                    "latency_ms": row.get("latency_ms", 0.0),
+                    "attempt_count": row.get("attempt_count", 1),
+                    "unknown_usage_attempts": row.get("unknown_usage_attempts", 0),
+                },
+                metadata={
+                    "source": "clinc150_teacher_details",
+                    "teacher_visible_only": True,
+                    "reference_withheld": True,
+                },
+                timestamp=str(row.get("timestamp") or datetime.now(UTC).isoformat()),
+            )
+        )
+    return traces
+
+
+def build_clinc150_l1_visible_feedback(
+    *,
+    round_index: int,
+    train_rows: list[dict[str, Any]],
+    support_summary: dict[str, Any],
+    split_summary: dict[str, Any],
+    visible_slices: dict[str, list[DataRecord]],
+    prior_rounds: list[dict[str, Any]],
+    thresholds: dict[str, float],
+) -> dict[str, Any]:
+    previous_round = prior_rounds[-1] if prior_rounds else None
+    previous_evaluations = previous_round.get("evaluations", {}) if previous_round else {}
+    return {
+        "schema_version": "clinc150-l1-visible-feedback-v1",
+        "round": round_index,
+        "visibility": "agent_visible_train_dev_and_validation_only",
+        "locked_test_visible": False,
+        "round_hypothesis": _clinc150_l1_next_hypothesis(previous_round),
+        "thresholds": thresholds,
+        "train_teacher_rows": len(train_rows),
+        "train_parsed_teacher_rows": sum(
+            1 for row in train_rows if not row.get("parse_failure") and row.get("teacher_frame")
+        ),
+        "train_derived_splits": split_summary,
+        "visible_slices": {
+            name: {
+                "requests": len(records),
+                "request_ids_sample": [record.request_id for record in records[:20]],
+            }
+            for name, records in visible_slices.items()
+        },
+        "phrase_support_summary": support_summary,
+        "previous_round": (
+            {
+                "round": previous_round["round"],
+                "hypothesis": previous_round["hypothesis"],
+                "candidate_eligible": previous_round["candidate_eligible"],
+                "failure_classification": previous_round["failure_classification"],
+                "next_action": previous_round["next_action"],
+                "visible_metrics": {
+                    name: _clinc150_l1_context_safe_eval(value)
+                    for name, value in previous_evaluations.items()
+                },
+                "visible_accepted_errors": {
+                    name: _clinc150_l1_visible_error_rows(value)
+                    for name, value in previous_evaluations.items()
+                },
+            }
+            if previous_round is not None
+            else None
+        ),
+    }
+
+
+def build_clinc150_l1_phrase_support_summary(
+    rows: list[dict[str, Any]],
+    *,
+    max_phrases: int = 500,
+    max_conflicts: int = 120,
+) -> dict[str, Any]:
+    phrase_intent_counts = _clinc150_l1_phrase_counts(rows)
+    phrase_rows = []
+    conflicts = []
+    for phrase, intent_counts in phrase_intent_counts.items():
+        total = sum(intent_counts.values())
+        ranked_intents = sorted(intent_counts.items(), key=lambda item: (-item[1], item[0]))
+        top_intent, top_count = ranked_intents[0]
+        negative_count = total - top_count
+        row = {
+            "phrase": phrase,
+            "support": total,
+            "top_intent": top_intent,
+            "positive_support": top_count,
+            "negative_support": negative_count,
+            "intent_counts": dict(ranked_intents[:8]),
+        }
+        phrase_rows.append(row)
+        if len(ranked_intents) > 1:
+            conflicts.append(
+                {
+                    **row,
+                    "intent_count": len(ranked_intents),
+                    "conflicting_intents": [intent for intent, _count in ranked_intents[:8]],
+                }
+            )
+    phrase_rows.sort(
+        key=lambda row: (
+            -int(row["positive_support"]),
+            int(row["negative_support"]),
+            row["phrase"],
+        )
+    )
+    conflicts.sort(
+        key=lambda row: (
+            -int(row["support"]),
+            -int(row["intent_count"]),
+            row["phrase"],
+        )
+    )
+    return {
+        "schema_version": "clinc150-l1-phrase-support-v1",
+        "source": "train_teacher_rows",
+        "phrase_count": len(phrase_rows),
+        "top_positive_phrases": phrase_rows[:max_phrases],
+        "intent_conflict_phrases": conflicts[:max_conflicts],
+    }
+
+
+def write_clinc150_l1_visible_feedback(
+    *,
+    feedback: dict[str, Any],
+    out_dir: Path,
+) -> dict[str, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    feedback_path = out_dir / "clinc150_visible_feedback.json"
+    feedback_path.write_text(
+        json.dumps(feedback, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    support_path = out_dir / "clinc150_phrase_support.json"
+    support_path.write_text(
+        json.dumps(
+            feedback["phrase_support_summary"],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    errors_path = out_dir / "clinc150_previous_visible_accepted_errors.jsonl"
+    previous = feedback.get("previous_round") or {}
+    error_views = previous.get("visible_accepted_errors") or {}
+    error_rows = [
+        {"view": view_name, **row}
+        for view_name, rows in error_views.items()
+        for row in rows
+    ]
+    errors_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in error_rows),
+        encoding="utf-8",
+    )
+    return {
+        "feedback": str(feedback_path),
+        "phrase_support": str(support_path),
+        "previous_visible_accepted_errors": str(errors_path),
+    }
+
+
+def _evaluate_clinc150_l1_crate_views(
+    *,
+    crate_dir: Path,
+    out_dir: Path,
+    views: dict[str, tuple[list[DataRecord], Clinc150L4ReplayOracle]],
+) -> dict[str, dict[str, Any]]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    binary_path = build_l1_binary(crate_dir)
+    results: dict[str, dict[str, Any]] = {}
+    with RustL1Worker(binary_path, timeout_s=5.0) as worker:
+        for name, (records, replay_oracle) in views.items():
+            result = evaluate_clinc150_l1(
+                worker=worker,
+                records=records,
+                replay_oracle=replay_oracle,
+                include_prediction_rows=True,
+            )
+            artifact = write_clinc150_l1_eval_artifacts(
+                result=result,
+                out_dir=out_dir / name,
+            )
+            results[name] = {
+                "summary_path": str(artifact.summary_path),
+                "details_jsonl_path": (
+                    str(artifact.details_jsonl_path)
+                    if artifact.details_jsonl_path is not None
+                    else None
+                ),
+                "accepted_errors_path": str(artifact.accepted_errors_path),
+                "cost_latency_path": str(artifact.cost_latency_path),
+                "summary": artifact.summary,
+            }
+    return results
+
+
+def run_clinc150_l1_agent_session_evolution(
+    *,
+    data_dir: Path,
+    out_dir: Path,
+    source_repo_dir: Path,
+    source_crate_dir: Path,
+    train_teacher_details: Path,
+    validation_teacher_details: Path,
+    test_teacher_details: Path,
+    mode: str = "agent-session",
+    rounds: int = 5,
+    timeout_s: float = 3600.0,
+    codex_command: str = "codex",
+    codex_model: str | None = None,
+    min_precision: float = 0.99,
+    max_oos_false_accept_rate: float = 0.02,
+    min_accuracy_delta_vs_all_l4: float = -0.005,
+    min_coverage: float = 0.10,
+) -> dict[str, Any]:
+    """Run target-owned CLINC150 L1 real agent-session evolution."""
+
+    if mode not in {"agent-session", "codex-cli", "dry-run"}:
+        raise ValueError("mode must be agent-session, codex-cli, or dry-run")
+    if rounds < 1:
+        raise ValueError("rounds must be at least 1")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    train_records = load_processed_records(data_dir, split="train")
+    validation_records = load_processed_records(data_dir, split="validation")
+    test_records = load_processed_records(data_dir, split="test")
+    train_rows = load_teacher_rows(train_teacher_details)
+    validation_rows = load_teacher_rows(validation_teacher_details)
+    test_rows = load_teacher_rows(test_teacher_details)
+    train_oracle = Clinc150L4ReplayOracle.from_rows(
+        train_rows,
+        source_path=train_teacher_details,
+    )
+    validation_oracle = Clinc150L4ReplayOracle.from_rows(
+        validation_rows,
+        source_path=validation_teacher_details,
+    )
+    test_oracle = Clinc150L4ReplayOracle.from_rows(
+        test_rows,
+        source_path=test_teacher_details,
+    )
+    train_traces = clinc150_l1_teacher_traces_from_teacher_rows(train_rows)
+    traces_path = out_dir / "clinc150_l1_teacher_train_traces.jsonl"
+    traces_path.write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in train_traces),
+        encoding="utf-8",
+    )
+
+    split_summary = build_clinc150_calibration_splits(train_rows)
+    split_path = out_dir / "clinc150_l1_train_derived_splits.json"
+    split_path.write_text(
+        json.dumps(split_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    support_summary = build_clinc150_l1_phrase_support_summary(train_rows)
+    slices = _clinc150_l1_visible_record_slices(
+        train_records=train_records,
+        validation_records=validation_records,
+        train_rows=train_rows,
+        split_summary=split_summary,
+        support_summary=support_summary,
+    )
+
+    baselines = {
+        "empty_validation": _evaluate_clinc150_l1_crate_views(
+            crate_dir=source_crate_dir,
+            out_dir=out_dir / "baselines" / "empty-validation",
+            views={
+                "validation_sequential": (validation_records, validation_oracle),
+            },
+        )["validation_sequential"],
+        "empty_locked_test": _evaluate_clinc150_l1_crate_views(
+            crate_dir=source_crate_dir,
+            out_dir=out_dir / "baselines" / "empty-locked-test",
+            views={
+                "locked_test_sequential": (test_records, test_oracle),
+            },
+        )["locked_test_sequential"],
+    }
+
+    outer_policy = EvolutionRunPolicy(
+        max_rounds=rounds,
+        round_timeout_s=timeout_s,
+        round_executor=mode,
+    )
+    prior_rounds: list[dict[str, Any]] = []
+    current_source_crate_dir = source_crate_dir
+
+    for round_index in range(1, rounds + 1):
+        feedback = build_clinc150_l1_visible_feedback(
+            round_index=round_index,
+            train_rows=train_rows,
+            support_summary=support_summary,
+            split_summary=split_summary,
+            visible_slices=slices,
+            prior_rounds=prior_rounds,
+            thresholds={
+                "min_precision": min_precision,
+                "max_oos_false_accept_rate": max_oos_false_accept_rate,
+                "min_accuracy_delta_vs_all_l4": min_accuracy_delta_vs_all_l4,
+                "min_coverage": min_coverage,
+            },
+        )
+        feedback_dir = out_dir / "visible-feedback" / f"round-{round_index:03d}"
+        feedback_paths = write_clinc150_l1_visible_feedback(
+            feedback=feedback,
+            out_dir=feedback_dir,
+        )
+        job_dir = out_dir / "l1-agent-jobs" / f"round-{round_index:03d}"
+        agent_result = run_l1_coding_agent_job(
+            config=L1CodingAgentJobConfig(
+                mode=mode,  # type: ignore[arg-type]
+                source_crate_dir=current_source_crate_dir,
+                job_dir=job_dir,
+                max_rounds=1,
+                codex_command=codex_command,
+                codex_model=codex_model,
+                timeout_s=timeout_s,
+                run_validation=True,
+                extra_context_payloads=_clinc150_l1_context_payloads(
+                    feedback=feedback,
+                    source_repo_dir=source_repo_dir,
+                    data_dir=data_dir,
+                    train_teacher_details=train_teacher_details,
+                    validation_teacher_details=validation_teacher_details,
+                ),
+            ),
+            teacher_train=train_traces,
+            hard_cases=[],
+            current_metrics=_clinc150_l1_current_metrics(prior_rounds),
+            objective=_clinc150_l1_objective(
+                min_precision=min_precision,
+                max_oos_false_accept_rate=max_oos_false_accept_rate,
+                min_accuracy_delta_vs_all_l4=min_accuracy_delta_vs_all_l4,
+                min_coverage=min_coverage,
+            ),
+        )
+        round_payload: dict[str, Any] = {
+            "round": round_index,
+            "hypothesis": feedback["round_hypothesis"],
+            "job_dir": str(job_dir),
+            "mode": mode,
+            "agent_result": {
+                "succeeded": agent_result.succeeded,
+                "return_code": agent_result.return_code,
+                "stop_reason": agent_result.stop_reason,
+                "rounds_completed": agent_result.rounds_completed,
+                "workspace_crate_dir": str(agent_result.workspace_crate_dir),
+                "provenance_path": str(agent_result.provenance_path),
+                "transcript_path": str(agent_result.transcript_path),
+                "diff_path": str(agent_result.diff_path),
+                "commands_path": str(agent_result.commands_path),
+                "report_path": str(agent_result.report_path),
+                "round_results": agent_result.round_results,
+            },
+            "feedback_paths": feedback_paths,
+            "evaluations": {},
+            "candidate_eligible": False,
+            "failure_classification": None,
+            "next_action": None,
+        }
+        if agent_result.succeeded:
+            evaluations = _evaluate_clinc150_l1_crate_views(
+                crate_dir=agent_result.workspace_crate_dir,
+                out_dir=out_dir / "evaluations" / f"round-{round_index:03d}",
+                views={
+                    "train_dev": (slices["train_dev"], train_oracle),
+                    "visible_validation": (validation_records, validation_oracle),
+                    "visible_oos_heavy": (slices["validation_oos_heavy"], validation_oracle),
+                    "visible_intent_conflict": (
+                        slices["validation_intent_conflict"],
+                        validation_oracle,
+                    ),
+                },
+            )
+            round_payload["evaluations"] = evaluations
+            round_payload["candidate_eligible"] = _clinc150_l1_candidate_visible_eligible(
+                evaluations,
+                min_precision=min_precision,
+                max_oos_false_accept_rate=max_oos_false_accept_rate,
+                min_accuracy_delta_vs_all_l4=min_accuracy_delta_vs_all_l4,
+                min_coverage=min_coverage,
+            )
+            round_payload["failure_classification"] = _clinc150_l1_failure_classification(
+                evaluations
+            )
+            round_payload["next_action"] = (
+                "eligible_for_locked_test_selection"
+                if round_payload["candidate_eligible"]
+                else "continue_with_visible_feedback"
+            )
+            current_source_crate_dir = agent_result.workspace_crate_dir
+        else:
+            round_payload["failure_classification"] = "harness_or_agent_session_failed"
+            round_payload["next_action"] = "repair_harness_or_agent_session"
+        prior_rounds.append(round_payload)
+
+    selected_round = _select_clinc150_l1_visible_candidate(prior_rounds)
+    locked_test = None
+    stream_confirmation = None
+    locked_test_exposures = 0
+    if selected_round is not None:
+        candidate_crate = Path(selected_round["agent_result"]["workspace_crate_dir"])
+        confirmation = _evaluate_clinc150_l1_crate_views(
+            crate_dir=candidate_crate,
+            out_dir=out_dir / "confirmation" / f"round-{selected_round['round']:03d}",
+            views={
+                "validation_sequential": (validation_records, validation_oracle),
+                "validation_uniform": (
+                    sample_clinc150_records(
+                        validation_records,
+                        stream="uniform",
+                        max_requests=len(validation_records),
+                    ),
+                    validation_oracle,
+                ),
+                "validation_zipf_heavy": (
+                    sample_clinc150_records(
+                        validation_records,
+                        stream="zipf-heavy",
+                        max_requests=len(validation_records),
+                    ),
+                    validation_oracle,
+                ),
+                "visible_oos_heavy": (slices["validation_oos_heavy"], validation_oracle),
+                "visible_intent_conflict": (
+                    slices["validation_intent_conflict"],
+                    validation_oracle,
+                ),
+                "locked_test_sequential": (test_records, test_oracle),
+            },
+        )
+        locked_test = confirmation["locked_test_sequential"]
+        locked_test_exposures = 1
+        stream_confirmation = {
+            key: value
+            for key, value in confirmation.items()
+            if key != "locked_test_sequential"
+        }
+
+    result = {
+        "schema_version": "clinc150-l1-agent-session-effect-v1",
+        "created_at": datetime.now(UTC).isoformat(),
+        "run_root": str(out_dir),
+        "source_repo_dir": str(source_repo_dir),
+        "mode": mode,
+        "main_evidence_used_agent_session": mode == "agent-session",
+        "l0_enabled": False,
+        "l2_enabled": False,
+        "l3_enabled": False,
+        "new_paid_l4_calls": 0,
+        "new_paid_spend_usd": 0.0,
+        "outer_policy": {
+            "max_rounds": outer_policy.max_rounds,
+            "round_timeout_s": outer_policy.round_timeout_s,
+            "round_executor": outer_policy.round_executor,
+        },
+        "artifacts": {
+            "data_dir": str(data_dir),
+            "source_crate_dir": str(source_crate_dir),
+            "train_teacher_details": str(train_teacher_details),
+            "validation_teacher_details": str(validation_teacher_details),
+            "test_teacher_details": str(test_teacher_details),
+            "train_teacher_traces": str(traces_path),
+            "train_derived_splits": str(split_path),
+        },
+        "artifact_counts_and_hashes": _clinc150_l1_artifact_counts_and_hashes(
+            [
+                data_dir / "train.jsonl",
+                data_dir / "validation.jsonl",
+                data_dir / "test.jsonl",
+                train_teacher_details,
+                validation_teacher_details,
+                test_teacher_details,
+            ]
+        ),
+        "visible_data_policy": {
+            "agent_visible": [
+                "train teacher rows",
+                "train-derived dev split ids",
+                "official validation aggregate metrics",
+                "official validation accepted-error summaries",
+                "visible OOS and intent-conflict diagnostics",
+                "phrase support counts from train teacher rows",
+            ],
+            "withheld_until_selection": [
+                "locked test labels",
+                "locked test teacher details",
+                "locked test accepted-error details",
+            ],
+        },
+        "baselines": baselines,
+        "rounds": prior_rounds,
+        "selected_round": selected_round,
+        "locked_test": locked_test,
+        "locked_test_exposures": locked_test_exposures,
+        "stream_confirmation": stream_confirmation,
+        "decision": _clinc150_l1_effect_decision(
+            selected_round=selected_round,
+            locked_test=locked_test,
+            mode=mode,
+            min_precision=min_precision,
+            max_oos_false_accept_rate=max_oos_false_accept_rate,
+            min_accuracy_delta_vs_all_l4=min_accuracy_delta_vs_all_l4,
+            min_coverage=min_coverage,
+        ),
+    }
+    summary_path = out_dir / "clinc150_l1_agent_session_effect_summary.json"
+    summary_path.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    result["summary_path"] = str(summary_path)
+    return result
+
+
+def _clinc150_l1_visible_record_slices(
+    *,
+    train_records: list[DataRecord],
+    validation_records: list[DataRecord],
+    train_rows: list[dict[str, Any]],
+    split_summary: dict[str, Any],
+    support_summary: dict[str, Any],
+) -> dict[str, list[DataRecord]]:
+    train_by_id = {record.request_id: record for record in train_records}
+    train_dev_ids = split_summary["general_dev"]["request_ids"]
+    train_oos_ids = [
+        str(row["request_id"])
+        for row in train_rows
+        if _teacher_intent(row) == CLINC150_OOS_INTENT
+    ]
+    conflict_phrases = [
+        str(row["phrase"])
+        for row in support_summary.get("intent_conflict_phrases", [])[:80]
+    ]
+    validation_conflict_records = [
+        record
+        for record in validation_records
+        if any(
+            _clinc150_l1_contains_phrase(record.utterance, phrase)
+            for phrase in conflict_phrases
+        )
+    ][:1000]
+    return {
+        "train_dev": [
+            train_by_id[request_id]
+            for request_id in train_dev_ids
+            if request_id in train_by_id
+        ],
+        "train_oos_heavy": [
+            train_by_id[request_id]
+            for request_id in train_oos_ids
+            if request_id in train_by_id
+        ],
+        "validation_oos_heavy": [
+            record
+            for record in validation_records
+            if record.gold_frame.intent == CLINC150_OOS_INTENT
+        ],
+        "validation_intent_conflict": validation_conflict_records,
+    }
+
+
+def _clinc150_l1_context_payloads(
+    *,
+    feedback: dict[str, Any],
+    source_repo_dir: Path,
+    data_dir: Path,
+    train_teacher_details: Path,
+    validation_teacher_details: Path,
+) -> dict[str, Any]:
+    return {
+        "clinc150_visible_feedback.json": feedback,
+        "clinc150_phrase_support.json": feedback["phrase_support_summary"],
+        "clinc150_commands.md": _clinc150_l1_context_commands_text(
+            source_repo_dir=source_repo_dir,
+            data_dir=data_dir,
+            train_teacher_details=train_teacher_details,
+            validation_teacher_details=validation_teacher_details,
+        ),
+    }
+
+
+def _clinc150_l1_context_commands_text(
+    *,
+    source_repo_dir: Path,
+    data_dir: Path,
+    train_teacher_details: Path,
+    validation_teacher_details: Path,
+) -> str:
+    repo = source_repo_dir.resolve()
+    data = data_dir.resolve()
+    train_details = train_teacher_details.resolve()
+    validation_details = validation_teacher_details.resolve()
+    return "\n".join(
+        [
+            "# CLINC150 visible commands",
+            "",
+            "Run these from the workspace root unless noted.",
+            "",
+            "Build/test the candidate:",
+            "",
+            "```bash",
+            "cargo test --manifest-path l1_programbank/Cargo.toml",
+            "```",
+            "",
+            "Visible validation evaluation:",
+            "",
+            "```bash",
+            f"WORKSPACE=$PWD; cd {repo} && uv run python -m darjeeling.targets.nlu.main_cli "
+            f"clinc150 l1-eval --crate-dir $WORKSPACE/l1_programbank "
+            f"--out-dir $WORKSPACE/runs/visible-validation --data-dir {data} "
+            f"--split validation --stream sequential --teacher-details {validation_details} "
+            "--write-details",
+            "```",
+            "",
+            "Train-derived visible smoke evaluation:",
+            "",
+            "```bash",
+            f"WORKSPACE=$PWD; cd {repo} && uv run python -m darjeeling.targets.nlu.main_cli "
+            f"clinc150 l1-eval --crate-dir $WORKSPACE/l1_programbank "
+            f"--out-dir $WORKSPACE/runs/train-visible --data-dir {data} "
+            f"--split train --stream stratified --max-requests 1200 "
+            f"--teacher-details {train_details} --write-details",
+            "```",
+            "",
+            "Never read or use locked-test teacher details inside the agent session.",
+        ]
+    )
+
+
+def _clinc150_l1_objective(
+    *,
+    min_precision: float,
+    max_oos_false_accept_rate: float,
+    min_accuracy_delta_vs_all_l4: float,
+    min_coverage: float,
+) -> dict[str, Any]:
+    return {
+        "target": "clinc150_l1_rust_programbank",
+        "measurement_path": "L1_shadow_plus_L4_replay_oracle_fallback",
+        "primary_layers": ["L1", "L4_REPLAY_ORACLE"],
+        "l0_enabled": False,
+        "l2_enabled": False,
+        "l3_enabled": False,
+        "accepted_precision_min": min_precision,
+        "lower_layer_oos_false_accept_rate_max": max_oos_false_accept_rate,
+        "cascade_delta_vs_all_l4_min": min_accuracy_delta_vs_all_l4,
+        "visible_validation_coverage_min": min_coverage,
+        "optimization_order": [
+            "accepted_precision",
+            "OOS false accepts",
+            "visible slice stability",
+            "coverage",
+            "native latency",
+        ],
+    }
+
+
+def _clinc150_l1_current_metrics(prior_rounds: list[dict[str, Any]]) -> dict[str, Any]:
+    if not prior_rounds:
+        return {"rounds_completed": 0, "previous_visible_metrics": None}
+    previous = prior_rounds[-1]
+    return {
+        "rounds_completed": len(prior_rounds),
+        "previous_round": previous["round"],
+        "previous_candidate_eligible": previous["candidate_eligible"],
+        "previous_failure_classification": previous["failure_classification"],
+        "previous_visible_metrics": {
+            name: _clinc150_l1_context_safe_eval(value)
+            for name, value in previous.get("evaluations", {}).items()
+        },
+    }
+
+
+def _clinc150_l1_context_safe_eval(evaluation: dict[str, Any]) -> dict[str, Any]:
+    summary = evaluation.get("summary", {})
+    l1 = summary.get("l1_only", {})
+    cascade = summary.get("l1_l4_cascade", {}) or {}
+    return {
+        "requests": summary.get("requests"),
+        "l1_only": {
+            "accepted": l1.get("accepted"),
+            "accepted_coverage": l1.get("accepted_coverage"),
+            "accepted_precision": l1.get("accepted_precision"),
+            "wrong_accepts": l1.get("wrong_accepts"),
+            "lower_layer_oos_false_accepts": l1.get("lower_layer_oos_false_accepts"),
+            "lower_layer_oos_false_accept_rate": l1.get(
+                "lower_layer_oos_false_accept_rate"
+            ),
+            "native_p50_us": l1.get("native_p50_us"),
+            "native_p95_us": l1.get("native_p95_us"),
+            "program_path_counts": l1.get("program_path_counts", {}),
+            "outcome_counts": l1.get("outcome_counts", {}),
+        },
+        "l1_l4_cascade": {
+            "accuracy": cascade.get("accuracy"),
+            "accuracy_delta_vs_all_l4": cascade.get("accuracy_delta_vs_all_l4"),
+            "l4_calls_per_100_requests": cascade.get("l4_calls_per_100_requests"),
+            "l4_call_reduction_rate": cascade.get("l4_call_reduction_rate"),
+        },
+    }
+
+
+def _clinc150_l1_visible_error_rows(
+    evaluation: dict[str, Any],
+    *,
+    limit: int = 80,
+) -> list[dict[str, Any]]:
+    details_path = evaluation.get("details_jsonl_path")
+    if not details_path:
+        return []
+    rows = []
+    with Path(details_path).open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not row.get("l1_accepted") or row.get("l1_correct"):
+                continue
+            rows.append(
+                {
+                    "request_id": row["request_id"],
+                    "utterance": row.get("utterance"),
+                    "reference_intent": row.get("gold_intent"),
+                    "candidate_intent": row.get("l1_intent"),
+                    "is_reference_oos": row.get("gold_oos"),
+                    "program_path": row.get("program_path"),
+                    "reason": row.get("reason"),
+                    "outcome": row.get("l1_outcome"),
+                }
+            )
+            if len(rows) >= limit:
+                break
+    return rows
+
+
+def _clinc150_l1_candidate_visible_eligible(
+    evaluations: dict[str, dict[str, Any]],
+    *,
+    min_precision: float,
+    max_oos_false_accept_rate: float,
+    min_accuracy_delta_vs_all_l4: float,
+    min_coverage: float,
+) -> bool:
+    main = evaluations.get("visible_validation")
+    if main is None:
+        return False
+    if not _clinc150_l1_eval_passes(
+        main,
+        min_precision=min_precision,
+        max_oos_false_accept_rate=max_oos_false_accept_rate,
+        min_accuracy_delta_vs_all_l4=min_accuracy_delta_vs_all_l4,
+        min_coverage=min_coverage,
+        require_precision=True,
+    ):
+        return False
+    for slice_name in ("train_dev", "visible_oos_heavy", "visible_intent_conflict"):
+        evaluation = evaluations.get(slice_name)
+        if evaluation is None:
+            return False
+        if not _clinc150_l1_eval_passes(
+            evaluation,
+            min_precision=min_precision,
+            max_oos_false_accept_rate=max_oos_false_accept_rate,
+            min_accuracy_delta_vs_all_l4=min_accuracy_delta_vs_all_l4,
+            min_coverage=0.0,
+            require_precision=False,
+        ):
+            return False
+    return True
+
+
+def _clinc150_l1_eval_passes(
+    evaluation: dict[str, Any],
+    *,
+    min_precision: float,
+    max_oos_false_accept_rate: float,
+    min_accuracy_delta_vs_all_l4: float,
+    min_coverage: float,
+    require_precision: bool,
+) -> bool:
+    summary = evaluation.get("summary", {})
+    l1 = summary.get("l1_only", {})
+    cascade = summary.get("l1_l4_cascade", {}) or {}
+    precision = l1.get("accepted_precision")
+    coverage = float(l1.get("accepted_coverage") or 0.0)
+    if coverage < min_coverage:
+        return False
+    if precision is None:
+        if require_precision:
+            return False
+    elif precision < min_precision:
+        return False
+    if float(l1.get("lower_layer_oos_false_accept_rate") or 0.0) > max_oos_false_accept_rate:
+        return False
+    delta = cascade.get("accuracy_delta_vs_all_l4")
+    return delta is None or float(delta) >= min_accuracy_delta_vs_all_l4
+
+
+def _select_clinc150_l1_visible_candidate(
+    rounds: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    eligible = [round_payload for round_payload in rounds if round_payload["candidate_eligible"]]
+    if not eligible:
+        return None
+    return max(
+        eligible,
+        key=lambda round_payload: (
+            _clinc150_l1_visible_precision_floor(round_payload["evaluations"]),
+            -_clinc150_l1_visible_oos_ceiling(round_payload["evaluations"]),
+            round_payload["evaluations"]["visible_validation"]["summary"]["l1_only"][
+                "accepted_coverage"
+            ],
+        ),
+    )
+
+
+def _clinc150_l1_visible_precision_floor(evaluations: dict[str, dict[str, Any]]) -> float:
+    precisions = []
+    for evaluation in evaluations.values():
+        precision = evaluation.get("summary", {}).get("l1_only", {}).get("accepted_precision")
+        if precision is None:
+            precision = 1.0
+        precisions.append(float(precision))
+    return min(precisions) if precisions else 0.0
+
+
+def _clinc150_l1_visible_oos_ceiling(evaluations: dict[str, dict[str, Any]]) -> float:
+    rates = [
+        float(
+            evaluation.get("summary", {})
+            .get("l1_only", {})
+            .get("lower_layer_oos_false_accept_rate")
+            or 0.0
+        )
+        for evaluation in evaluations.values()
+    ]
+    return max(rates) if rates else 1.0
+
+
+def _clinc150_l1_failure_classification(
+    evaluations: dict[str, dict[str, Any]],
+) -> str:
+    validation = evaluations.get("visible_validation", {}).get("summary", {})
+    l1 = validation.get("l1_only", {})
+    precision = l1.get("accepted_precision")
+    coverage = float(l1.get("accepted_coverage") or 0.0)
+    oos_rate = float(l1.get("lower_layer_oos_false_accept_rate") or 0.0)
+    if precision is not None and precision < 0.99 and oos_rate > 0.02:
+        return "OOS_false_accepts_and_low_precision"
+    if precision is not None and precision < 0.99:
+        return "accepted_errors_low_precision"
+    if oos_rate > 0.02:
+        return "OOS_false_accepts_dominate"
+    if coverage < 0.10:
+        return "precision_safe_but_coverage_low"
+    return "visible_slices_or_selection_margin"
+
+
+def _clinc150_l1_next_hypothesis(previous_round: dict[str, Any] | None) -> str:
+    if previous_round is None:
+        return (
+            "Start with conservative boundary-aware high-support phrase/rule tables "
+            "and abstain by default."
+        )
+    classification = previous_round.get("failure_classification")
+    if classification == "OOS_false_accepts_dominate":
+        return "Add OOS-first guards, negative support vetoes, and conservative abstain rules."
+    if classification == "OOS_false_accepts_and_low_precision":
+        return "Remove weak cues, add OOS risk vetoes, and require stronger rule support."
+    if classification == "accepted_errors_low_precision":
+        return "Prune low-support positive phrases and add conflict-family vetoes."
+    if classification == "precision_safe_but_coverage_low":
+        return "Expand only high-support low-negative-support rule families."
+    return "Repair weakest visible slice while preserving accepted precision."
+
+
+def _clinc150_l1_effect_decision(
+    *,
+    selected_round: dict[str, Any] | None,
+    locked_test: dict[str, Any] | None,
+    mode: str,
+    min_precision: float,
+    max_oos_false_accept_rate: float,
+    min_accuracy_delta_vs_all_l4: float,
+    min_coverage: float,
+) -> str:
+    if mode != "agent-session":
+        return "Repair L1 harness"
+    if selected_round is None:
+        return "Continue target-side L1 adaptation"
+    if locked_test is None:
+        return "Repair L1 harness"
+    if _clinc150_l1_eval_passes(
+        locked_test,
+        min_precision=min_precision,
+        max_oos_false_accept_rate=max_oos_false_accept_rate,
+        min_accuracy_delta_vs_all_l4=min_accuracy_delta_vs_all_l4,
+        min_coverage=min_coverage,
+        require_precision=True,
+    ):
+        return "Proceed with the current L1 route"
+    return "Continue target-side L1 adaptation"
+
+
+def _clinc150_l1_phrase_counts(
+    rows: list[dict[str, Any]],
+) -> dict[str, Counter[str]]:
+    counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for row in rows:
+        if row.get("parse_failure") or row.get("teacher_frame") is None:
+            continue
+        intent = _teacher_intent(row)
+        if intent is None:
+            continue
+        for phrase in _clinc150_l1_utterance_phrases(str(row.get("utterance") or "")):
+            counts[phrase][intent] += 1
+    return counts
+
+
+def _normalized_text(text: str) -> str:
+    normalized = "".join(
+        char.lower() if char.isalnum() or char == "'" else " "
+        for char in text
+    )
+    return " ".join(normalized.split())
+
+
+def _clinc150_l1_utterance_phrases(utterance: str) -> set[str]:
+    stop_words = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "can",
+        "do",
+        "for",
+        "i",
+        "in",
+        "is",
+        "it",
+        "me",
+        "my",
+        "of",
+        "on",
+        "please",
+        "the",
+        "to",
+        "what",
+        "you",
+    }
+    tokens = [
+        token
+        for token in _normalized_text(utterance).split()
+        if len(token) >= 2 and token not in stop_words
+    ]
+    phrases = set(tokens)
+    for ngram in (2, 3):
+        for index in range(0, max(0, len(tokens) - ngram + 1)):
+            phrases.add(" ".join(tokens[index : index + ngram]))
+    return phrases
+
+
+def _clinc150_l1_contains_phrase(utterance: str, phrase: str) -> bool:
+    return f" {phrase} " in f" {_normalized_text(utterance)} "
+
+
+def _clinc150_l1_artifact_counts_and_hashes(paths: list[Path]) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": str(path),
+            "rows": _line_count(path),
+            "sha256": _sha256(path),
+        }
+        for path in paths
+    ]
+
+
+def _line_count(path: Path) -> int:
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for _line in handle)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def train_clinc150_target_bundle(
