@@ -12,7 +12,9 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     build_clinc150_label_cards,
     build_clinc150_oos_heavy_slice,
     build_clinc150_stratified_records,
+    clinc150_autoresearch_traces_from_teacher_rows,
     clinc150_calibration_guard_rules,
+    clinc150_guard_accepts,
     clinc150_metrics_from_teacher_rows,
     compare_repeated_teacher_rows,
     evaluate_clinc150_guard_rule,
@@ -289,6 +291,93 @@ def test_clinc150_l2_eval_reports_fallback_cost_latency_and_artifacts(tmp_path) 
     assert eval_artifact.cost_latency_path.exists()
     assert eval_artifact.details_jsonl_path is not None
     assert eval_artifact.details_jsonl_path.exists()
+
+
+def test_clinc150_l2_prediction_rows_expose_oos_risk_metadata() -> None:
+    train_records = [
+        _record("t1", "alpha train one", "alpha"),
+        _record("t2", "alpha train two", "alpha"),
+        _record("t3", "beta train one", "beta"),
+        _record("t4", "beta train two", "beta"),
+        _record("t5", "unsupported thing", "out_of_scope", abstain=True),
+        _record("t6", "not in supported intents", "out_of_scope", abstain=True),
+    ]
+    bundle = train_clinc150_l2(
+        training_examples_from_gold_records(train_records),
+        accept_threshold=0.0,
+    )
+
+    result = evaluate_clinc150_l2(
+        bundle=bundle,
+        records=[_record("e1", "unsupported thing", "out_of_scope", abstain=True)],
+        include_prediction_rows=True,
+    )
+
+    row = result["prediction_rows"][0]
+    assert "out_of_scope" in row["intent_probabilities"]
+    assert row["oos_probability"] == pytest.approx(
+        row["intent_probabilities"]["out_of_scope"]
+    )
+    assert row["oos_rank"] is not None
+    assert row["oos_margin"] == pytest.approx(
+        row["top1_probability"] - row["oos_probability"]
+    )
+
+
+def test_clinc150_oos_risk_guard_filters_high_oos_probability() -> None:
+    risky = {
+        **_prediction_row("r1", "out_of_scope", "alpha", abstain=True),
+        "oos_probability": 0.20,
+        "oos_margin": 0.05,
+        "oos_rank": 2,
+    }
+    safe = {
+        **_prediction_row("r2", "alpha", "alpha"),
+        "oos_probability": 0.01,
+        "oos_margin": 0.80,
+        "oos_rank": 50,
+    }
+    rule = {
+        "name": "threshold_oos_probability",
+        "threshold": 0.98,
+        "max_oos_probability": 0.05,
+    }
+    oracle = Clinc150L4ReplayOracle.from_rows(
+        [
+            _teacher_row("r1", "out_of_scope", "out_of_scope", abstain=True),
+            _teacher_row("r2", "alpha", "alpha"),
+        ]
+    )
+
+    result = evaluate_clinc150_guard_rule(
+        prediction_rows=[risky, safe],
+        guard_rule=rule,
+        replay_oracle=oracle,
+    )
+
+    assert clinc150_guard_accepts(risky, guard_rule=rule) is False
+    assert clinc150_guard_accepts(safe, guard_rule=rule) is True
+    assert result["accepted"] == 1
+    assert result["accepted_precision"] == pytest.approx(1.0)
+
+
+def test_clinc150_autoresearch_traces_are_teacher_visible_only() -> None:
+    traces = clinc150_autoresearch_traces_from_teacher_rows(
+        [
+            _teacher_row("r1", "alpha", "alpha"),
+            {
+                **_teacher_row("r2", "beta", "beta"),
+                "parse_failure": True,
+            },
+        ]
+    )
+
+    assert len(traces) == 1
+    payload = traces[0].model_dump(mode="json")
+    assert "gold_frame" not in payload
+    assert payload["teacher_frame"]["intent"] == "alpha"
+    assert payload["metadata"]["gold_frame_withheld"] is True
+    assert "frame_exact" not in json.dumps(payload)
 
 
 def test_clinc150_calibration_splits_are_deterministic_and_train_derived() -> None:

@@ -1156,6 +1156,37 @@ def test_l2_target_visible_validation_folds_stay_visible_not_private(
     assert "promotion_holdout" not in json.dumps(round_state)
 
 
+def test_l2_target_workspace_accepts_initial_config_and_target_context(
+    tmp_path: Path,
+) -> None:
+    summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=1,
+            mode="dry-run",
+            initial_target_config={"accept_threshold": 0.98, "min_examples": 4},
+            target_context={
+                "schema_version": "target-context-test-v1",
+                "locked_test_examples_in_workspace": False,
+            },
+            inner_patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    workspace = tmp_path / "job" / "workspace" / "l2_target"
+    manifest = json.loads((workspace / "workspace_manifest.json").read_text())
+    target_config = json.loads((workspace / "target" / "config.json").read_text())
+    target_context = json.loads((workspace / "data" / "target_context.json").read_text())
+
+    assert summary["rounds_completed"] == 1
+    assert target_config["accept_threshold"] == 0.98
+    assert target_context["locked_test_examples_in_workspace"] is False
+    assert manifest["target_context_file"] == "target_context.json"
+    assert manifest["initial_target_config"]["accept_threshold"] == 0.98
+
+
 def test_l2_target_extra_visible_folds_do_not_keep_shrinking_train_split() -> None:
     traces = [
         _trace(index, intent="intent_alpha", slots={"slot_alpha": f"value {index}"})

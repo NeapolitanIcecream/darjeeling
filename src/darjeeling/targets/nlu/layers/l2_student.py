@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import joblib
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
@@ -60,6 +60,7 @@ class L2Prediction(BaseModel):
     top1_probability: float
     margin: float
     entropy: float
+    intent_probabilities: dict[str, float] = Field(default_factory=dict)
     slot_avg_probability: float = 1.0
     slot_invalid_bio: bool = False
     nearest_similarity: float = 0.0
@@ -514,6 +515,7 @@ class L2StudentBundle:
             top1_probability=intent_result["top_probability"],
             margin=intent_result["margin"],
             entropy=intent_result["entropy"],
+            intent_probabilities=intent_result["intent_probabilities"],
             slot_avg_probability=slot_prediction.avg_probability,
             slot_invalid_bio=slot_prediction.invalid_bio,
             nearest_similarity=support.nearest_similarity,
@@ -572,6 +574,7 @@ class L2StudentLayer:
                     "top1_probability": prediction.top1_probability,
                     "margin": prediction.margin,
                     "entropy": prediction.entropy,
+                    "intent_probabilities": prediction.intent_probabilities,
                     "slot_avg_probability": prediction.slot_avg_probability,
                     "slot_invalid_bio": prediction.slot_invalid_bio,
                     "nearest_similarity": prediction.nearest_similarity,
@@ -1210,7 +1213,7 @@ def train_slot_tagger(
     return TokenSlotTagger(vectorizer=vectorizer, classifier=classifier)
 
 
-def predict_intent(intent_pipeline: Pipeline, utterance: str) -> dict[str, float | str]:
+def predict_intent(intent_pipeline: Pipeline, utterance: str) -> dict[str, Any]:
     probabilities = intent_pipeline.predict_proba([utterance])[0]
     classes = list(intent_pipeline.classes_)
     sorted_indices = np.argsort(probabilities)[::-1]
@@ -1222,6 +1225,10 @@ def predict_intent(intent_pipeline: Pipeline, utterance: str) -> dict[str, float
         "top_probability": top_probability,
         "margin": top_probability - second_probability,
         "entropy": _entropy(probabilities),
+        "intent_probabilities": {
+            str(intent): float(probability)
+            for intent, probability in zip(classes, probabilities, strict=True)
+        },
     }
 
 

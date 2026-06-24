@@ -5,6 +5,7 @@ import json
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -18,6 +19,12 @@ from darjeeling.targets.nlu.layers.l2_student import (
     L2TrainingExample,
     train_l2_student,
 )
+from darjeeling.targets.nlu.layers.l2_target import (
+    load_target_module,
+    target_accept_prediction,
+    target_config_overrides,
+    target_postprocess_frame,
+)
 from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     MissingTeacherError,
     TeacherCallResult,
@@ -27,7 +34,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     create_chat_completion_with_retry,
 )
 from darjeeling.targets.nlu.replay import load_processed_records, select_stream
-from darjeeling.targets.nlu.schemas import Frame, TaskSchema
+from darjeeling.targets.nlu.schemas import Frame, LayerResult, TaskSchema, TeacherTrace
 from darjeeling.targets.nlu.settings import Settings
 from darjeeling.targets.nlu.teacher import (
     CLINC150_PROMPT_V1,
@@ -78,6 +85,19 @@ CLINC150_CALIBRATION_REPAIR_THRESHOLDS = (
 )
 CLINC150_CALIBRATION_REPAIR_MARGIN_GRID = (0.05, 0.10, 0.15, 0.20, 0.25)
 CLINC150_CALIBRATION_REPAIR_ENTROPY_GRID = (2.0, 2.5, 3.0, 3.5)
+CLINC150_CALIBRATION_REPAIR_OOS_PROBABILITY_GRID = (0.001, 0.005, 0.01, 0.02, 0.05)
+CLINC150_CALIBRATION_REPAIR_OOS_MARGIN_GRID = (0.10, 0.20, 0.30, 0.40, 0.50)
+CLINC150_CALIBRATION_REPAIR_OOS_RANK_GRID = (2, 3, 5, 10)
+CLINC150_AUTORESEARCH_INITIAL_L2_CONFIG = {
+    "accept_threshold": 0.98,
+    "frame_source": "student",
+    "slot_model_family": "none",
+    "intent_model_family": "sgd_logreg",
+    "max_features": 50_000,
+    "max_iter": 1000,
+    "min_examples": 4,
+    "runtime_enabled": True,
+}
 
 
 @dataclass(frozen=True)
@@ -871,6 +891,9 @@ def clinc150_calibration_guard_rules(
     thresholds: tuple[float, ...] = CLINC150_CALIBRATION_REPAIR_THRESHOLDS,
     margin_grid: tuple[float, ...] = CLINC150_CALIBRATION_REPAIR_MARGIN_GRID,
     entropy_grid: tuple[float, ...] = CLINC150_CALIBRATION_REPAIR_ENTROPY_GRID,
+    oos_probability_grid: tuple[float, ...] = CLINC150_CALIBRATION_REPAIR_OOS_PROBABILITY_GRID,
+    oos_margin_grid: tuple[float, ...] = CLINC150_CALIBRATION_REPAIR_OOS_MARGIN_GRID,
+    oos_rank_grid: tuple[int, ...] = CLINC150_CALIBRATION_REPAIR_OOS_RANK_GRID,
     predicted_intent_vetoes: tuple[tuple[str, ...], ...] = (),
 ) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
@@ -896,6 +919,30 @@ def clinc150_calibration_guard_rules(
                     family="threshold_entropy",
                     threshold=threshold,
                     max_entropy=max_entropy,
+                )
+            )
+        for max_oos_probability in oos_probability_grid:
+            rules.append(
+                _guard_rule(
+                    family="threshold_oos_probability",
+                    threshold=threshold,
+                    max_oos_probability=max_oos_probability,
+                )
+            )
+        for min_oos_margin in oos_margin_grid:
+            rules.append(
+                _guard_rule(
+                    family="threshold_oos_margin",
+                    threshold=threshold,
+                    min_oos_margin=min_oos_margin,
+                )
+            )
+        for min_oos_rank in oos_rank_grid:
+            rules.append(
+                _guard_rule(
+                    family="threshold_oos_rank",
+                    threshold=threshold,
+                    min_oos_rank=min_oos_rank,
                 )
             )
     for vetoes in predicted_intent_vetoes:
@@ -944,6 +991,25 @@ def evaluate_clinc150_guard_rule(
         clinc150_guard_accepts(row, guard_rule=guard_rule)
         for row in prediction_rows
     ]
+    return _evaluate_clinc150_acceptance_flags(
+        prediction_rows=prediction_rows,
+        accepted_flags=accepted_flags,
+        teacher_by_request_id=teacher_by_id,
+        guard_name=guard_rule["name"],
+        guard_rule=guard_rule,
+        threshold=guard_rule["threshold"],
+    )
+
+
+def _evaluate_clinc150_acceptance_flags(
+    *,
+    prediction_rows: list[dict[str, Any]],
+    accepted_flags: list[bool],
+    teacher_by_request_id: dict[str, dict[str, Any]],
+    guard_name: str,
+    guard_rule: dict[str, Any],
+    threshold: float | None,
+) -> dict[str, Any]:
     accepted_rows = [
         row for row, accepted in zip(prediction_rows, accepted_flags, strict=True) if accepted
     ]
@@ -959,7 +1025,7 @@ def evaluate_clinc150_guard_rule(
     final_rows = [
         _cascade_row(
             row,
-            teacher_by_request_id=teacher_by_id,
+            teacher_by_request_id=teacher_by_request_id,
             accepted=accepted,
         )
         for row, accepted in zip(prediction_rows, accepted_flags, strict=True)
@@ -971,7 +1037,7 @@ def evaluate_clinc150_guard_rule(
     l4_tokens = sum(float(row["l4_tokens"]) for row in final_rows)
     l4_cost = sum(float(row["l4_cost_usd"]) for row in final_rows)
     all_l4_rows = [
-        teacher_by_id.get(row["request_id"])
+        teacher_by_request_id.get(row["request_id"])
         for row in prediction_rows
     ]
     paired_teacher_rows = [row for row in all_l4_rows if row is not None]
@@ -994,11 +1060,11 @@ def evaluate_clinc150_guard_rule(
     accepted = len(accepted_rows)
     accepted_correct = len(correct_accepted)
     final_accuracy = _rate(final_correct, requests)
-    all_l4_accuracy = _rate(all_l4_correct, requests) if teacher_by_id else None
+    all_l4_accuracy = _rate(all_l4_correct, requests) if teacher_by_request_id else None
     return {
-        "guard_name": guard_rule["name"],
+        "guard_name": guard_name,
         "guard_rule": guard_rule,
-        "threshold": guard_rule["threshold"],
+        "threshold": threshold,
         "accepted": accepted,
         "accepted_correct": accepted_correct,
         "accepted_wrong": accepted - accepted_correct,
@@ -1025,16 +1091,16 @@ def evaluate_clinc150_guard_rule(
             if paired_teacher_rows
             else None
         ),
-        "all_l4_calls_per_100_requests": 100.0 if teacher_by_id else None,
+        "all_l4_calls_per_100_requests": 100.0 if teacher_by_request_id else None,
         "l4_calls_per_100_requests": (l4_calls / requests * 100.0) if requests else 0.0,
         "l4_call_reduction_rate": (
             1.0 - (l4_calls / requests)
-            if teacher_by_id and requests
+            if teacher_by_request_id and requests
             else None
         ),
         "all_l4_tokens_per_request": (
             all_l4_tokens / requests
-            if teacher_by_id and requests
+            if teacher_by_request_id and requests
             else None
         ),
         "l4_tokens_per_request": l4_tokens / requests if requests else 0.0,
@@ -1045,7 +1111,7 @@ def evaluate_clinc150_guard_rule(
         ),
         "all_l4_cost_usd_per_request": (
             all_l4_cost / requests
-            if teacher_by_id and requests
+            if teacher_by_request_id and requests
             else None
         ),
         "l4_cost_usd_per_request": l4_cost / requests if requests else 0.0,
@@ -1056,12 +1122,12 @@ def evaluate_clinc150_guard_rule(
         ),
         "all_l4_latency_p50_ms": (
             _percentile(all_l4_latencies, 50)
-            if teacher_by_id
+            if teacher_by_request_id
             else None
         ),
         "all_l4_latency_p95_ms": (
             _percentile(all_l4_latencies, 95)
-            if teacher_by_id
+            if teacher_by_request_id
             else None
         ),
         "latency_p50_ms": _percentile(latencies, 50),
@@ -1088,6 +1154,19 @@ def clinc150_guard_accepts(row: dict[str, Any], *, guard_rule: dict[str, Any]) -
         return False
     max_entropy = guard_rule.get("max_entropy")
     if max_entropy is not None and float(row.get("entropy", 0.0)) > float(max_entropy):
+        return False
+    max_oos_probability = guard_rule.get("max_oos_probability")
+    if max_oos_probability is not None and float(row.get("oos_probability", 0.0)) > float(
+        max_oos_probability
+    ):
+        return False
+    min_oos_margin = guard_rule.get("min_oos_margin")
+    if min_oos_margin is not None and float(row.get("oos_margin", 1.0)) < float(
+        min_oos_margin
+    ):
+        return False
+    min_oos_rank = guard_rule.get("min_oos_rank")
+    if min_oos_rank is not None and int(row.get("oos_rank", 1_000_000)) < int(min_oos_rank):
         return False
     vetoes = set(guard_rule.get("veto_predicted_intents") or [])
     return str(row.get("predicted_intent")) not in vetoes
@@ -1412,6 +1491,9 @@ def clinc150_accepted_error_rows(
                 "top1_probability": row.get("top1_probability"),
                 "margin": row.get("margin"),
                 "entropy": row.get("entropy"),
+                "oos_probability": row.get("oos_probability"),
+                "oos_rank": row.get("oos_rank"),
+                "oos_margin": row.get("oos_margin"),
             }
         )
     return rows
@@ -1742,6 +1824,488 @@ def run_clinc150_calibration_repair(
     return result
 
 
+def clinc150_autoresearch_traces_from_teacher_rows(
+    rows: list[dict[str, Any]],
+) -> list[TeacherTrace]:
+    traces: list[TeacherTrace] = []
+    for row in rows:
+        if row.get("parse_failure") or row.get("teacher_frame") is None:
+            continue
+        teacher_frame = Frame.model_validate(row["teacher_frame"])
+        traces.append(
+            TeacherTrace(
+                request_id=str(row["request_id"]),
+                utterance=str(row["utterance"]),
+                teacher_frame=teacher_frame,
+                chosen_layer="L4",
+                final_frame=teacher_frame,
+                layer_results=[
+                    LayerResult(
+                        layer="L2",
+                        accepted=False,
+                        frame=None,
+                        latency_ms=0.0,
+                        reason="clinc150 autoresearch lower layers disabled",
+                    ),
+                    LayerResult(
+                        layer="L4",
+                        accepted=True,
+                        frame=teacher_frame,
+                        latency_ms=float(row.get("latency_ms", 0.0)),
+                        cost_usd=float(row.get("cost_usd", 0.0)),
+                        metadata={
+                            "model": row.get("model"),
+                            "tokens": row.get("tokens", 0),
+                            "attempt_count": row.get("attempt_count", 1),
+                            "retry_recovered": row.get("retry_recovered", False),
+                            "replay_oracle_row": True,
+                        },
+                    ),
+                ],
+                l4_usage={
+                    "tokens": row.get("tokens", 0),
+                    "cost_usd": row.get("cost_usd", 0.0),
+                    "latency_ms": row.get("latency_ms", 0.0),
+                    "attempt_count": row.get("attempt_count", 1),
+                    "unknown_usage_attempts": row.get("unknown_usage_attempts", 0),
+                },
+                metadata={
+                    "source": "clinc150_teacher_details",
+                    "teacher_visible_only": True,
+                    "gold_frame_withheld": True,
+                },
+                timestamp=str(row.get("timestamp") or datetime.now(UTC).isoformat()),
+            )
+        )
+    return traces
+
+
+def run_clinc150_l2_autoresearch(
+    *,
+    data_dir: Path,
+    out_dir: Path,
+    source_repo_dir: Path,
+    train_teacher_details: Path,
+    validation_teacher_details: Path,
+    test_teacher_details: Path,
+    mode: str = "agent-session",
+    rounds: int = 16,
+    budget_profile: str = "fixed-inner",
+    max_agent_rounds: int | None = None,
+    timeout_s: float | None = None,
+    local_search_trials: int = 32,
+    visible_validation_folds: int = 5,
+    visible_validation_ratio: float | None = 0.30,
+    visible_cross_audit_folds: int = 3,
+    local_search_cross_audit_top_k: int = 4,
+    codex_command: str = "codex",
+    codex_model: str | None = "gpt-5.5",
+) -> dict[str, Any]:
+    from darjeeling.targets.nlu.compiler.l2_target_evolution import (
+        L2TargetEvolutionConfig,
+        run_l2_target_evolution,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    train_rows = load_teacher_rows(train_teacher_details)
+    train_traces = clinc150_autoresearch_traces_from_teacher_rows(train_rows)
+    traces_path = out_dir / "clinc150_autoresearch_teacher_train_traces.jsonl"
+    traces_path.write_text(
+        "".join(trace.model_dump_json() + "\n" for trace in train_traces),
+        encoding="utf-8",
+    )
+    target_context = _clinc150_autoresearch_target_context(
+        train_rows=train_rows,
+        train_teacher_details=train_teacher_details,
+        validation_teacher_details=validation_teacher_details,
+        test_teacher_details=test_teacher_details,
+    )
+    target_run_dir = out_dir / "target-evolution"
+    target_summary = run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=source_repo_dir,
+            job_dir=target_run_dir,
+            rounds=rounds,
+            mode=mode,  # type: ignore[arg-type]
+            budget_profile=budget_profile,  # type: ignore[arg-type]
+            split_policy="intent-stratified",
+            target_scope="teacher_train",
+            visible_validation_folds=visible_validation_folds,
+            visible_validation_ratio=visible_validation_ratio,
+            visible_cross_audit_folds=visible_cross_audit_folds,
+            local_search_trials=local_search_trials,
+            local_search_cross_audit_top_k=local_search_cross_audit_top_k,
+            max_agent_rounds=max_agent_rounds,
+            timeout_s=timeout_s if timeout_s is not None else 7200.0,
+            codex_command=codex_command,
+            codex_model=codex_model,
+            min_accepted_accuracy=0.995,
+            max_wrong_accept_rate=0.005,
+            inner_patience_rounds=0,
+            initial_target_config=CLINC150_AUTORESEARCH_INITIAL_L2_CONFIG,
+            target_context=target_context,
+        ),
+        traces=train_traces,
+    )
+
+    candidate_round = target_summary.get("best_adoptable_round")
+    candidate_role = "best_adoptable_round"
+    if not isinstance(candidate_round, dict):
+        candidate_round = target_summary.get("best_selection_round")
+        candidate_role = "best_selection_round"
+    diagnostic_round = candidate_round
+    diagnostic_role = candidate_role
+    if not isinstance(diagnostic_round, dict):
+        diagnostic_round = target_summary.get("best_round")
+        diagnostic_role = "best_round_diagnostic_only"
+
+    validation_evaluation = None
+    stream_confirmation = None
+    locked_test = None
+    selected_for_locked_test = False
+    candidate_target_dir = None
+    if isinstance(diagnostic_round, dict):
+        candidate_target_dir = _clinc150_target_dir_from_round(
+            target_run_dir=target_run_dir,
+            round_payload=diagnostic_round,
+        )
+        module_path = candidate_target_dir / "target_l2.py"
+        candidate_bundle = train_clinc150_target_bundle(
+            train_rows=train_rows,
+            target_module_path=module_path,
+        )
+        validation_records = load_processed_records(data_dir, split="validation")
+        validation_rows = load_teacher_rows(validation_teacher_details)
+        validation_evaluation = evaluate_clinc150_target_module(
+            bundle=candidate_bundle,
+            target_module_path=module_path,
+            records=validation_records,
+            teacher_rows=validation_rows,
+            include_prediction_rows=False,
+        )
+        validation_uniform = evaluate_clinc150_target_module(
+            bundle=candidate_bundle,
+            target_module_path=module_path,
+            records=sample_clinc150_records(
+                validation_records,
+                stream="uniform",
+                max_requests=len(validation_records),
+            ),
+            teacher_rows=validation_rows,
+            include_prediction_rows=False,
+        )
+        validation_zipf_heavy = evaluate_clinc150_target_module(
+            bundle=candidate_bundle,
+            target_module_path=module_path,
+            records=sample_clinc150_records(
+                validation_records,
+                stream="zipf-heavy",
+                max_requests=len(validation_records),
+            ),
+            teacher_rows=validation_rows,
+            include_prediction_rows=False,
+        )
+        stream_confirmation = {
+            "validation_sequential": validation_evaluation["metrics"],
+            "validation_uniform": validation_uniform["metrics"],
+            "validation_zipf_heavy": validation_zipf_heavy["metrics"],
+        }
+        selected_for_locked_test = (
+            candidate_role == "best_adoptable_round"
+            and _clinc150_autoresearch_visible_gates_pass(stream_confirmation)
+        )
+        if selected_for_locked_test:
+            locked_test = evaluate_clinc150_target_module(
+                bundle=candidate_bundle,
+                target_module_path=module_path,
+                records=load_processed_records(data_dir, split="test"),
+                teacher_rows=load_teacher_rows(test_teacher_details),
+                include_prediction_rows=False,
+            )
+
+    result = {
+        "schema_version": "clinc150-l2-autoresearch-v1",
+        "created_at": datetime.now(UTC).isoformat(),
+        "measurement_path": "l2_only_shadow_l2_plus_l4_fallback",
+        "l0_enabled": False,
+        "l1_enabled": False,
+        "l3_enabled": False,
+        "new_paid_l4_calls": 0,
+        "new_paid_spend_usd": 0.0,
+        "source_repo_dir": str(source_repo_dir),
+        "run_root": str(out_dir),
+        "target_evolution_run": str(target_run_dir),
+        "target_evolution_summary_path": str(target_run_dir / "summary.json"),
+        "teacher_train_traces": str(traces_path),
+        "teacher_train_trace_count": len(train_traces),
+        "target_context": target_context,
+        "target_evolution": {
+            "mode": target_summary.get("mode"),
+            "rounds_requested": target_summary.get("rounds_requested"),
+            "rounds_completed": target_summary.get("rounds_completed"),
+            "stop_reason": target_summary.get("stop_reason"),
+            "evidence_policy": target_summary.get("evidence_policy"),
+            "selection_decision": target_summary.get("selection_decision"),
+            "adoption_decision": target_summary.get("adoption_decision"),
+            "best_round": target_summary.get("best_round"),
+            "best_selection_round": target_summary.get("best_selection_round"),
+            "best_adoptable_round": target_summary.get("best_adoptable_round"),
+        },
+        "candidate": {
+            "role": diagnostic_role if diagnostic_round is not None else None,
+            "round": diagnostic_round.get("round") if isinstance(diagnostic_round, dict) else None,
+            "target_dir": str(candidate_target_dir) if candidate_target_dir is not None else None,
+            "selected_for_locked_test": selected_for_locked_test,
+            "locked_test_policy": (
+                "official test evaluated only when best_adoptable candidate passes "
+                "official validation and validation streams"
+            ),
+        },
+        "validation_evaluation": validation_evaluation,
+        "stream_confirmation": stream_confirmation,
+        "locked_test": locked_test,
+        "locked_test_exposures": 1 if locked_test is not None else 0,
+    }
+    summary_path = out_dir / "clinc150_l2_autoresearch_summary.json"
+    summary_path.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    result["summary_path"] = str(summary_path)
+    return result
+
+
+def train_clinc150_target_bundle(
+    *,
+    train_rows: list[dict[str, Any]],
+    target_module_path: Path,
+) -> L2StudentBundle:
+    target_module = load_target_module(target_module_path)
+    config_payload = {
+        **CLINC150_AUTORESEARCH_INITIAL_L2_CONFIG,
+        **target_config_overrides(target_module),
+    }
+    return train_clinc150_l2(
+        training_examples_from_teacher_rows(train_rows),
+        config=L2StudentConfig(**config_payload),
+    )
+
+
+def evaluate_clinc150_target_module(
+    *,
+    bundle: L2StudentBundle,
+    target_module_path: Path,
+    records: list[DataRecord],
+    teacher_rows: list[dict[str, Any]],
+    include_prediction_rows: bool = False,
+) -> dict[str, Any]:
+    target_module = load_target_module(target_module_path)
+    replay_oracle = Clinc150L4ReplayOracle.from_rows(teacher_rows)
+    prediction_rows: list[dict[str, Any]] = []
+    accepted_flags: list[bool] = []
+    for record in records:
+        row, accepted = _l2_target_prediction_row(
+            bundle=bundle,
+            target_module=target_module,
+            target_module_path=target_module_path,
+            record=record,
+        )
+        prediction_rows.append(row)
+        accepted_flags.append(accepted)
+    metrics = _evaluate_clinc150_acceptance_flags(
+        prediction_rows=prediction_rows,
+        accepted_flags=accepted_flags,
+        teacher_by_request_id=replay_oracle.rows_by_request_id,
+        guard_name="target_l2_accept_prediction",
+        guard_rule={
+            "name": "target_l2_accept_prediction",
+            "family": "target_l2",
+            "threshold": bundle.config.accept_threshold,
+            "target_module_path": str(target_module_path),
+        },
+        threshold=bundle.config.accept_threshold,
+    )
+    result = {
+        "schema_version": "clinc150-l2-target-eval-v1",
+        "requests": len(prediction_rows),
+        "measurement_path": "l2_only_shadow_l2_plus_l4_fallback",
+        "l0_enabled": False,
+        "target_module_path": str(target_module_path),
+        "config": bundle.config.model_dump(mode="json"),
+        "l4_replay_oracle": replay_oracle.validate_coverage(
+            [row["request_id"] for row in prediction_rows]
+        ),
+        "raw_l2_accuracy": _rate(
+            sum(1 for row in prediction_rows if row["predicted_frame"] == row["gold_frame"]),
+            len(prediction_rows),
+        ),
+        "metrics": metrics,
+    }
+    if include_prediction_rows:
+        result["prediction_rows"] = prediction_rows
+    return result
+
+
+def _clinc150_autoresearch_target_context(
+    *,
+    train_rows: list[dict[str, Any]],
+    train_teacher_details: Path,
+    validation_teacher_details: Path,
+    test_teacher_details: Path,
+) -> dict[str, Any]:
+    parsed_rows = [row for row in train_rows if not row.get("parse_failure")]
+    teacher_intents = Counter(
+        _teacher_intent(row)
+        for row in parsed_rows
+        if _teacher_intent(row) is not None
+    )
+    return {
+        "schema_version": "clinc150-l2-autoresearch-context-v1",
+        "visibility": "agent_visible_train_and_inner_validation_only",
+        "target": "clinc150",
+        "objective": (
+            "repair high-confidence OOS and intent-boundary L2 accepts using "
+            "target-local L2 config, postprocess, and accept_prediction logic"
+        ),
+        "strict_gates": {
+            "official_validation_min_accepted_precision": 0.995,
+            "official_validation_max_oos_false_accept_rate": 0.02,
+            "official_validation_min_cascade_delta_vs_all_l4": -0.005,
+            "official_validation_min_coverage_for_locked_test": 0.40,
+            "locked_test_min_accepted_precision": 0.99,
+            "locked_test_max_oos_false_accept_rate": 0.02,
+            "locked_test_min_cascade_delta_vs_all_l4": -0.005,
+            "practical_locked_test_coverage_target": 0.40,
+        },
+        "initial_l2_config": CLINC150_AUTORESEARCH_INITIAL_L2_CONFIG,
+        "visible_teacher_train_rows": len(train_rows),
+        "visible_parsed_teacher_train_rows": len(parsed_rows),
+        "teacher_predicted_oos_rows": teacher_intents.get(CLINC150_OOS_INTENT, 0),
+        "teacher_intent_count": len(teacher_intents),
+        "reused_artifacts": {
+            "train_teacher_details": str(train_teacher_details),
+            "validation_teacher_details_for_outer_visible_eval": str(
+                validation_teacher_details
+            ),
+            "test_teacher_details_withheld_until_selection": str(test_teacher_details),
+        },
+        "withheld_data_policy": {
+            "official_test_labels_or_accepted_errors_in_workspace": False,
+            "official_test_used_for_candidate_selection": False,
+            "locked_test_only_after_best_adoptable_candidate_passes_validation": True,
+        },
+        "allowed_surface": [
+            "target/config.json L2StudentConfig overrides",
+            "target/target_l2.py postprocess_frame",
+            "target/target_l2.py accept_prediction veto logic",
+            "metadata.intent_probabilities and CLINC150 OOS-risk signals",
+        ],
+    }
+
+
+def _clinc150_target_dir_from_round(
+    *,
+    target_run_dir: Path,
+    round_payload: dict[str, Any],
+) -> Path:
+    snapshot = round_payload.get("target_snapshot")
+    if isinstance(snapshot, str) and snapshot:
+        snapshot_path = Path(snapshot)
+        if not snapshot_path.is_absolute():
+            snapshot_path = target_run_dir / snapshot_path
+        return snapshot_path
+    return target_run_dir / "workspace" / "l2_target" / "target"
+
+
+def _clinc150_autoresearch_visible_gates_pass(
+    stream_confirmation: dict[str, dict[str, Any]],
+) -> bool:
+    sequential = stream_confirmation["validation_sequential"]
+    uniform = stream_confirmation["validation_uniform"]
+    zipf_heavy = stream_confirmation["validation_zipf_heavy"]
+    return (
+        _guard_result_passes_constraints(
+            sequential,
+            min_precision=0.995,
+            max_oos_false_accept_rate=0.02,
+            min_accuracy_delta_vs_all_l4=-0.005,
+        )
+        and float(sequential.get("accepted_coverage") or 0.0) >= 0.40
+        and _guard_result_passes_constraints(
+            uniform,
+            min_precision=0.99,
+            max_oos_false_accept_rate=0.02,
+            min_accuracy_delta_vs_all_l4=-0.005,
+        )
+        and _guard_result_passes_constraints(
+            zipf_heavy,
+            min_precision=0.99,
+            max_oos_false_accept_rate=0.02,
+            min_accuracy_delta_vs_all_l4=-0.005,
+        )
+    )
+
+
+def _l2_target_prediction_row(
+    *,
+    bundle: L2StudentBundle,
+    target_module: Any,
+    target_module_path: Path,
+    record: DataRecord,
+) -> tuple[dict[str, Any], bool]:
+    started = perf_counter()
+    prediction = bundle.predict(record.utterance)
+    metadata = prediction.model_dump(mode="json")
+    frame = target_postprocess_frame(
+        target_module,
+        utterance=record.utterance,
+        frame=prediction.frame,
+        metadata=metadata,
+    )
+    runtime_enabled = getattr(bundle.config, "runtime_enabled", True)
+    default_accept = (
+        runtime_enabled and prediction.guard_probability >= bundle.config.accept_threshold
+    )
+    accepted = target_accept_prediction(
+        target_module,
+        utterance=record.utterance,
+        frame=frame,
+        metadata=metadata,
+        default_accept=default_accept,
+    )
+    latency_ms = (perf_counter() - started) * 1000.0
+    row = {
+        "request_id": record.request_id,
+        "utterance": record.utterance,
+        "gold_frame": record.gold_frame.model_dump(mode="json"),
+        "gold_intent": record.gold_frame.intent,
+        "gold_oos": record.gold_frame.intent == CLINC150_OOS_INTENT,
+        "raw_predicted_frame": prediction.frame.model_dump(mode="json"),
+        "predicted_frame": frame.model_dump(mode="json"),
+        "predicted_intent": frame.intent,
+        "predicted_oos": frame.intent == CLINC150_OOS_INTENT,
+        "guard_probability": prediction.guard_probability,
+        "top1_probability": prediction.top1_probability,
+        "margin": prediction.margin,
+        "entropy": prediction.entropy,
+        "intent_probabilities": prediction.intent_probabilities,
+        "oos_probability": oos_probability_from_intent_probabilities(
+            prediction.intent_probabilities
+        ),
+        "oos_rank": oos_rank_from_intent_probabilities(prediction.intent_probabilities),
+        "oos_margin": oos_margin_from_intent_probabilities(
+            prediction.intent_probabilities,
+        ),
+        "target_default_accept": default_accept,
+        "target_accepted": accepted,
+        "target_vetoed": bool(default_accept and not accepted),
+        "target_postprocessed": frame != prediction.frame,
+        "target_module": str(target_module_path),
+        "latency_ms": latency_ms,
+    }
+    return row, accepted
+
+
 def _load_or_generate_prediction_rows(
     *,
     bundle: L2StudentBundle,
@@ -1826,8 +2390,46 @@ def _l2_prediction_row(*, bundle: L2StudentBundle, record: DataRecord) -> dict[s
         "top1_probability": prediction.top1_probability,
         "margin": prediction.margin,
         "entropy": prediction.entropy,
+        "intent_probabilities": prediction.intent_probabilities,
+        "oos_probability": oos_probability_from_intent_probabilities(
+            prediction.intent_probabilities
+        ),
+        "oos_rank": oos_rank_from_intent_probabilities(prediction.intent_probabilities),
+        "oos_margin": oos_margin_from_intent_probabilities(
+            prediction.intent_probabilities,
+        ),
         "latency_ms": latency_ms,
     }
+
+
+def oos_probability_from_intent_probabilities(
+    intent_probabilities: dict[str, float],
+) -> float:
+    return float(intent_probabilities.get(CLINC150_OOS_INTENT, 0.0))
+
+
+def oos_rank_from_intent_probabilities(
+    intent_probabilities: dict[str, float],
+) -> int | None:
+    if CLINC150_OOS_INTENT not in intent_probabilities:
+        return None
+    ranked = sorted(
+        intent_probabilities.items(),
+        key=lambda item: (-float(item[1]), item[0]),
+    )
+    for index, (intent, _probability) in enumerate(ranked, start=1):
+        if intent == CLINC150_OOS_INTENT:
+            return index
+    return None
+
+
+def oos_margin_from_intent_probabilities(
+    intent_probabilities: dict[str, float],
+) -> float:
+    if not intent_probabilities:
+        return 1.0
+    top_probability = max(float(value) for value in intent_probabilities.values())
+    return top_probability - oos_probability_from_intent_probabilities(intent_probabilities)
 
 
 def _guard_rule(
@@ -1836,6 +2438,9 @@ def _guard_rule(
     threshold: float,
     min_margin: float | None = None,
     max_entropy: float | None = None,
+    max_oos_probability: float | None = None,
+    min_oos_margin: float | None = None,
+    min_oos_rank: int | None = None,
     veto_predicted_intents: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     name_parts = [family, f"threshold_{_format_guard_float(threshold)}"]
@@ -1843,6 +2448,12 @@ def _guard_rule(
         name_parts.append(f"margin_{_format_guard_float(min_margin)}")
     if max_entropy is not None:
         name_parts.append(f"entropy_{_format_guard_float(max_entropy)}")
+    if max_oos_probability is not None:
+        name_parts.append(f"oosprob_{_format_guard_float(max_oos_probability)}")
+    if min_oos_margin is not None:
+        name_parts.append(f"oosmargin_{_format_guard_float(min_oos_margin)}")
+    if min_oos_rank is not None:
+        name_parts.append(f"oosrank_{min_oos_rank}")
     if veto_predicted_intents:
         digest = hashlib.sha256(
             json.dumps(veto_predicted_intents, sort_keys=True).encode("utf-8")
@@ -1854,6 +2465,9 @@ def _guard_rule(
         "threshold": threshold,
         "min_margin": min_margin,
         "max_entropy": max_entropy,
+        "max_oos_probability": max_oos_probability,
+        "min_oos_margin": min_oos_margin,
+        "min_oos_rank": min_oos_rank,
         "veto_predicted_intents": list(veto_predicted_intents),
     }
 
@@ -1878,7 +2492,15 @@ def _row_score_distributions(rows: list[dict[str, Any]]) -> dict[str, dict[str, 
         field: _numeric_distribution(
             [float(row[field]) for row in rows if row.get(field) is not None]
         )
-        for field in ("guard_probability", "top1_probability", "margin", "entropy")
+        for field in (
+            "guard_probability",
+            "top1_probability",
+            "margin",
+            "entropy",
+            "oos_probability",
+            "oos_rank",
+            "oos_margin",
+        )
     }
 
 
@@ -1930,6 +2552,9 @@ def _accepted_error_examples(
                 "top1_probability": row.get("top1_probability"),
                 "margin": row.get("margin"),
                 "entropy": row.get("entropy"),
+                "oos_probability": row.get("oos_probability"),
+                "oos_rank": row.get("oos_rank"),
+                "oos_margin": row.get("oos_margin"),
             }
         )
     return examples
@@ -1965,9 +2590,14 @@ def _guard_result_passes_constraints(
 
 
 def _guard_rule_complexity(guard_rule: dict[str, Any]) -> int:
-    return int(guard_rule.get("min_margin") is not None) + int(
-        guard_rule.get("max_entropy") is not None
-    ) + len(guard_rule.get("veto_predicted_intents") or [])
+    return (
+        int(guard_rule.get("min_margin") is not None)
+        + int(guard_rule.get("max_entropy") is not None)
+        + int(guard_rule.get("max_oos_probability") is not None)
+        + int(guard_rule.get("min_oos_margin") is not None)
+        + int(guard_rule.get("min_oos_rank") is not None)
+        + len(guard_rule.get("veto_predicted_intents") or [])
+    )
 
 
 def _l2_threshold_metrics(
