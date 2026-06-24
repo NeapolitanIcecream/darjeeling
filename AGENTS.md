@@ -12,6 +12,7 @@
 
 - When asked to create a development or experiment plan for another agent, put the substantive context in a repository document, not in the chat prompt. The plan document should be self-contained enough that a new agent can execute it without relying on prior session history.
 - Keep handoff prompts short. They should tell the next agent which files to read and what objective to complete, while the plan document carries the background, constraints, budget, hypotheses, experimental design, validation commands, and done criteria.
+- Plan future agent tasks to run in their own git branch and worktree unless the user explicitly asks otherwise, so multiple development or experiment tracks can proceed in parallel without sharing a mutable working tree.
 - When an agent completes an assigned plan or experiment, it should organize the completed changes and create a git commit unless the user explicitly asks not to.
 - Do not treat an under-supported result as final by merely downgrading the wording of the conclusion. If the expected outcome requires stronger evidence, write a plan for how to obtain that evidence.
 - For experiment plans, define the desired decision up front, such as adopting a candidate, rejecting it, or keeping the current default after sufficient search. Include what evidence would support each decision.
