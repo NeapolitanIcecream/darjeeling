@@ -134,3 +134,16 @@ teacher artifacts and added no new paid benchmark L4 calls.
 
 Coding-agent session token usage may be reported separately when available. It
 is not the same as benchmark serving spend.
+
+## Precision-Coverage Visualization
+
+Plan:
+[2026-06-24_precision_coverage_visualization_plan.md](2026-06-24_precision_coverage_visualization_plan.md)
+
+Current decision: planned.
+
+Future L1/L2 reports should standardize two static Seaborn figure families:
+round/generation evolution curves for accepted precision and coverage, and
+coverage-vs-precision operating frontiers for candidate-local accept-policy
+trade-offs. L1 operating frontiers should be target-adapter overlays over
+recorded L1 outputs, not requirements pushed into the generated L1 artifact.
