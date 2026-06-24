@@ -63,6 +63,55 @@ Existing artifacts to reuse:
 
 Use these before making new paid L4 calls.
 
+## L4 Replay Oracle Design
+
+As part of this repair, make the existing CLINC150 `teacher_details` fallback
+path explicit as a target-local experiment facility. This facility is for
+benchmark accounting only. It is not production cache behavior and not a new
+Darjeeling core concept.
+
+Working name:
+
+```text
+L4 replay oracle
+```
+
+Purpose:
+
+- Pay for live L4 benchmark rows once.
+- Reuse those rows in later L1/L2 experiments without new live L4 calls.
+- Still count fallback rows as L4 calls in experiment metrics.
+- Preserve observed L4 statistics needed for experiment reports: model, output,
+  parse/schema failure, tokens, cost, latency, retry diagnostics, and request
+  coverage.
+
+Boundary:
+
+- Keep target semantics in the NLU/CLINC150 target. The target decides how to
+  parse the L4 output, compare it with gold, and compute target-specific
+  correctness.
+- A future shared helper may carry target-independent fields such as
+  `request_id`, `model`, `usage`, `cost_usd`, `latency_ms`, `parse_failure`,
+  `attempts`, and opaque `output`, but it must not interpret CLINC150 labels or
+  NLU frames.
+- Do not fold this into `TeacherCache` in this plan. `TeacherCache` is runtime
+  replay cache behavior: cache hits have zero marginal serving cost and local
+  cache latency. The L4 replay oracle is counterfactual experiment accounting:
+  fallback rows still count as L4 calls and use recorded L4 cost/latency.
+
+Implementation expectation for this plan:
+
+- Refactor the existing CLINC150 `teacher_details` fallback logic into a clearly
+  named target-local helper, if doing so reduces duplication for calibration and
+  future L1 experiments.
+- Keep the helper small: load rows by `request_id`, validate request coverage,
+  expose fallback frame/output, expose L4 statistics, and produce all-L4
+  baseline metrics.
+- Use the helper in the calibration repair where practical.
+- Do not block calibration progress on a broad abstraction. If the existing
+  helper path is already sufficient, document the facility and add only the
+  minimal naming/tests needed to make the semantics clear.
+
 ## Decision To Support
 
 Make one of these decisions with evidence:
@@ -90,6 +139,9 @@ iterations have been tried.
 - Do not use locked test to choose thresholds, margins, label vetoes, or model
   variants.
 - Do not add CLINC150 semantics to Darjeeling core.
+- Do not move L4 replay-oracle target semantics into Darjeeling core.
+- Do not change `TeacherCache` semantics or make production cache hits carry
+  counterfactual L4 cost by default.
 - Do not build a broad calibration framework, job system, plugin system, or
   schema DSL.
 - Do not enable L0 in the primary experiment.
@@ -162,6 +214,7 @@ The harness should support:
 - building train-derived calibration/dev splits from teacher train rows;
 - selecting thresholds or guard rules on calibration/dev data;
 - evaluating selected guards on validation and locked test;
+- using the CLINC150 L4 replay oracle for cached L4 fallback accounting;
 - writing JSON summaries and optional accepted-error JSONL files.
 
 Do not create a generic calibration framework. Plain dictionaries, JSON/JSONL,
@@ -172,6 +225,8 @@ Focused tests should cover:
 - split construction is deterministic;
 - locked test is not used by the selector;
 - selected guard uses configured precision/OOS/cascade constraints;
+- L4 replay-oracle fallback rows count as L4 calls and carry recorded
+  cost/latency, while remaining distinct from L0 and `TeacherCache`;
 - accepted-error summaries include enough fields to debug confusion families;
 - L0 remains absent from primary metrics.
 
@@ -307,6 +362,8 @@ For each, keep L0 disabled and report:
 - lower-layer OOS false accept rate;
 - L4 calls per 100 requests;
 - L4 cost/token/latency reduction.
+- whether L4 statistics came from live calls in this phase or from the replay
+  oracle.
 
 ## Final Report
 
@@ -320,6 +377,7 @@ The report must include:
 
 - context from the previous near miss;
 - reused artifacts and whether any new paid cost occurred;
+- the L4 replay-oracle source artifacts and accounting semantics;
 - calibration/dev split definitions;
 - OOS-heavy slice definition;
 - baseline accepted-error audit;
@@ -346,6 +404,8 @@ spend against detail JSONL artifacts.
 ## Done Criteria
 
 - Calibration/dev and OOS-heavy slices are reproducible and documented.
+- The CLINC150 L4 replay-oracle semantics are explicit and reusable by future
+  L1/L2 benchmark experiments.
 - At least two simple repair hypotheses are evaluated unless the first one
   strongly passes all criteria.
 - Locked test is used only after a candidate is selected.
