@@ -982,7 +982,7 @@ def clinc150_l2_autoresearch(
     rounds: Annotated[int, typer.Option(min=1)] = 16,
     budget_profile: Annotated[
         str,
-        typer.Option(help="Target-evolution budget profile."),
+        typer.Option(help="Target-evolution preset selected with --budget-profile."),
     ] = "fixed-inner",
     timeout_s: Annotated[float | None, typer.Option(min=0.1)] = None,
     local_search_trials: Annotated[int, typer.Option(min=1)] = 32,
@@ -1613,7 +1613,7 @@ def l2_target_evolve(
     out_dir: Annotated[Path, typer.Option(help="Output directory for target evolution artifacts.")],
     rounds: Annotated[
         int | None,
-        typer.Option(min=1, help="Maximum inner target-evolution rounds."),
+        typer.Option(min=1, help="Maximum target-evolution rounds."),
     ] = None,
     mode: Annotated[
         str,
@@ -1625,9 +1625,9 @@ def l2_target_evolve(
         str,
         typer.Option(
             help=(
-                "Budget profile: standard, fixed-inner, or smoke. standard is "
-                "cost-capped; fixed-inner is the formal fixed-snapshot research "
-                "loop unless overridden by explicit budget flags."
+                "Target-evolution preset: standard, fixed-inner, or smoke. "
+                "standard uses bounded defaults; fixed-inner uses the formal "
+                "fixed-snapshot research loop unless overridden explicitly."
             ),
         ),
     ] = "standard",
@@ -1659,7 +1659,7 @@ def l2_target_evolve(
             help=(
                 "Number of agent-visible validation folds. Values above 1 create "
                 "inner_validation_shadow_* files and gate on their aggregate. "
-                "Defaults are profile-specific."
+                "Defaults come from the selected preset."
             ),
         ),
     ] = None,
@@ -1669,7 +1669,7 @@ def l2_target_evolve(
             min=0.01,
             help=(
                 "Optional agent-visible validation pool ratio for target splits. "
-                "Defaults remain profile-specific; explicit values increase or "
+                "Defaults come from the selected preset; explicit values increase or "
                 "decrease visible pressure without exposing private holdouts."
             ),
         ),
@@ -1681,7 +1681,8 @@ def l2_target_evolve(
             help=(
                 "Visible diagnostic-only cross-audit folds. 0 disables; values "
                 "above 1 retrain on visible folds to expose selection-like safety "
-                "pressure without reading private holdouts. Defaults are profile-specific."
+                "pressure without reading private holdouts. Defaults come from the "
+                "selected preset."
             ),
         ),
     ] = None,
@@ -1723,12 +1724,12 @@ def l2_target_evolve(
             min=0,
             help=(
                 "Re-rank this many top local-search trials with visible cross-audit. "
-                "Defaults are profile-specific; 0 disables."
+                "Defaults come from the selected preset; 0 disables."
             ),
         ),
     ] = None,
 ) -> None:
-    """Run an inner target-dependent L2 evolution loop over fixed trace splits."""
+    """Run target-dependent L2 evolution over fixed trace splits."""
 
     if mode not in {"dry-run", "local-search", "codex-cli", "agent-session"}:
         raise typer.BadParameter(
