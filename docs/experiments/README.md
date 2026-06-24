@@ -80,6 +80,9 @@ Latest diagnosis:
 
 Report: [2026-06-24_clinc150_l1_programbank_report.md](2026-06-24_clinc150_l1_programbank_report.md)
 
+Next plan:
+[2026-06-24_clinc150_l1_agent_session_effect_plan.md](2026-06-24_clinc150_l1_agent_session_effect_plan.md)
+
 Current decision: pause and repair L1 harness/evolution before another locked
 test exposure.
 

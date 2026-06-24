@@ -2,6 +2,13 @@
 
 Date: 2026-06-24
 
+Superseded by:
+`docs/experiments/2026-06-24_clinc150_l1_agent_session_effect_plan.md`.
+
+Keep this document as historical context for the first L1 agent-session plan.
+Use the effect plan for the next execution because it adds the target-dependent
+optimization boundary and effect-side failure ladder.
+
 Purpose: rerun the CLINC150 L1 experiment using the real L4 coding-agent
 evolution path. The prior CLINC150 L1 ProgramBank run proved useful harness
 wiring and replay-oracle accounting, but its candidates were produced through

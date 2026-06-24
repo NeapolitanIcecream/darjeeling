@@ -212,3 +212,35 @@ target-owned JSON payload，但不解释 payload 内部字段。
 - Core source 和 shared core tests 不硬编码 target 术语、dataset 字段或
   experiment failure case。Target package、adapter、target fixtures 和
   experiment evidence 可以包含这些内容。
+
+## 决策 13：Target-dependent 优化是允许的适配成本，不是 core 贡献
+
+**状态：用户决策。**
+
+Darjeeling 不假设存在一种 magic，可以让用户完全不为具体 target 提供任何
+target-dependent 优化代码，同时仍自动获得最强效果。系统的底层哲学是：
+core 提供通用的外层 evolve 闭环、分层执行、teacher/replay、artifact、
+workspace、round policy、promotion 和可审计边界；target 负责把任务语义、
+评估切片、可见反馈、候选选择和必要的 target-specific 搜索工具暴露给 L4
+agent。
+
+设计含义：
+
+- 允许并且在需要时建议用户为 target 编写专用 adapter、diagnostics、
+  feedback generator、selection helper、search tool 或 generated artifact
+  template。
+- L1/L2/L3 产物内部可以包含大量 target-specific code，例如规则、特征、
+  state machine、table、guard、normalizer 或 model code。只要它们留在 target
+  workspace、target package 或 generated artifact 中，就不违反 core
+  target-independence。
+- 这类 target-dependent 投入主要用于实验摸高：回答“在投入一定 target
+  adaptation 成本时，Darjeeling 能把 L4 能力外化到 L1/L2/L3 到什么程度”。
+- 这类投入不能被包装成 Darjeeling core 的主要贡献。实验报告必须区分：
+  core/system 方法带来的 reusable evidence，和本 target 专用优化带来的
+  benchmark-specific lift。
+- 不因为一个优化是 target-dependent 就拒绝它；也不因为一个优化在某个 target
+  上有效就把它提升为 core default。
+- 只有当 L1/L2/L3 或多个 target 反复出现同一种 target-independent 的机械流程
+  代码时，才考虑抽成薄 core helper。Core helper 只能管理路径、manifest、
+  round 引用、hash、opaque metrics/diagnostics 等外层结构，不能解释 target
+  内容。

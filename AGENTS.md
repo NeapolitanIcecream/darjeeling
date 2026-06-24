@@ -7,6 +7,7 @@
 - Keep the target/core split low-abstraction: prefer ordinary Python objects, explicit static registries, and moving target code behind the boundary before inventing shared frameworks. Do not add plugin systems, dependency-injection containers, or schema DSLs unless the user explicitly asks for them.
 - Task-specific isolated L1/L2/L3 workspaces and generated target artifacts are owned by the L4 agent flow. Repository coding agents must not directly edit them; change the repo-level harnesses, prompts, tests, adapters, or contracts that govern those workspaces instead.
 - Experiment artifacts and experiment docs may record dataset-specific evidence and failure examples, but that evidence must not become a core default or reusable core rule.
+- Target-dependent optimization code is allowed in target packages, target adapters, target-local tools, and generated L1/L2/L3 artifacts when it improves a concrete task. Treat that work as target adaptation cost and benchmark upper-bound exploration, not as Darjeeling core contribution. Do not move such logic into core unless it is purely target-independent lifecycle plumbing repeated across layers or targets.
 
 ## Plans, Prompts, And Experiment Handoffs
 

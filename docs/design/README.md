@@ -30,6 +30,11 @@
    这类未执行或只服务历史 artifact 的伪抽象，也不声明 private gate、
    target quality 或 replay cadence 语义。L1/L2/L3 可以用不同 workspace 和
    evaluator，但对外汇报同一种 round/run 结构。
+8. **Target-dependent 优化是允许的适配成本，不是 core 贡献。**
+   Darjeeling 不承诺零 target knowledge 的 magic。用户可以为 target 提供
+   diagnostics、feedback generator、selection helper、search tool 和
+   target-specific L1/L2/L3 artifact code 来摸高效果；但实验报告必须区分
+   target adaptation 带来的 lift 和 core/system 方法的 reusable evidence。
 
 ## 当前状态，2026-06-24
 
@@ -50,6 +55,9 @@
 - Outer evolution policy refactor 已合入。Core 的共享面收敛到普通 round
   policy/summary；target 层继续拥有各自 workspace、diagnostics、private
   gate 和 adoption 逻辑。
+- 后续 CLINC150 L1/L2 摸高实验允许在 NLU target 和 isolated candidate
+  workspace 中加入 target-specific 优化；这些优化用于衡量 target adaptation
+  投入后的上限，不应回流成 core 默认能力。
 
 ## 文档结构
 
