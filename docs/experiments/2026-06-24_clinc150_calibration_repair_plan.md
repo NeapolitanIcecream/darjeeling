@@ -21,6 +21,29 @@ Read these before changing code:
 - `src/darjeeling/targets/nlu/main_cli.py`
 - `tests/targets/nlu/test_clinc150_phase1.py`
 
+## Execution Isolation
+
+Run this plan in a dedicated git branch and worktree. Do not implement the
+repair directly in the main worktree.
+
+Suggested branch:
+
+```text
+codex/clinc150-calibration-repair
+```
+
+Suggested worktree:
+
+```text
+../darjeeling-clinc150-calibration-repair
+```
+
+If a suitable branch or worktree already exists, inspect it and continue there
+instead of creating a duplicate. Use the dedicated worktree as the workspace
+root for implementation, experiments, validation, reports, and the final commit.
+The original worktree should only be used to create or locate the isolated
+worktree.
+
 ## Current State
 
 The previous experiment decision was `Pause and repair`.
@@ -413,4 +436,4 @@ spend against detail JSONL artifacts.
 - A final decision is written with evidence.
 - Final report and any cost ledger are written.
 - All checks pass.
-- Changes are organized into a git commit.
+- Changes are organized into a git commit on the dedicated branch/worktree.
