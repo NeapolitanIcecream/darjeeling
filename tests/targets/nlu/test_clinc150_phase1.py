@@ -6,15 +6,22 @@ import pytest
 import darjeeling.targets.nlu.clinc150_phase1 as clinc150_phase1
 from darjeeling.targets.nlu.clinc150_phase1 import (
     Clinc150IntentTeacher,
+    Clinc150L4ReplayOracle,
+    build_clinc150_calibration_splits,
     build_clinc150_gate_records,
     build_clinc150_label_cards,
+    build_clinc150_oos_heavy_slice,
     build_clinc150_stratified_records,
+    clinc150_calibration_guard_rules,
     clinc150_metrics_from_teacher_rows,
     compare_repeated_teacher_rows,
+    evaluate_clinc150_guard_rule,
     evaluate_clinc150_l2,
     load_teacher_rows,
     run_clinc150_teacher_live_eval,
+    select_clinc150_calibration_guard,
     select_l2_threshold,
+    summarize_clinc150_accepted_errors,
     train_clinc150_l2,
     training_examples_from_gold_records,
     training_examples_from_teacher_rows,
@@ -269,6 +276,11 @@ def test_clinc150_l2_eval_reports_fallback_cost_latency_and_artifacts(tmp_path) 
     threshold = result["thresholds"][0]
     assert train_artifact.summary["examples"] == 6
     assert train_artifact.bundle_path.exists()
+    assert result["measurement_path"] == "l2_only_shadow_l2_plus_l4_fallback"
+    assert result["l0_enabled"] is False
+    assert result["l4_replay_oracle"]["accounting_semantics"].endswith(
+        "counts_fallback_rows_as_l4_calls"
+    )
     assert result["all_l4_baseline"]["cost_usd_per_request"] == pytest.approx(0.03)
     assert threshold["all_l4_calls_per_100_requests"] == pytest.approx(100.0)
     assert threshold["l4_call_reduction_rate"] == pytest.approx(1.0)
@@ -277,6 +289,151 @@ def test_clinc150_l2_eval_reports_fallback_cost_latency_and_artifacts(tmp_path) 
     assert eval_artifact.cost_latency_path.exists()
     assert eval_artifact.details_jsonl_path is not None
     assert eval_artifact.details_jsonl_path.exists()
+
+
+def test_clinc150_calibration_splits_are_deterministic_and_train_derived() -> None:
+    rows = [
+        _teacher_row("train-a1", "alpha", "alpha"),
+        _teacher_row("train-a2", "alpha", "alpha"),
+        _teacher_row("train-b1", "beta", "beta"),
+        _teacher_row("train-b2", "beta", "beta"),
+        _teacher_row("train-o1", "out_of_scope", "out_of_scope", abstain=True),
+        _teacher_row("train-o2", "out_of_scope", "out_of_scope", abstain=True),
+        {
+            **_teacher_row("train-skip", "alpha", "alpha"),
+            "parse_failure": True,
+        },
+    ]
+
+    first = build_clinc150_calibration_splits(rows, seed="fixed")
+    second = build_clinc150_calibration_splits(rows, seed="fixed")
+
+    assert first == second
+    calibration_ids = set(first["general_calibration"]["request_ids"])
+    dev_ids = set(first["general_dev"]["request_ids"])
+    assert calibration_ids.isdisjoint(dev_ids)
+    assert calibration_ids | dev_ids == {
+        "train-a1",
+        "train-a2",
+        "train-b1",
+        "train-b2",
+        "train-o1",
+        "train-o2",
+    }
+    assert first["parsed_rows"] == 6
+
+
+def test_clinc150_oos_heavy_slice_deduplicates_oos_risk_sources() -> None:
+    teacher_rows = [
+        _teacher_row("r1", "out_of_scope", "out_of_scope", abstain=True),
+        _teacher_row("r2", "alpha", "out_of_scope"),
+        _teacher_row("r3", "out_of_scope", "alpha", abstain=True),
+        _teacher_row("r4", "beta", "beta"),
+    ]
+    prediction_rows = [
+        _prediction_row("r1", "out_of_scope", "alpha"),
+        _prediction_row("r2", "alpha", "alpha"),
+        _prediction_row("r3", "out_of_scope", "beta"),
+        _prediction_row("r4", "beta", "beta"),
+    ]
+
+    result = build_clinc150_oos_heavy_slice(
+        teacher_rows=teacher_rows,
+        prediction_rows=prediction_rows,
+    )
+
+    assert result["request_ids"] == ["r1", "r2", "r3"]
+    assert result["reason_counts"]["gold_oos"] == 2
+    assert result["reason_counts"]["teacher_predicted_oos"] == 2
+    assert result["reason_counts"]["l2_in_scope_with_oos_signal"] == 3
+
+
+def test_clinc150_replay_oracle_fallback_counts_l4_cost_latency() -> None:
+    prediction_rows = [
+        _prediction_row("r1", "alpha", "alpha", latency_ms=1.0),
+        _prediction_row("r2", "beta", "alpha", latency_ms=2.0),
+    ]
+    oracle = Clinc150L4ReplayOracle.from_rows(
+        [
+            _teacher_row("r1", "alpha", "alpha", tokens=10, cost_usd=0.01, latency_ms=100),
+            _teacher_row("r2", "beta", "beta", tokens=20, cost_usd=0.03, latency_ms=300),
+        ]
+    )
+    guard_rule = {"name": "threshold_1", "threshold": 1.0}
+
+    result = evaluate_clinc150_guard_rule(
+        prediction_rows=prediction_rows,
+        guard_rule=guard_rule,
+        replay_oracle=oracle,
+    )
+
+    assert oracle.validate_coverage(["r1", "r2"])["missing_rows"] == 0
+    assert result["accepted"] == 0
+    assert result["l4_calls_per_100_requests"] == pytest.approx(100.0)
+    assert result["l4_cost_usd_per_request"] == pytest.approx(0.02)
+    assert result["l4_tokens_per_request"] == pytest.approx(15.0)
+    assert result["latency_p50_ms"] == pytest.approx(201.5)
+
+
+def test_clinc150_calibration_guard_selection_uses_constraints_without_test() -> None:
+    safe_rule = {"name": "safe", "threshold": 0.99}
+    risky_rule = {"name": "risky", "threshold": 0.98}
+    validation = [
+        _guard_result("safe", safe_rule, precision=0.995, coverage=0.40),
+        _guard_result("risky", risky_rule, precision=0.989, coverage=0.80),
+    ]
+    dev = [
+        _guard_result("safe", safe_rule, precision=0.995, coverage=0.40),
+        _guard_result("risky", risky_rule, precision=0.995, coverage=0.80),
+    ]
+    oos = [
+        _guard_result("safe", safe_rule, precision=1.0, coverage=0.20),
+        _guard_result("risky", risky_rule, precision=1.0, coverage=0.20, oos_rate=0.03),
+    ]
+
+    selected = select_clinc150_calibration_guard(
+        calibration_dev_results=dev,
+        oos_heavy_results=oos,
+        validation_results=validation,
+    )
+
+    assert selected is not None
+    assert selected["guard_name"] == "safe"
+
+
+def test_clinc150_accepted_error_summary_has_debug_fields() -> None:
+    rows = [
+        _prediction_row("r1", "alpha", "alpha", guard_probability=0.99),
+        _prediction_row("r2", "beta", "alpha", guard_probability=0.99, margin=0.1),
+        _prediction_row(
+            "r3",
+            "out_of_scope",
+            "alpha",
+            guard_probability=0.99,
+            abstain=True,
+        ),
+    ]
+    oracle = Clinc150L4ReplayOracle.from_rows(
+        [
+            _teacher_row("r1", "alpha", "alpha"),
+            _teacher_row("r2", "beta", "beta"),
+            _teacher_row("r3", "out_of_scope", "out_of_scope", abstain=True),
+        ]
+    )
+    rule = clinc150_calibration_guard_rules(thresholds=(0.98,))[0]
+
+    summary = summarize_clinc150_accepted_errors(
+        prediction_rows=rows,
+        guard_rule=rule,
+        replay_oracle=oracle,
+    )
+
+    assert summary["accepted_wrong"] == 2
+    assert summary["accepted_wrong_by_gold_intent"]["beta"] == 1
+    assert summary["accepted_wrong_by_predicted_intent"]["alpha"] == 2
+    assert summary["accepted_oos_false_accepts"] == 1
+    assert summary["accepted_wrong_examples"][0]["teacher_intent"] == "beta"
+    assert summary["accepted_wrong_distributions"]["margin"]["count"] == 2
 
 
 def test_clinc150_teacher_eval_writes_manifest_details_and_cost_ledger(
@@ -443,6 +600,64 @@ def _teacher_row(
         "tokens": tokens,
         "cost_usd": cost_usd,
         "latency_ms": latency_ms,
+    }
+
+
+def _prediction_row(
+    request_id: str,
+    gold_intent: str,
+    predicted_intent: str,
+    *,
+    guard_probability: float = 0.99,
+    top1_probability: float = 0.8,
+    margin: float = 0.4,
+    entropy: float = 1.0,
+    latency_ms: float = 0.0,
+    abstain: bool = False,
+) -> dict:
+    gold_frame = Frame(
+        intent=gold_intent,
+        slots={},
+        is_abstain=abstain,
+    ).model_dump(mode="json")
+    predicted_frame = Frame(
+        intent=predicted_intent,
+        slots={},
+        is_abstain=predicted_intent == "out_of_scope",
+    ).model_dump(mode="json")
+    return {
+        "request_id": request_id,
+        "utterance": request_id,
+        "gold_frame": gold_frame,
+        "gold_intent": gold_intent,
+        "gold_oos": gold_intent == "out_of_scope",
+        "predicted_frame": predicted_frame,
+        "predicted_intent": predicted_intent,
+        "predicted_oos": predicted_intent == "out_of_scope",
+        "guard_probability": guard_probability,
+        "top1_probability": top1_probability,
+        "margin": margin,
+        "entropy": entropy,
+        "latency_ms": latency_ms,
+    }
+
+
+def _guard_result(
+    name: str,
+    rule: dict,
+    *,
+    precision: float,
+    coverage: float,
+    oos_rate: float = 0.0,
+    delta: float = 0.0,
+) -> dict:
+    return {
+        "guard_name": name,
+        "guard_rule": rule,
+        "accepted_precision": precision,
+        "accepted_coverage": coverage,
+        "lower_layer_oos_false_accept_rate": oos_rate,
+        "accuracy_delta_vs_all_l4": delta,
     }
 
 

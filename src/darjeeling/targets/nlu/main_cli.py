@@ -19,6 +19,7 @@ from darjeeling.targets import registry as target_registry
 from darjeeling.targets.nlu.adapters.clinc150 import prepare_clinc150_dataset
 from darjeeling.targets.nlu.adapters.massive import prepare_massive_dataset
 from darjeeling.targets.nlu.clinc150_phase1 import (
+    CLINC150_CALIBRATION_REPAIR_THRESHOLDS,
     DEFAULT_CLINC150_PROMPTS,
     DEFAULT_CLINC150_THRESHOLDS,
     build_clinc150_gate_records,
@@ -27,6 +28,7 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     compare_repeated_teacher_rows,
     evaluate_clinc150_l2,
     load_teacher_rows,
+    run_clinc150_calibration_repair,
     run_clinc150_teacher_live_eval,
     sample_clinc150_records,
     train_clinc150_l2,
@@ -756,6 +758,119 @@ def clinc150_l2_eval(
     if artifact.details_jsonl_path is not None:
         console.print(f"wrote {artifact.details_jsonl_path}")
     console.print_json(data=artifact.summary)
+
+
+@clinc150_app.command("calibration-repair")
+def clinc150_calibration_repair(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for CLINC150 calibration repair artifacts."),
+    ] = Path("runs/clinc150-calibration-repair-20260624"),
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed CLINC150 data directory."),
+    ] = Path("data/processed/clinc150_data_full"),
+    bundle_path: Annotated[
+        Path,
+        typer.Option(help="Existing full teacher-distilled CLINC150 L2 bundle."),
+    ] = Path("runs/clinc150-l2-cascade-20260623/distilled-l2/train-full/l2_student.joblib"),
+    train_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing train live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "train-full-stratified/teacher_live_vs_gold.details.jsonl"
+    ),
+    validation_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing validation live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "validation-full/teacher_live_vs_gold.details.jsonl"
+    ),
+    test_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing locked-test live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "test-full/teacher_live_vs_gold.details.jsonl"
+    ),
+    train_predictions: Annotated[
+        Path | None,
+        typer.Option(help="Existing train L2 prediction JSONL to reuse."),
+    ] = None,
+    validation_predictions: Annotated[
+        Path | None,
+        typer.Option(help="Existing validation L2 prediction JSONL to reuse."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/distilled-l2/train-full/"
+        "validation-cascade/clinc150_l2_predictions.jsonl"
+    ),
+    test_predictions: Annotated[
+        Path | None,
+        typer.Option(help="Existing locked-test L2 prediction JSONL to reuse."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/distilled-l2/train-full/"
+        "test-cascade/clinc150_l2_predictions.jsonl"
+    ),
+    validation_uniform_predictions: Annotated[
+        Path | None,
+        typer.Option(help="Existing validation uniform-stream L2 prediction JSONL to reuse."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/distilled-l2/train-full/"
+        "validation-uniform-cascade/clinc150_l2_predictions.jsonl"
+    ),
+    validation_zipf_heavy_predictions: Annotated[
+        Path | None,
+        typer.Option(help="Existing validation zipf-heavy L2 prediction JSONL to reuse."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/distilled-l2/train-full/"
+        "validation-zipf-heavy-cascade/clinc150_l2_predictions.jsonl"
+    ),
+    thresholds: Annotated[
+        str,
+        typer.Option(help="Comma-separated guard thresholds for repair candidates."),
+    ] = ",".join(str(value) for value in CLINC150_CALIBRATION_REPAIR_THRESHOLDS),
+    selection_min_precision: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Minimum accepted precision on calibration dev and validation for selection.",
+        ),
+    ] = 0.99,
+    write_accepted_errors: Annotated[
+        bool,
+        typer.Option("--write-accepted-errors/--no-write-accepted-errors"),
+    ] = True,
+) -> None:
+    """Run the target-local CLINC150 calibration repair using replayed L4 rows."""
+
+    result = run_clinc150_calibration_repair(
+        bundle_path=bundle_path,
+        data_dir=data_dir,
+        out_dir=out_dir,
+        train_teacher_details=train_teacher_details,
+        validation_teacher_details=validation_teacher_details,
+        test_teacher_details=test_teacher_details,
+        train_predictions=train_predictions,
+        validation_predictions=validation_predictions,
+        test_predictions=test_predictions,
+        validation_uniform_predictions=validation_uniform_predictions,
+        validation_zipf_heavy_predictions=validation_zipf_heavy_predictions,
+        thresholds=_parse_float_tuple(thresholds),
+        selection_min_precision=selection_min_precision,
+        write_accepted_errors=write_accepted_errors,
+    )
+    console.print(f"wrote {result['summary_path']}")
+    console.print_json(
+        data={
+            "selected": result.get("selected"),
+            "locked_test": result.get("locked_test"),
+            "stream_confirmation": result.get("stream_confirmation"),
+            "summary_path": result["summary_path"],
+        }
+    )
 
 
 @teacher_app.command("eval-live")
