@@ -16,19 +16,23 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     clinc150_metrics_from_teacher_rows,
     compare_repeated_teacher_rows,
     evaluate_clinc150_guard_rule,
+    evaluate_clinc150_l1,
     evaluate_clinc150_l2,
     load_teacher_rows,
     run_clinc150_teacher_live_eval,
     select_clinc150_calibration_guard,
+    select_clinc150_l1_candidate,
     select_l2_threshold,
     summarize_clinc150_accepted_errors,
     train_clinc150_l2,
     training_examples_from_gold_records,
     training_examples_from_teacher_rows,
+    write_clinc150_l1_eval_artifacts,
     write_clinc150_l2_eval_artifacts,
     write_clinc150_l2_train_artifacts,
 )
 from darjeeling.targets.nlu.data import DataRecord
+from darjeeling.targets.nlu.layers.l1_rust_programbank import RustL1Response
 from darjeeling.targets.nlu.layers.l4_cloud_llm import TeacherCallResult
 from darjeeling.targets.nlu.schemas import Frame, TaskSchema
 from darjeeling.targets.nlu.settings import load_settings
@@ -436,6 +440,124 @@ def test_clinc150_accepted_error_summary_has_debug_fields() -> None:
     assert summary["accepted_wrong_distributions"]["margin"]["count"] == 2
 
 
+def test_clinc150_l1_eval_reports_accept_abstain_wrong_and_oos_false_accept(
+    tmp_path,
+) -> None:
+    records = [
+        _record("r1", "alpha request", "alpha", split="validation"),
+        _record("r2", "beta request", "beta", split="validation"),
+        _record("r3", "unsupported request", "out_of_scope", split="validation", abstain=True),
+    ]
+    worker = _FakeL1Worker(
+        {
+            "r1": _l1_response("r1", intent="alpha", program_path="programs/alpha"),
+            "r2": _l1_response("r2", accepted=False, reason="no match"),
+            "r3": _l1_response("r3", intent="alpha", program_path="programs/alpha_oos_risk"),
+        }
+    )
+    replay_oracle = Clinc150L4ReplayOracle.from_rows(
+        [
+            _teacher_row("r1", "alpha", "alpha", tokens=10, cost_usd=0.01, latency_ms=100),
+            _teacher_row("r2", "beta", "beta", tokens=30, cost_usd=0.03, latency_ms=200),
+            _teacher_row(
+                "r3",
+                "out_of_scope",
+                "out_of_scope",
+                abstain=True,
+                tokens=50,
+                cost_usd=0.05,
+                latency_ms=300,
+            ),
+        ]
+    )
+
+    result = evaluate_clinc150_l1(
+        worker=worker,
+        records=records,
+        replay_oracle=replay_oracle,
+        include_prediction_rows=True,
+    )
+    artifact = write_clinc150_l1_eval_artifacts(result=result, out_dir=tmp_path)
+
+    l1_only = result["l1_only"]
+    cascade = result["l1_l4_cascade"]
+    assert l1_only["accepted"] == 2
+    assert l1_only["abstained"] == 1
+    assert l1_only["wrong_accepts"] == 1
+    assert l1_only["accepted_precision"] == pytest.approx(0.5)
+    assert l1_only["lower_layer_oos_false_accepts"] == 1
+    assert l1_only["lower_layer_oos_false_accept_rate"] == pytest.approx(1.0)
+    assert l1_only["outcome_counts"] == {
+        "abstain": 1,
+        "correct_accept": 1,
+        "oos_false_accept": 1,
+    }
+    assert cascade["l4_calls"] == 1
+    assert cascade["l4_calls_per_100_requests"] == pytest.approx(100.0 / 3.0)
+    assert cascade["l4_cost_usd_per_request"] == pytest.approx(0.01)
+    assert cascade["l4_cost_reduction_rate"] == pytest.approx(1.0 - (0.03 / 0.09))
+    assert cascade["accuracy"] == pytest.approx(2.0 / 3.0)
+    assert result["all_l4_baseline"]["accuracy"] == pytest.approx(1.0)
+    assert result["replay_oracle"]["teacher_cache_semantics"].startswith("not TeacherCache")
+    assert artifact.summary_path.exists()
+    assert artifact.details_jsonl_path is not None
+    assert artifact.details_jsonl_path.exists()
+    accepted_errors = [
+        json.loads(line)
+        for line in artifact.accepted_errors_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["request_id"] for row in accepted_errors] == ["r3"]
+
+
+def test_clinc150_l1_primary_metrics_keep_l0_l2_l3_disabled() -> None:
+    records = [_record("r1", "alpha request", "alpha", split="validation")]
+    worker = _FakeL1Worker({"r1": _l1_response("r1", intent="alpha")})
+
+    result = evaluate_clinc150_l1(worker=worker, records=records)
+
+    assert result["primary_layers"] == ["L1", "L4_REPLAY_ORACLE"]
+    assert result["l0_enabled"] is False
+    assert result["l2_enabled"] is False
+    assert result["l3_enabled"] is False
+
+
+def test_clinc150_l4_replay_oracle_validates_coverage_and_exposes_stats() -> None:
+    records = [
+        _record("r1", "alpha request", "alpha", split="validation"),
+        _record("missing", "beta request", "beta", split="validation"),
+    ]
+    oracle = Clinc150L4ReplayOracle.from_rows(
+        [_teacher_row("r1", "alpha", "alpha", tokens=10, cost_usd=0.01, latency_ms=100)]
+    )
+
+    coverage = oracle.validate_coverage(records)
+    assert coverage["missing_request_ids"] == ["missing"]
+    assert oracle.frame_for("r1") == Frame(
+        intent="alpha",
+        slots={},
+        is_abstain=False,
+    ).model_dump(mode="json")
+    assert oracle.stats_for("r1")["cost_usd"] == pytest.approx(0.01)
+
+
+def test_clinc150_l1_selection_refuses_locked_test_split() -> None:
+    candidate = {
+        "l1_only": {
+            "accepted_precision": 1.0,
+            "accepted_coverage": 0.2,
+            "lower_layer_oos_false_accept_rate": 0.0,
+        },
+        "l1_l4_cascade": {"accuracy_delta_vs_all_l4": 0.0},
+    }
+
+    assert select_clinc150_l1_candidate(
+        [candidate],
+        selection_split="validation",
+    ) is candidate
+    with pytest.raises(ValueError, match="locked test split cannot be used"):
+        select_clinc150_l1_candidate([candidate], selection_split="test")
+
+
 def test_clinc150_teacher_eval_writes_manifest_details_and_cost_ledger(
     tmp_path,
     monkeypatch,
@@ -659,6 +781,36 @@ def _guard_result(
         "lower_layer_oos_false_accept_rate": oos_rate,
         "accuracy_delta_vs_all_l4": delta,
     }
+
+
+def _l1_response(
+    request_id: str,
+    *,
+    accepted: bool = True,
+    intent: str | None = None,
+    program_path: str = "programs/test",
+    reason: str = "matched test program",
+) -> RustL1Response:
+    return RustL1Response(
+        request_id=request_id,
+        accepted=accepted,
+        frame=Frame(intent=intent, slots={}, is_abstain=intent == "out_of_scope")
+        if accepted and intent is not None
+        else None,
+        program_path=program_path if accepted else "abstain",
+        native_latency_us=7,
+        reason=reason,
+    )
+
+
+class _FakeL1Worker:
+    def __init__(self, responses: dict[str, RustL1Response]) -> None:
+        self.responses = responses
+
+    def answer(self, utterance: str, *, request_id: str | None = None) -> RustL1Response:
+        del utterance
+        assert request_id is not None
+        return self.responses[request_id]
 
 
 class _FakeClincCompletions:

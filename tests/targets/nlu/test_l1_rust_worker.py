@@ -2,6 +2,10 @@ from pathlib import Path
 
 import pytest
 
+from darjeeling.targets.nlu.compiler.l1_program_compiler import (
+    _build_l1_agent_prompt,
+    _constraints_text,
+)
 from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     RustL1Worker,
     RustProgramBankLayer,
@@ -100,3 +104,16 @@ def test_rust_l1_layer_accepts_patch_only_response(l1_binary: Path) -> None:
     assert result.patch is not None
     assert result.patch.accepted_intent == "intent_alpha"
     assert result.metadata["frame_patch"]["accepted_intent"] == "intent_alpha"
+
+
+def test_l1_agent_prompt_allows_large_hard_coded_rust_programbank() -> None:
+    prompt = _build_l1_agent_prompt(
+        context_dir=Path("contexts"),
+        workspace_crate_dir=Path("l1_programbank"),
+    )
+    constraints = _constraints_text()
+
+    assert "Large, repetitive, CPU-native Rust ProgramBank logic is allowed" in prompt
+    assert "large hard-coded Rust tables" in constraints
+    assert "Do not modify the outer evaluator" in constraints
+    assert "teacher cache" in constraints
