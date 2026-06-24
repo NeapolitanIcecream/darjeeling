@@ -31,6 +31,7 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     evaluate_clinc150_l2,
     load_teacher_rows,
     run_clinc150_calibration_repair,
+    run_clinc150_l1_agent_session_evolution,
     run_clinc150_l2_autoresearch,
     run_clinc150_teacher_live_eval,
     sample_clinc150_records,
@@ -942,6 +943,91 @@ def clinc150_l1_eval(
     if artifact.details_jsonl_path is not None:
         console.print(f"wrote {artifact.details_jsonl_path}")
     console.print_json(data=artifact.summary)
+
+
+@clinc150_app.command("l1-agent-session-effect")
+def clinc150_l1_agent_session_effect(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for CLINC150 L1 agent-session artifacts."),
+    ] = Path("runs/clinc150-l1-agent-session-effect-20260624"),
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed CLINC150 data directory."),
+    ] = Path("data/processed/clinc150_data_full"),
+    source_crate_dir: Annotated[
+        Path,
+        typer.Option(help="Initial Rust L1 ProgramBank crate directory."),
+    ] = DEFAULT_NLU_L1_CRATE_DIR,
+    train_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing train live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "train-full-stratified/teacher_live_vs_gold.details.jsonl"
+    ),
+    validation_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing validation live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "validation-full/teacher_live_vs_gold.details.jsonl"
+    ),
+    test_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing locked-test live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "test-full/teacher_live_vs_gold.details.jsonl"
+    ),
+    mode: Annotated[
+        str,
+        typer.Option(help="Evolution mode: agent-session, codex-cli, or dry-run."),
+    ] = "agent-session",
+    rounds: Annotated[int, typer.Option(min=1)] = 5,
+    timeout_s: Annotated[
+        float,
+        typer.Option(min=0.1, help="Per-round L1 agent timeout in seconds."),
+    ] = 3600.0,
+    codex_model: Annotated[
+        str | None,
+        typer.Option(help="Override L1 agent Codex model."),
+    ] = None,
+) -> None:
+    """Run CLINC150 L1 agent-session evolution over replay-oracle rows."""
+
+    if mode not in {"agent-session", "codex-cli", "dry-run"}:
+        raise typer.BadParameter("mode must be agent-session, codex-cli, or dry-run")
+    settings = _load_cli_settings()
+    result = run_clinc150_l1_agent_session_evolution(
+        data_dir=data_dir,
+        out_dir=out_dir,
+        source_repo_dir=Path.cwd(),
+        source_crate_dir=source_crate_dir,
+        train_teacher_details=train_teacher_details,
+        validation_teacher_details=validation_teacher_details,
+        test_teacher_details=test_teacher_details,
+        mode=mode,
+        rounds=rounds,
+        timeout_s=timeout_s,
+        codex_command=settings.l1_agent_codex_command,
+        codex_model=codex_model if codex_model is not None else settings.l1_agent_model,
+    )
+    console.print(f"wrote {result['summary_path']}")
+    console.print_json(
+        data={
+            "mode": result["mode"],
+            "rounds": len(result["rounds"]),
+            "selected_round": (
+                result["selected_round"]["round"]
+                if result.get("selected_round") is not None
+                else None
+            ),
+            "locked_test_exposures": result["locked_test_exposures"],
+            "decision": result["decision"],
+            "summary_path": result["summary_path"],
+        }
+    )
 
 
 @clinc150_app.command("l2-autoresearch")

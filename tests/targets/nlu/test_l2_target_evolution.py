@@ -1300,11 +1300,8 @@ def test_l2_target_evolution_rejects_protected_workspace_edits(
                 "-# darjeeling",
                 "+# patched darjeeling",
                 " ",
-                (
-                    " Profile-guided edge intelligence runtime MVP for the NLU replay "
-                    "demo described in"
-                ),
-                " [docs/mvp_demo_proposal.md](docs/mvp_demo_proposal.md).",
+                " Darjeeling is a profile-guided edge intelligence runtime MVP. It explores how a",
+                " strong cloud model, L4, can externalize stable parts of a workload into cheaper",
                 "",
             ],
         ),
