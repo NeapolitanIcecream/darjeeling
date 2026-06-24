@@ -105,6 +105,7 @@ from darjeeling.targets.nlu.layers.l4_cloud_llm import (
     has_valid_teacher_cache,
     require_live_or_cached_teacher,
 )
+from darjeeling.targets.nlu.precision_coverage import backfill_clinc150_precision_coverage
 from darjeeling.targets.nlu.replay import (
     load_processed_records,
     run_replay,
@@ -174,6 +175,12 @@ def _parse_int_tuple(value: str) -> tuple[int, ...]:
     if any(part <= 0 for part in result):
         raise typer.BadParameter("integer values must be positive")
     return result
+
+
+def _parse_path_tuple(value: str | None) -> tuple[Path, ...]:
+    if value is None or not value.strip():
+        return ()
+    return tuple(Path(part.strip()) for part in value.split(",") if part.strip())
 
 
 def _current_git_commit() -> str | None:
@@ -1102,6 +1109,61 @@ def clinc150_l2_autoresearch(
             "candidate": result["candidate"],
             "locked_test_exposures": result["locked_test_exposures"],
             "summary_path": result["summary_path"],
+        }
+    )
+
+
+@clinc150_app.command("precision-coverage-backfill")
+def clinc150_precision_coverage_backfill(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for normalized data and figures."),
+    ] = Path("docs/experiments/precision_coverage"),
+    l1_summary: Annotated[
+        Path,
+        typer.Option(help="CLINC150 L1 agent-session summary JSON."),
+    ] = Path(
+        "runs/clinc150-l1-agent-session-effect-20260624/main-agent-session-5round/"
+        "clinc150_l1_agent_session_effect_summary.json"
+    ),
+    l2_cascade_root: Annotated[
+        Path,
+        typer.Option(help="CLINC150 L2 cascade experiment root."),
+    ] = Path("runs/clinc150-l2-cascade-20260623"),
+    calibration_summaries: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Comma-separated CLINC150 calibration repair summary JSON paths. "
+                "These are imported as summary-only discrete points."
+            ),
+        ),
+    ] = None,
+    autoresearch_summary: Annotated[
+        Path | None,
+        typer.Option(help="Optional CLINC150 L2 AutoResearch summary JSON."),
+    ] = None,
+) -> None:
+    """Backfill standard precision/coverage data files and Seaborn figures."""
+
+    result = backfill_clinc150_precision_coverage(
+        output_dir=out_dir,
+        l1_summary_path=l1_summary,
+        l2_cascade_root=l2_cascade_root,
+        calibration_summary_paths=_parse_path_tuple(calibration_summaries),
+        autoresearch_summary_path=autoresearch_summary,
+    )
+    console.print(f"wrote {result.round_metrics_path}")
+    console.print(f"wrote {result.operating_points_path}")
+    console.print(f"wrote {result.pareto_frontier_path}")
+    for figure_path in result.figure_paths:
+        console.print(f"wrote {figure_path}")
+    console.print_json(
+        data={
+            "round_metrics": result.round_metric_count,
+            "operating_points": result.operating_point_count,
+            "pareto_points": result.pareto_point_count,
+            "output_dir": str(result.output_dir),
         }
     )
 

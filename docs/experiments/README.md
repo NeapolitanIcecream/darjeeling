@@ -140,10 +140,14 @@ is not the same as benchmark serving spend.
 Plan:
 [2026-06-24_precision_coverage_visualization_plan.md](2026-06-24_precision_coverage_visualization_plan.md)
 
-Current decision: planned.
+Report:
+[2026-06-24_precision_coverage_visualization_report.md](2026-06-24_precision_coverage_visualization_report.md)
 
-Future L1/L2 reports should standardize two static Seaborn figure families:
-round/generation evolution curves for accepted precision and coverage, and
-coverage-vs-precision operating frontiers for candidate-local accept-policy
-trade-offs. L1 operating frontiers should be target-adapter overlays over
-recorded L1 outputs, not requirements pushed into the generated L1 artifact.
+Current decision: implemented as the standard static reporting pattern.
+
+L1/L2 reports now have normalized JSONL outputs under
+[`precision_coverage/`](precision_coverage/) and static Seaborn figures for:
+round/generation evolution curves, candidate-local operating frontiers, Pareto
+frontier rows, and an L1/L2 frontier comparison. L1 operating frontiers are
+target-adapter overlays over recorded L1 outputs, not requirements pushed into
+the generated L1 artifact.
