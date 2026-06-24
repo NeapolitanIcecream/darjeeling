@@ -59,6 +59,37 @@ NLU target reports 可以追加：
 
 Plot 输入来自 metrics 文件，不从 trace 中临时推导未记录字段。
 
+## 2026-06-24 Precision/Coverage Plotting
+
+`darjeeling.eval.plots` now also owns target-neutral precision/coverage
+reporting helpers:
+
+- normalized JSONL read/write for rows that already contain target-owned
+  precision and coverage metrics;
+- Pareto frontier annotation over `coverage` and `accepted_precision`;
+- Seaborn static evolution curves and single-knob operating-curve plots.
+
+Core plotting still must not parse NLU frames, CLINC150 labels, utterances,
+intents, OOS status, request ids, or target-specific policy semantics. Target
+packages convert historical artifacts into normalized rows first. The CLINC150
+implementation lives in `darjeeling.targets.nlu.precision_coverage` and writes:
+
+- `docs/experiments/precision_coverage/round_metrics.jsonl`
+- `docs/experiments/precision_coverage/operating_points.jsonl`
+- `docs/experiments/precision_coverage/pareto_frontier.jsonl`
+
+L1 operating curves are target-adapter overlays over recorded L1 accepts.
+They are not generated L1 ProgramBank requirements, and the L1 evolve agent
+does not need to know about plotting, Seaborn, Pareto frontiers, or operating
+sweeps.
+
+The repaired operating-curve contract uses target-neutral fields such as
+`curve_id`, `curve_role`, `knob_name`, `knob_value`, `knob_label`,
+`knob_order`, `knob_direction`, and `selection_scope`. Standard helpers connect
+only one ordered `curve_id` per subplot; locked-test diagnostic curves are
+separate from agent-visible curves. CLINC150 chooses L1 `risk_tolerance` and L2
+`guard_threshold` in target code, not in core plotting.
+
 ## 2026-06-13 Field Metrics Update
 
 NLU reports now include a field summary in addition to full-frame metrics. The target

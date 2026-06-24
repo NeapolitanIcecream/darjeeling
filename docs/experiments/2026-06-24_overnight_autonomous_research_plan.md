@@ -84,28 +84,21 @@ worktree: ../darjeeling-overnight-research-20260624
 If an appropriate worktree already exists, inspect and continue there instead
 of creating a duplicate.
 
-This task may run in parallel with the precision/coverage frontier repair task,
-which is expected to continue in:
-
-```text
-worktree: /Users/chenmohan/gits/darjeeling-precision-coverage-visuals
-branch: codex/precision-coverage-visuals
-```
-
-During parallel execution, treat the precision/coverage repair worktree as
-read-only context. Do not edit files owned by that active task unless the repair
-has been merged into the branch you are working on.
-
-Avoid editing these files during parallel execution unless they have already
-been merged and the change is clearly coordinated:
+The precision/coverage visualization repair has been merged into main. Use the
+merged plotting/backfill facility as the standard reporting path for new L1/L2
+evidence:
 
 ```text
 src/darjeeling/eval/plots.py
 src/darjeeling/targets/nlu/precision_coverage.py
 docs/experiments/precision_coverage/
 docs/experiments/2026-06-24_precision_coverage_visualization_report.md
-docs/experiments/2026-06-24_precision_coverage_frontier_repair_plan.md
 ```
+
+The old repair worktree
+`/Users/chenmohan/gits/darjeeling-precision-coverage-visuals` is historical
+context only. Do not depend on it for current code unless you are auditing the
+merge.
 
 ## Required Context
 
@@ -123,15 +116,8 @@ Read these before choosing the first track:
 - `docs/experiments/2026-06-24_clinc150_l1_agent_session_effect_report.md`
 - `docs/experiments/2026-06-24_clinc150_l2_autoresearch_report.md`
 - `docs/experiments/2026-06-24_precision_coverage_frontier_repair_plan.md`
-
-If the precision/coverage repair worktree exists and is clean enough to read,
-also inspect its report and figures as read-only context:
-
-- `/Users/chenmohan/gits/darjeeling-precision-coverage-visuals/docs/experiments/2026-06-24_precision_coverage_visualization_report.md`
-- `/Users/chenmohan/gits/darjeeling-precision-coverage-visuals/docs/experiments/precision_coverage/visual_qa.md`
-
-Do not depend on those files being present in your own worktree unless the
-precision/coverage branch has been merged.
+- `docs/experiments/2026-06-24_precision_coverage_visualization_report.md`
+- `docs/experiments/precision_coverage/visual_qa.md`
 
 ## Research And Experiment Loop
 
