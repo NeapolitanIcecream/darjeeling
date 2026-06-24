@@ -1,0 +1,89 @@
+{
+  "hypothesis": "Requiring zero train-dev wrong accepts rejects the previously locked-test-risky visible-selected L1 candidates before locked exposure.",
+  "new_gate_locked_test_exposure_would_run": false,
+  "new_gate_policy": {
+    "max_oos_false_accept_rate": 0.02,
+    "max_train_dev_wrong_accepts": 0,
+    "min_accuracy_delta_vs_all_l4": -0.005,
+    "min_coverage": 0.1,
+    "min_precision": 0.99
+  },
+  "new_selected_round": null,
+  "old_selected_locked_test": {
+    "accepted_precision": 0.9690721649484536,
+    "coverage": 0.1410909090909091,
+    "oos_false_accept_rate": 0.016,
+    "wrong_accepts": 24
+  },
+  "old_selected_round": 1,
+  "rounds": [
+    {
+      "new_gate_passes": false,
+      "new_gate_reason_codes": [
+        "train_dev_wrong_accepts_exceeded"
+      ],
+      "old_candidate_eligible": true,
+      "round": 1,
+      "train_dev_coverage": 0.18081573003852797,
+      "train_dev_precision": 0.9977957384276267,
+      "train_dev_wrong_accepts": 3,
+      "visible_validation_coverage": 0.14967741935483872,
+      "visible_validation_precision": 1.0
+    },
+    {
+      "new_gate_passes": false,
+      "new_gate_reason_codes": [
+        "train_dev_wrong_accepts_exceeded"
+      ],
+      "old_candidate_eligible": true,
+      "round": 2,
+      "train_dev_coverage": 0.20167397369469908,
+      "train_dev_precision": 0.9953886693017128,
+      "train_dev_wrong_accepts": 7,
+      "visible_validation_coverage": 0.16870967741935483,
+      "visible_validation_precision": 1.0
+    },
+    {
+      "new_gate_passes": false,
+      "new_gate_reason_codes": [
+        "train_dev_wrong_accepts_exceeded"
+      ],
+      "old_candidate_eligible": true,
+      "round": 3,
+      "train_dev_coverage": 0.2572073867410655,
+      "train_dev_precision": 0.9943181818181818,
+      "train_dev_wrong_accepts": 11,
+      "visible_validation_coverage": 0.22129032258064515,
+      "visible_validation_precision": 1.0
+    },
+    {
+      "new_gate_passes": false,
+      "new_gate_reason_codes": [
+        "train_dev_wrong_accepts_exceeded"
+      ],
+      "old_candidate_eligible": true,
+      "round": 4,
+      "train_dev_coverage": 0.3446260130197954,
+      "train_dev_precision": 0.992289899768697,
+      "train_dev_wrong_accepts": 20,
+      "visible_validation_coverage": 0.3641935483870968,
+      "visible_validation_precision": 1.0
+    },
+    {
+      "new_gate_passes": false,
+      "new_gate_reason_codes": [
+        "train_dev_wrong_accepts_exceeded",
+        "visible_slice_gate_failed:train_dev"
+      ],
+      "old_candidate_eligible": false,
+      "round": 5,
+      "train_dev_coverage": 0.3843496745051149,
+      "train_dev_precision": 0.9868648461804356,
+      "train_dev_wrong_accepts": 38,
+      "visible_validation_coverage": 0.4406451612903226,
+      "visible_validation_precision": 1.0
+    }
+  ],
+  "schema_version": "clinc150-l1-selection-gate-reanalysis-v1",
+  "source_summary": "/Users/chenmohan/gits/darjeeling-clinc150-l1-agent-session-effect/runs/clinc150-l1-agent-session-effect-20260624/main-agent-session-5round/clinc150_l1_agent_session_effect_summary.json"
+}

@@ -2423,6 +2423,7 @@ def run_clinc150_l1_agent_session_evolution(
     max_oos_false_accept_rate: float = 0.02,
     min_accuracy_delta_vs_all_l4: float = -0.005,
     min_coverage: float = 0.10,
+    max_train_dev_wrong_accepts: int = 0,
 ) -> dict[str, Any]:
     """Run target-owned CLINC150 L1 real agent-session evolution."""
 
@@ -2585,13 +2586,16 @@ def run_clinc150_l1_agent_session_evolution(
                 },
             )
             round_payload["evaluations"] = evaluations
-            round_payload["candidate_eligible"] = _clinc150_l1_candidate_visible_eligible(
+            selection_gate = _clinc150_l1_selection_gate(
                 evaluations,
                 min_precision=min_precision,
                 max_oos_false_accept_rate=max_oos_false_accept_rate,
                 min_accuracy_delta_vs_all_l4=min_accuracy_delta_vs_all_l4,
                 min_coverage=min_coverage,
+                max_train_dev_wrong_accepts=max_train_dev_wrong_accepts,
             )
+            round_payload["selection_gate"] = selection_gate
+            round_payload["candidate_eligible"] = selection_gate["passes"]
             round_payload["failure_classification"] = _clinc150_l1_failure_classification(
                 evaluations
             )
@@ -2665,6 +2669,21 @@ def run_clinc150_l1_agent_session_evolution(
             "max_rounds": outer_policy.max_rounds,
             "round_timeout_s": outer_policy.round_timeout_s,
             "round_executor": outer_policy.round_executor,
+        },
+        "selection_gate_policy": {
+            "schema_version": "clinc150-l1-selection-gate-policy-v1",
+            "min_precision": min_precision,
+            "max_oos_false_accept_rate": max_oos_false_accept_rate,
+            "min_accuracy_delta_vs_all_l4": min_accuracy_delta_vs_all_l4,
+            "min_coverage": min_coverage,
+            "max_train_dev_wrong_accepts": max_train_dev_wrong_accepts,
+            "reason_codes": [
+                "missing_visible_validation",
+                "visible_validation_gate_failed",
+                "missing_visible_slice:<slice>",
+                "visible_slice_gate_failed:<slice>",
+                "train_dev_wrong_accepts_exceeded",
+            ],
         },
         "artifacts": {
             "data_dir": str(data_dir),
@@ -2953,11 +2972,32 @@ def _clinc150_l1_candidate_visible_eligible(
     max_oos_false_accept_rate: float,
     min_accuracy_delta_vs_all_l4: float,
     min_coverage: float,
+    max_train_dev_wrong_accepts: int = 0,
 ) -> bool:
+    return _clinc150_l1_selection_gate(
+        evaluations,
+        min_precision=min_precision,
+        max_oos_false_accept_rate=max_oos_false_accept_rate,
+        min_accuracy_delta_vs_all_l4=min_accuracy_delta_vs_all_l4,
+        min_coverage=min_coverage,
+        max_train_dev_wrong_accepts=max_train_dev_wrong_accepts,
+    )["passes"]
+
+
+def _clinc150_l1_selection_gate(
+    evaluations: dict[str, dict[str, Any]],
+    *,
+    min_precision: float,
+    max_oos_false_accept_rate: float,
+    min_accuracy_delta_vs_all_l4: float,
+    min_coverage: float,
+    max_train_dev_wrong_accepts: int = 0,
+) -> dict[str, Any]:
+    reason_codes: list[str] = []
     main = evaluations.get("visible_validation")
     if main is None:
-        return False
-    if not _clinc150_l1_eval_passes(
+        reason_codes.append("missing_visible_validation")
+    elif not _clinc150_l1_eval_passes(
         main,
         min_precision=min_precision,
         max_oos_false_accept_rate=max_oos_false_accept_rate,
@@ -2965,11 +3005,17 @@ def _clinc150_l1_candidate_visible_eligible(
         min_coverage=min_coverage,
         require_precision=True,
     ):
-        return False
+        reason_codes.append("visible_validation_gate_failed")
+    train_dev = evaluations.get("train_dev")
+    train_dev_wrong_accepts = _clinc150_l1_wrong_accepts(train_dev)
+    if train_dev_wrong_accepts > max_train_dev_wrong_accepts:
+        reason_codes.append("train_dev_wrong_accepts_exceeded")
+
     for slice_name in ("train_dev", "visible_oos_heavy", "visible_intent_conflict"):
         evaluation = evaluations.get(slice_name)
         if evaluation is None:
-            return False
+            reason_codes.append(f"missing_visible_slice:{slice_name}")
+            continue
         if not _clinc150_l1_eval_passes(
             evaluation,
             min_precision=min_precision,
@@ -2978,8 +3024,27 @@ def _clinc150_l1_candidate_visible_eligible(
             min_coverage=0.0,
             require_precision=False,
         ):
-            return False
-    return True
+            reason_codes.append(f"visible_slice_gate_failed:{slice_name}")
+    return {
+        "schema_version": "clinc150-l1-selection-gate-v1",
+        "passes": not reason_codes,
+        "reason_codes": reason_codes,
+        "train_dev_wrong_accepts": train_dev_wrong_accepts,
+        "max_train_dev_wrong_accepts": max_train_dev_wrong_accepts,
+        "precision_floor": _clinc150_l1_visible_precision_floor(evaluations),
+        "oos_false_accept_rate_ceiling": _clinc150_l1_visible_oos_ceiling(evaluations),
+    }
+
+
+def _clinc150_l1_wrong_accepts(evaluation: dict[str, Any] | None) -> int:
+    if evaluation is None:
+        return 0
+    return int(
+        evaluation.get("summary", {})
+        .get("l1_only", {})
+        .get("wrong_accepts")
+        or 0
+    )
 
 
 def _clinc150_l1_eval_passes(
@@ -3053,6 +3118,8 @@ def _clinc150_l1_visible_oos_ceiling(evaluations: dict[str, dict[str, Any]]) -> 
 def _clinc150_l1_failure_classification(
     evaluations: dict[str, dict[str, Any]],
 ) -> str:
+    if _clinc150_l1_wrong_accepts(evaluations.get("train_dev")) > 0:
+        return "train_dev_accepted_errors"
     validation = evaluations.get("visible_validation", {}).get("summary", {})
     l1 = validation.get("l1_only", {})
     precision = l1.get("accepted_precision")
@@ -3082,6 +3149,8 @@ def _clinc150_l1_next_hypothesis(previous_round: dict[str, Any] | None) -> str:
         return "Remove weak cues, add OOS risk vetoes, and require stronger rule support."
     if classification == "accepted_errors_low_precision":
         return "Prune low-support positive phrases and add conflict-family vetoes."
+    if classification == "train_dev_accepted_errors":
+        return "Reject train-dev accepted-error rules and expose stronger cross-fold support."
     if classification == "precision_safe_but_coverage_low":
         return "Expand only high-support low-negative-support rule families."
     return "Repair weakest visible slice while preserving accepted precision."
@@ -3960,6 +4029,7 @@ def select_clinc150_l1_candidate(
     max_oos_false_accept_rate: float = 0.02,
     min_accuracy_delta_vs_all_l4: float = -0.005,
     min_coverage: float = 0.10,
+    max_wrong_accepts: int | None = None,
 ) -> dict[str, Any] | None:
     if selection_split in {"test", "locked_test", "locked-test"}:
         raise ValueError("locked test split cannot be used for CLINC150 L1 candidate selection")
@@ -3973,6 +4043,11 @@ def select_clinc150_l1_candidate(
         if precision is None or coverage is None:
             continue
         if precision < min_precision or coverage < min_coverage:
+            continue
+        if (
+            max_wrong_accepts is not None
+            and int(l1_metrics.get("wrong_accepts") or 0) > max_wrong_accepts
+        ):
             continue
         if l1_metrics.get("lower_layer_oos_false_accept_rate", 0.0) > max_oos_false_accept_rate:
             continue

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -40,6 +41,7 @@ DEFAULT_TARGET_INNER_PATIENCE_ROUNDS = 4
 DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS = 3
 DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K = 4
 MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD = 2
+DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_MAX_WRONG_ACCEPTS = 0
 SLOT_CUE_PROBE_SPECS_FILE = "slot_cue_probes.json"
 
 @dataclass(frozen=True)
@@ -224,6 +226,7 @@ def run_l2_target_evolution(
                     cross_audit_top_k=config.local_search_cross_audit_top_k,
                     min_accepted_accuracy=config.min_accepted_accuracy,
                     max_wrong_accept_rate=config.max_wrong_accept_rate,
+                    apply_best=True,
                 )
                 search_report_path.write_text(
                     json.dumps(local_search_report, indent=2, sort_keys=True) + "\n",
@@ -355,6 +358,12 @@ def run_l2_target_evolution(
             "passes_visible_support_gate": visible_support_gate["passes_gate"],
             "visible_support_gate": visible_support_gate,
             "passes_train_audit_safety_gate": train_audit_safety_passed,
+            "passes_visible_cross_audit_safety_gate": (
+                _passes_visible_cross_audit_safety_gate(candidate)
+            ),
+            "visible_cross_audit_safety_gate": (
+                _visible_cross_audit_safety_gate_payload(candidate)
+            ),
             "passes_candidate_selection_gate": _passes_candidate_selection_gate(
                 candidate,
             ),
@@ -847,6 +856,11 @@ def prepare_l2_target_workspace(
                 "uv run --project system/darjeeling python tools/search_config.py "
                 f"--trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} "
                 "--out runs/local_search.json"
+            ),
+            "apply_search_config": (
+                "uv run --project system/darjeeling python tools/search_config.py "
+                f"--trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} "
+                "--apply-best --out runs/local_search.json"
             ),
         },
     }
@@ -2595,7 +2609,8 @@ def _write_target_state_files(
         "round_policy": _target_round_policy_payload(config),
         "candidate_selection_gate": (
             "visible validation gate, visible support gate, visible train-audit "
-            "safety gate, and private selection holdout gate must all pass"
+            "safety gate, visible cross-audit safety gate when enabled, and private "
+            "selection holdout gate must all pass"
         ),
         "early_stop_policy": (
             "private selection is evaluated for outer candidate selection, but does not stop "
@@ -2616,8 +2631,9 @@ def _write_target_state_files(
             "per visible validation fold"
         ),
         "visible_cross_audit_policy": (
-            "visible cross-audit is diagnostic-only; it retrains on visible folds to "
-            "simulate selection-like pressure without exposing private holdouts"
+            "visible cross-audit is a safety gate when enabled; it retrains on "
+            "visible folds to simulate selection-like pressure without exposing "
+            "private holdouts"
         ),
         "round_history": [_visible_round_summary(round_result) for round_result in round_results],
         "private_holdout_visibility": (
@@ -2689,12 +2705,14 @@ def _target_objective_payload(
             "max_wrong_accept_rate": config.max_wrong_accept_rate,
             "candidate_selection": (
                 "visible validation gate AND visible support gate AND visible "
-                "train-audit safety gate AND private selection holdout gate"
+                "train-audit safety gate AND visible cross-audit safety gate "
+                "when enabled AND private selection holdout gate"
             ),
             "adoption": (
                 "visible validation gate AND visible support gate AND visible "
-                "train-audit safety gate AND private selection holdout gate "
-                "AND private promotion holdout gate"
+                "train-audit safety gate AND visible cross-audit safety gate "
+                "when enabled AND private selection holdout gate AND private "
+                "promotion holdout gate"
             ),
             "visible_support": (
                 "at least "
@@ -2702,16 +2720,21 @@ def _target_objective_payload(
                 "per visible validation fold before private selection"
             ),
             "train_audit_safety": "zero accepted wrong on visible train audit",
+            "visible_cross_audit_safety": (
+                "when visible cross-audit is enabled, require at most "
+                f"{DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_MAX_WRONG_ACCEPTS} accepted wrongs"
+            ),
             "visible_validation_folds": config.visible_validation_folds,
             "visible_validation_ratio": config.visible_validation_ratio,
             "visible_cross_audit_folds": config.visible_cross_audit_folds,
-            "visible_cross_audit_role": "diagnostic_only_not_selection_or_adoption_gate",
+            "visible_cross_audit_role": "selection_safety_gate_when_enabled",
         },
         "workspace_scope": _workspace_scope_policy_payload(),
         "optimization_order": [
             "zero or lower wrong accepts",
             "clear visible safety_backlog accepted-wrong families before coverage work",
             "clear visible train-audit accepted wrongs before private selection",
+            "clear visible cross-audit accepted wrongs before private selection",
             "retain enough visible correct accepts before private selection",
             "visible validation gate must pass before candidate selection",
             "accepted accuracy at or above gate",
@@ -2778,7 +2801,7 @@ def _target_code_policy_payload() -> dict[str, Any]:
             "selection/promotion holdouts remain outside the agent workspace"
         ),
         "adoption_authority": (
-            "visible validation/support/train-audit gates, "
+            "visible validation/support/train-audit/cross-audit gates, "
             "private selection/promotion gates, and final outer replay"
         ),
     }
@@ -2938,6 +2961,11 @@ def _target_commands_text() -> str:
             "  --out runs/local_search.json",
             "```",
             "",
+            "By default this writes the best config as a scratch candidate under",
+            "`runs/local_search_candidates/` and restores `target/config.json`.",
+            "Add `--apply-best` only when you intentionally want the tool to update",
+            "the active target config after the visible gates pass.",
+            "",
             "If Darjeeling dependencies are already active, avoid a nested uv env:",
             "",
             "```bash",
@@ -2998,6 +3026,12 @@ def _visible_round_summary(round_result: dict[str, Any]) -> dict[str, Any]:
         "passes_train_audit_safety_gate": _passes_train_audit_safety_gate(
             round_result,
         ),
+        "passes_visible_cross_audit_safety_gate": (
+            _passes_visible_cross_audit_safety_gate(round_result)
+        ),
+        "visible_cross_audit_safety_gate": _visible_cross_audit_safety_gate_payload(
+            round_result,
+        ),
         "inner_score": round_result["inner_score"],
         "inner_delta_vs_baseline": round_result["inner_delta_vs_baseline"],
         "inner_validation": _visible_metric_summary(round_result["inner_validation"]),
@@ -3030,6 +3064,9 @@ def _round_result_summary(round_result: dict[str, Any]) -> dict[str, Any]:
             "train_audit": _visible_metric_summary(_candidate_train_audit(round_result)),
             "visible_cross_audit": _optional_visible_metric_summary(
                 _candidate_visible_cross_audit(round_result),
+            ),
+            "visible_cross_audit_safety_gate": (
+                _visible_cross_audit_safety_gate_payload(round_result)
             ),
         },
         "improved": bool(round_result["improved"]),
@@ -3160,6 +3197,8 @@ def run_local_target_search(
     cross_audit_top_k: int = 0,
     min_accepted_accuracy: float = 0.93,
     max_wrong_accept_rate: float = 0.05,
+    apply_best: bool = False,
+    candidate_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Tune target-owned L2 config using only visible train/validation data."""
 
@@ -3282,6 +3321,14 @@ def run_local_target_search(
             key=lambda report: _local_search_report_score(report),
             default=None,
         )
+        best_config_path = None
+        if best_report is not None:
+            best_config_path = _write_local_search_candidate_config(
+                workspace_root=workspace_root,
+                candidate_dir=candidate_dir,
+                trial_number=int(best_report["number"]),
+                config=L2StudentConfig(**best_report["config"]),
+            )
         applied = False
         cross_audit_safety_veto = False
         applied_reason = "no completed local-search trial"
@@ -3300,16 +3347,26 @@ def run_local_target_search(
                 current_cross_audit=current_cross_audit,
                 cross_audit_enabled=cross_audit_rerank_enabled,
             ):
-                _write_target_config_json(
-                    config_path,
-                    L2StudentConfig(**best_report["config"]),
-                )
-                applied = True
-                applied_reason = (
-                    "best visible/cross-audit config improved current target"
-                    if cross_audit_rerank_enabled
-                    else "best visible validation config improved current target"
-                )
+                if apply_best:
+                    _write_target_config_json(
+                        config_path,
+                        L2StudentConfig(**best_report["config"]),
+                    )
+                    applied = True
+                    applied_reason = (
+                        "best visible/cross-audit config improved current target"
+                        if cross_audit_rerank_enabled
+                        else "best visible validation config improved current target"
+                    )
+                else:
+                    _restore_target_config_json(config_path, original_config_text)
+                    applied_reason = (
+                        "best visible/cross-audit config written as scratch candidate; "
+                        "pass --apply-best to update target/config.json"
+                        if cross_audit_rerank_enabled
+                        else "best visible validation config written as scratch candidate; "
+                        "pass --apply-best to update target/config.json"
+                    )
             else:
                 _restore_target_config_json(config_path, original_config_text)
                 applied_reason = (
@@ -3335,6 +3392,7 @@ def run_local_target_search(
             "best_trial_number": best_report["number"] if best_report is not None else None,
             "best_value": best_report["value"] if best_report is not None else None,
             "best_config": best_report["config"] if best_report is not None else None,
+            "best_config_path": str(best_config_path) if best_config_path else None,
             "best_inner_validation": (
                 best_report["inner_validation"] if best_report is not None else None
             ),
@@ -3342,8 +3400,14 @@ def run_local_target_search(
                 best_report.get("visible_cross_audit") if best_report is not None else None
             ),
             "applied": applied,
+            "active_config_updated": applied,
+            "apply_best_requested": apply_best,
             "cross_audit_safety_veto": cross_audit_safety_veto,
             "applied_reason": applied_reason,
+            "scratch_config_policy": (
+                "best local-search config is written under runs/local_search_candidates "
+                "unless --apply-best is requested"
+            ),
             "private_holdout_visibility": (
                 "local search used only agent-visible train and validation-fold data"
             ),
@@ -3367,6 +3431,8 @@ def local_search_target_workspace_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--min-accepted-accuracy", type=float, default=0.93)
     parser.add_argument("--max-wrong-accept-rate", type=float, default=0.05)
+    parser.add_argument("--apply-best", action="store_true")
+    parser.add_argument("--candidate-dir", type=Path, default=None)
     args = parser.parse_args(argv)
     payload = run_local_target_search(
         workspace_root=args.workspace,
@@ -3377,6 +3443,8 @@ def local_search_target_workspace_cli(argv: list[str] | None = None) -> int:
         cross_audit_top_k=args.cross_audit_top_k,
         min_accepted_accuracy=args.min_accepted_accuracy,
         max_wrong_accept_rate=args.max_wrong_accept_rate,
+        apply_best=args.apply_best,
+        candidate_dir=args.candidate_dir,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -3459,6 +3527,21 @@ def _write_target_config_json(path: Path, config: L2StudentConfig) -> None:
         json.dumps(config.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _write_local_search_candidate_config(
+    *,
+    workspace_root: Path,
+    candidate_dir: Path | None,
+    trial_number: int,
+    config: L2StudentConfig,
+) -> Path:
+    output_dir = candidate_dir or workspace_root / "runs" / "local_search_candidates"
+    if not output_dir.is_absolute():
+        output_dir = workspace_root / output_dir
+    path = output_dir / f"trial_{trial_number:03d}_config.json"
+    _write_target_config_json(path, config)
+    return path
 
 
 def _restore_target_config_json(path: Path, original_text: str | None) -> None:
@@ -3945,34 +4028,60 @@ def _run_command(
     stdin: str | None = None,
 ) -> dict[str, Any]:
     started_at = datetime.now(UTC).isoformat()
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdin=subprocess.PIPE if stdin is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        env={**os.environ, "GIT_CEILING_DIRECTORIES": str(cwd.parent.resolve())},
+    )
     try:
-        completed = subprocess.run(
-            command,
-            cwd=cwd,
-            input=stdin,
-            text=True,
-            capture_output=True,
-            timeout=timeout_s,
-            check=False,
-            env={**os.environ, "GIT_CEILING_DIRECTORIES": str(cwd.parent.resolve())},
-        )
+        stdout, stderr = process.communicate(input=stdin, timeout=timeout_s)
         return {
             "command": command,
             "cwd": str(cwd),
             "started_at": started_at,
-            "return_code": completed.returncode,
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
+            "return_code": process.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
         }
     except subprocess.TimeoutExpired as exc:
+        _terminate_process_group(process)
+        stdout, stderr = process.communicate()
         return {
             "command": command,
             "cwd": str(cwd),
             "started_at": started_at,
             "return_code": 124,
-            "stdout": exc.stdout or "",
-            "stderr": exc.stderr or "command timed out",
+            "stdout": _command_output_text(stdout or exc.stdout),
+            "stderr": _command_output_text(stderr or exc.stderr or "command timed out"),
         }
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        process.wait()
+
+
+def _command_output_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -4046,6 +4155,45 @@ def _passes_train_audit_safety_gate(round_result: dict[str, Any]) -> bool:
     return int(train_audit.get("wrong_accepts") or 0) == 0
 
 
+def _visible_cross_audit_safety_gate_payload(
+    round_result: dict[str, Any],
+) -> dict[str, Any]:
+    metric = _candidate_visible_cross_audit(round_result)
+    if metric is None:
+        return {
+            "schema_version": "l2-target-visible-cross-audit-safety-gate-v1",
+            "enabled": False,
+            "max_wrong_accepts": DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_MAX_WRONG_ACCEPTS,
+            "wrong_accepts": None,
+            "metric_passes_gate": None,
+            "passes_gate": True,
+            "reason_codes": ["visible_cross_audit_not_enabled"],
+        }
+    wrong_accepts = int(metric.get("wrong_accepts") or 0)
+    metric_passes_gate = bool(metric.get("passes_gate"))
+    reason_codes: list[str] = []
+    if not metric_passes_gate:
+        reason_codes.append("visible_cross_audit_metric_gate_failed")
+    if wrong_accepts > DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_MAX_WRONG_ACCEPTS:
+        reason_codes.append("visible_cross_audit_wrong_accepts_exceeded")
+    return {
+        "schema_version": "l2-target-visible-cross-audit-safety-gate-v1",
+        "enabled": True,
+        "max_wrong_accepts": DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_MAX_WRONG_ACCEPTS,
+        "wrong_accepts": wrong_accepts,
+        "metric_passes_gate": metric_passes_gate,
+        "passes_gate": not reason_codes,
+        "reason_codes": reason_codes,
+    }
+
+
+def _passes_visible_cross_audit_safety_gate(round_result: dict[str, Any]) -> bool:
+    gate = round_result.get("visible_cross_audit_safety_gate")
+    if not isinstance(gate, dict):
+        gate = _visible_cross_audit_safety_gate_payload(round_result)
+    return bool(gate["passes_gate"])
+
+
 def _visible_validation_fold_count(metric: dict[str, Any]) -> int:
     splits = metric.get("visible_validation_splits")
     if isinstance(splits, list) and splits:
@@ -4089,6 +4237,7 @@ def _passes_visible_selection_inputs(round_result: dict[str, Any]) -> bool:
         bool(round_result["inner_validation"]["passes_gate"])
         and _passes_visible_support_gate(round_result)
         and _passes_train_audit_safety_gate(round_result)
+        and _passes_visible_cross_audit_safety_gate(round_result)
     )
 
 
@@ -4120,6 +4269,7 @@ def _private_holdout_evidence(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         round_result
         for round_result in visible_support_rounds
         if _passes_train_audit_safety_gate(round_result)
+        and _passes_visible_cross_audit_safety_gate(round_result)
     ]
     selected_round = _best_selection_round(rounds)
     adoptable_round = _best_adoptable_round(rounds)
@@ -4147,6 +4297,21 @@ def _private_holdout_evidence(rounds: list[dict[str, Any]]) -> dict[str, Any]:
             1
             for round_result in inner_passing_rounds
             if not _passes_train_audit_safety_gate(round_result)
+        ),
+        "inner_passing_visible_cross_audit_wrong_accept_rounds": sum(
+            1
+            for round_result in inner_passing_rounds
+            if not _passes_visible_cross_audit_safety_gate(round_result)
+            and int(
+                (_candidate_visible_cross_audit(round_result) or {}).get("wrong_accepts")
+                or 0
+            )
+            > 0
+        ),
+        "visible_cross_audit_passing_rounds": sum(
+            1
+            for round_result in visible_support_rounds
+            if _passes_visible_cross_audit_safety_gate(round_result)
         ),
         "inner_passing_selection_zero_accept_rounds": sum(
             1
@@ -4220,14 +4385,21 @@ def _selection_gate_diagnosis(rounds: list[dict[str, Any]]) -> str:
     ]
     if not visible_selection_input_rounds:
         return "train_audit_safety_gate_failed"
+    visible_cross_safe_rounds = [
+        round_result
+        for round_result in visible_selection_input_rounds
+        if _passes_visible_cross_audit_safety_gate(round_result)
+    ]
+    if not visible_cross_safe_rounds:
+        return "visible_cross_audit_safety_gate_failed"
     if all(
         int(round_result.get("selection_holdout", {}).get("accepted") or 0) == 0
-        for round_result in visible_selection_input_rounds
+        for round_result in visible_cross_safe_rounds
     ):
         return "selection_zero_accepts_for_inner_passing_rounds"
     if any(
         int(round_result.get("selection_holdout", {}).get("wrong_accepts") or 0) > 0
-        for round_result in visible_selection_input_rounds
+        for round_result in visible_cross_safe_rounds
     ):
         return "selection_wrong_accepts_for_inner_passing_rounds"
     return "selection_gate_failed_for_inner_passing_rounds"
@@ -4258,6 +4430,11 @@ def _private_holdout_recommendation(rounds: list[dict[str, Any]]) -> str:
         return (
             "clear visible train-audit accepted wrongs before private selection; "
             "abstain rather than override visible teacher labels"
+        )
+    if diagnosis == "visible_cross_audit_safety_gate_failed":
+        return (
+            "clear visible cross-audit accepted wrongs before private selection; "
+            "do not use private holdouts to rescue visible selection-like failures"
         )
     if diagnosis == "visible_support_gate_failed":
         return (

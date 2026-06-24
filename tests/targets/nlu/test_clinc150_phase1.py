@@ -765,6 +765,64 @@ def test_clinc150_l1_selection_refuses_locked_test_split() -> None:
         select_clinc150_l1_candidate([candidate], selection_split="test")
 
 
+def test_clinc150_l1_selection_can_require_zero_wrong_accepts() -> None:
+    risky = {
+        "l1_only": {
+            "accepted_precision": 0.995,
+            "accepted_coverage": 0.2,
+            "wrong_accepts": 1,
+            "lower_layer_oos_false_accept_rate": 0.0,
+        },
+        "l1_l4_cascade": {"accuracy_delta_vs_all_l4": 0.0},
+    }
+
+    selected = select_clinc150_l1_candidate(
+        [risky],
+        selection_split="validation",
+        max_wrong_accepts=0,
+    )
+
+    assert selected is None
+
+
+def test_clinc150_l1_visible_gate_reports_train_dev_wrong_accept_reason() -> None:
+    evaluations = {
+        "visible_validation": _l1_eval(
+            precision=1.0,
+            coverage=0.2,
+            wrong_accepts=0,
+        ),
+        "train_dev": _l1_eval(
+            precision=0.995,
+            coverage=0.2,
+            wrong_accepts=1,
+        ),
+        "visible_oos_heavy": _l1_eval(
+            precision=None,
+            coverage=0.0,
+            wrong_accepts=0,
+        ),
+        "visible_intent_conflict": _l1_eval(
+            precision=1.0,
+            coverage=0.2,
+            wrong_accepts=0,
+        ),
+    }
+
+    gate = clinc150_phase1._clinc150_l1_selection_gate(
+        evaluations,
+        min_precision=0.99,
+        max_oos_false_accept_rate=0.02,
+        min_accuracy_delta_vs_all_l4=-0.005,
+        min_coverage=0.10,
+        max_train_dev_wrong_accepts=0,
+    )
+
+    assert gate["passes"] is False
+    assert gate["train_dev_wrong_accepts"] == 1
+    assert gate["reason_codes"] == ["train_dev_wrong_accepts_exceeded"]
+
+
 def test_clinc150_teacher_eval_writes_manifest_details_and_cost_ledger(
     tmp_path,
     monkeypatch,
@@ -900,6 +958,29 @@ def _record(
         split=split,
         gold_frame=Frame(intent=intent, slots={}, is_abstain=abstain),
     )
+
+
+def _l1_eval(
+    *,
+    precision: float | None,
+    coverage: float,
+    wrong_accepts: int,
+    oos_rate: float = 0.0,
+    accuracy_delta: float = 0.0,
+) -> dict:
+    return {
+        "summary": {
+            "l1_only": {
+                "accepted_precision": precision,
+                "accepted_coverage": coverage,
+                "wrong_accepts": wrong_accepts,
+                "lower_layer_oos_false_accept_rate": oos_rate,
+            },
+            "l1_l4_cascade": {
+                "accuracy_delta_vs_all_l4": accuracy_delta,
+            },
+        }
+    }
 
 
 def _teacher_row(

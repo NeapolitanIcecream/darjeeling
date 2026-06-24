@@ -244,7 +244,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
             "selection/promotion holdouts remain outside the agent workspace"
         ),
         "adoption_authority": (
-            "visible validation/support/train-audit gates, "
+            "visible validation/support/train-audit/cross-audit gates, "
             "private selection/promotion gates, and final outer replay"
         ),
     }
@@ -1602,6 +1602,135 @@ def test_l2_target_local_search_current_cross_audit_uses_original_config(
     assert cross_audit_thresholds[0] == 0.42
 
 
+def test_l2_target_local_search_writes_scratch_config_by_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    target_dir = workspace / "target"
+    target_dir.mkdir(parents=True)
+    original_config = l2_target_evolution.L2StudentConfig(
+        accept_threshold=0.42,
+    ).model_dump(mode="json")
+    (target_dir / "config.json").write_text(
+        json.dumps(original_config),
+        encoding="utf-8",
+    )
+    searched_config = l2_target_evolution.L2StudentConfig(accept_threshold=0.98)
+
+    def fake_sample_local_search_config(*_args, **_kwargs) -> object:
+        return searched_config
+
+    def fake_evaluate_target_workspace(**kwargs) -> dict:
+        config_path = workspace / "target" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        searched = float(config["accept_threshold"]) == 0.98
+        return {
+            "split": kwargs["split"],
+            "train_size": 10,
+            "validation_size": 10,
+            "accepted": 4 if searched else 2,
+            "correct_accepts": 4 if searched else 2,
+            "wrong_accepts": 0,
+            "vetoed_accepts": 0,
+            "coverage": 0.4 if searched else 0.2,
+            "accepted_accuracy": 1.0 if searched else 0.95,
+            "wrong_accept_rate": 0.0,
+            "passes_gate": True,
+            "config": config,
+            "wrong_examples": [],
+            "veto_examples": [],
+            "near_miss_examples": [],
+        }
+
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "_sample_local_search_config",
+        fake_sample_local_search_config,
+    )
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "evaluate_target_workspace",
+        fake_evaluate_target_workspace,
+    )
+
+    report = l2_target_evolution.run_local_target_search(
+        workspace_root=workspace,
+        trials=1,
+    )
+    active_config = json.loads((target_dir / "config.json").read_text(encoding="utf-8"))
+    scratch_config = json.loads(Path(report["best_config_path"]).read_text(encoding="utf-8"))
+
+    assert report["applied"] is False
+    assert report["active_config_updated"] is False
+    assert report["apply_best_requested"] is False
+    assert active_config["accept_threshold"] == 0.42
+    assert scratch_config["accept_threshold"] == 0.98
+    assert "pass --apply-best" in report["applied_reason"]
+
+
+def test_l2_target_local_search_apply_best_updates_active_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    target_dir = workspace / "target"
+    target_dir.mkdir(parents=True)
+    original_config = l2_target_evolution.L2StudentConfig(
+        accept_threshold=0.42,
+    ).model_dump(mode="json")
+    (target_dir / "config.json").write_text(
+        json.dumps(original_config),
+        encoding="utf-8",
+    )
+    searched_config = l2_target_evolution.L2StudentConfig(accept_threshold=0.98)
+
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "_sample_local_search_config",
+        lambda *_args, **_kwargs: searched_config,
+    )
+
+    def fake_evaluate_target_workspace(**kwargs) -> dict:
+        config = json.loads((target_dir / "config.json").read_text(encoding="utf-8"))
+        searched = float(config["accept_threshold"]) == 0.98
+        return {
+            "split": kwargs["split"],
+            "train_size": 10,
+            "validation_size": 10,
+            "accepted": 4 if searched else 2,
+            "correct_accepts": 4 if searched else 2,
+            "wrong_accepts": 0,
+            "vetoed_accepts": 0,
+            "coverage": 0.4 if searched else 0.2,
+            "accepted_accuracy": 1.0 if searched else 0.95,
+            "wrong_accept_rate": 0.0,
+            "passes_gate": True,
+            "config": config,
+            "wrong_examples": [],
+            "veto_examples": [],
+            "near_miss_examples": [],
+        }
+
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "evaluate_target_workspace",
+        fake_evaluate_target_workspace,
+    )
+
+    report = l2_target_evolution.run_local_target_search(
+        workspace_root=workspace,
+        trials=1,
+        apply_best=True,
+    )
+    active_config = json.loads((target_dir / "config.json").read_text(encoding="utf-8"))
+
+    assert report["applied"] is True
+    assert report["active_config_updated"] is True
+    assert report["apply_best_requested"] is True
+    assert active_config["accept_threshold"] == 0.98
+
+
 def test_l2_target_codex_cli_runs_one_command_per_round(tmp_path: Path) -> None:
     fake_codex = tmp_path / "fake_codex.py"
     fake_codex.write_text(
@@ -2050,6 +2179,63 @@ def test_l2_target_selection_requires_train_audit_safety_gate() -> None:
     assert evidence["inner_passing_train_audit_wrong_accept_rounds"] == 1
 
 
+def test_l2_target_selection_requires_visible_cross_audit_safety_gate() -> None:
+    round_result = {
+        "round": 1,
+        "inner_validation": {
+            "passes_gate": True,
+            "accepted": 2,
+            "correct_accepts": 2,
+            "validation_size": 10,
+        },
+        "train_audit": {"wrong_accepts": 0},
+        "visible_cross_audit": {
+            "passes_gate": True,
+            "wrong_accepts": 1,
+            "accepted": 20,
+            "correct_accepts": 19,
+            "coverage": 0.2,
+            "accepted_accuracy": 0.95,
+            "wrong_accept_rate": 0.05,
+        },
+        "selection_holdout": {
+            "passes_gate": True,
+            "coverage": 0.1,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+        },
+        "promotion_holdout": {
+            "passes_gate": True,
+            "coverage": 0.1,
+            "accepted_accuracy": 1.0,
+            "wrong_accept_rate": 0.0,
+        },
+    }
+
+    assert _selection_decision([round_result])["selected"] is False
+    assert _adoption_decision([round_result])["adopted"] is False
+    gate = l2_target_evolution._visible_cross_audit_safety_gate_payload(  # noqa: SLF001
+        round_result,
+    )
+    assert gate == {
+        "schema_version": "l2-target-visible-cross-audit-safety-gate-v1",
+        "enabled": True,
+        "max_wrong_accepts": 0,
+        "wrong_accepts": 1,
+        "metric_passes_gate": True,
+        "passes_gate": False,
+        "reason_codes": ["visible_cross_audit_wrong_accepts_exceeded"],
+    }
+    evidence = l2_target_evolution._private_holdout_evidence(  # noqa: SLF001
+        [round_result],
+    )
+    assert evidence["selection_gate_diagnosis"] == (
+        "visible_cross_audit_safety_gate_failed"
+    )
+    assert evidence["inner_passing_visible_cross_audit_wrong_accept_rounds"] == 1
+    assert evidence["visible_cross_audit_passing_rounds"] == 0
+
+
 def test_l2_target_selection_requires_visible_support_gate() -> None:
     round_result = {
         "round": 1,
@@ -2196,6 +2382,26 @@ def test_l2_target_private_holdout_evidence_reports_sparse_selection() -> None:
     )
     assert evidence["adoption_gate_diagnosis"] == "selection_gate_not_passed"
     assert "larger/stratified target split" in evidence["recommendation"]
+
+
+def test_l2_target_run_command_timeout_result_is_json_serializable(
+    tmp_path: Path,
+) -> None:
+    result = l2_target_evolution._run_command(  # noqa: SLF001
+        [
+            sys.executable,
+            "-c",
+            "import sys, time; sys.stdout.write('partial output'); "
+            "sys.stdout.flush(); time.sleep(30)",
+        ],
+        cwd=tmp_path,
+        timeout_s=0.1,
+    )
+
+    assert result["return_code"] == 124
+    assert isinstance(result["stdout"], str)
+    assert isinstance(result["stderr"], str)
+    json.dumps(result)
 
 
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
