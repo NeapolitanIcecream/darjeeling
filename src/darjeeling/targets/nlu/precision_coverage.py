@@ -9,7 +9,8 @@ from typing import Any
 from darjeeling.eval.plots import (
     annotate_pareto_frontier,
     plot_evolution_curve,
-    plot_operating_frontier,
+    plot_operating_curve_facets,
+    plot_single_operating_curve,
     write_normalized_jsonl,
 )
 
@@ -19,16 +20,16 @@ CLINC150_CALIBRATION_REPAIR_EXPERIMENT_ID = "clinc150-calibration-repair"
 CLINC150_L2_AUTORESEARCH_EXPERIMENT_ID = "clinc150-l2-autoresearch"
 
 CLINC150_STANDARD_L2_THRESHOLDS = (
-    0.50,
-    0.60,
-    0.70,
-    0.80,
-    0.90,
-    0.95,
-    0.98,
-    0.985,
-    0.99,
     0.995,
+    0.99,
+    0.985,
+    0.98,
+    0.95,
+    0.90,
+    0.80,
+    0.70,
+    0.60,
+    0.50,
 )
 
 
@@ -70,7 +71,10 @@ def backfill_clinc150_precision_coverage(
         round_rows.extend(clinc150_l2_autoresearch_round_rows(autoresearch_summary_path))
         operating_rows.extend(clinc150_l2_autoresearch_discrete_points(autoresearch_summary_path))
 
-    annotated_operating_rows = annotate_pareto_frontier(operating_rows)
+    annotated_operating_rows = annotate_pareto_frontier(
+        operating_rows,
+        group_keys=("experiment_id", "layer", "candidate_id", "split", "curve_id"),
+    )
     pareto_rows = [row for row in annotated_operating_rows if row.get("pareto")]
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -184,15 +188,22 @@ def clinc150_l1_operating_point_rows(summary_path: Path) -> list[dict[str, Any]]
     )
     support_rows = _read_jsonl(support_path)
     support = _l1_rule_support(support_rows)
-    policies = _l1_overlay_policies()
+    policies = _l1_risk_tolerance_policies()
 
     rows: list[dict[str, Any]] = []
-    evaluations = dict(selected_payload.get("evaluations") or {})
+    evaluations = {
+        split: evaluation
+        for split, evaluation in (selected_payload.get("evaluations") or {}).items()
+        if split in {"train_dev", "visible_validation"}
+    }
     locked_test = summary.get("locked_test")
     if isinstance(locked_test, dict):
         evaluations["locked_test"] = locked_test
 
-    for split, evaluation in sorted(evaluations.items()):
+    for split in ("train_dev", "visible_validation", "locked_test"):
+        evaluation = evaluations.get(split)
+        if evaluation is None:
+            continue
         details_path = _resolve_source_artifact(
             evaluation.get("details_jsonl_path"),
             source_repo_dir=source_repo_dir,
@@ -215,9 +226,34 @@ def clinc150_l1_operating_point_rows(summary_path: Path) -> list[dict[str, Any]]
                     round_number=selected_round,
                     split=split,
                     view=_view_for_split(split),
-                    policy_family=str(policy["family"]),
-                    policy_label=str(policy["label"]),
-                    policy_value=policy.get("value"),
+                    policy_family="l1_risk_tolerance",
+                    policy_label=str(policy["knob_label"]),
+                    policy_value=policy["knob_value"],
+                    curve_id=_curve_id(
+                        CLINC150_L1_AGENT_SESSION_EXPERIMENT_ID,
+                        "L1",
+                        candidate_id,
+                        split,
+                        "risk-tolerance",
+                    ),
+                    curve_role=(
+                        "diagnostic_operating_curve"
+                        if split == "locked_test"
+                        else "standard_operating_curve"
+                    ),
+                    knob_name="risk_tolerance",
+                    knob_value=policy["knob_value"],
+                    knob_label=str(policy["knob_label"]),
+                    knob_order=int(policy["knob_order"]),
+                    knob_direction="strict_to_loose",
+                    primary_curve=split != "locked_test",
+                    point_role=str(policy.get("point_role") or ""),
+                    annotation_label=str(policy.get("annotation_label") or ""),
+                    curve_title=_curve_title(
+                        layer="L1",
+                        split=split,
+                        knob_name="risk_tolerance",
+                    ),
                     metrics=metrics,
                     source_artifact=details_path,
                     selection_scope=(
@@ -231,6 +267,7 @@ def clinc150_l1_operating_point_rows(summary_path: Path) -> list[dict[str, Any]]
                         ),
                         "support_split": "train_dev",
                         "support_artifact": str(support_path),
+                        "risk_tolerance_rule": policy["rule_description"],
                     },
                 )
             )
@@ -319,9 +356,15 @@ def clinc150_l2_operating_point_rows(l2_cascade_root: Path) -> list[dict[str, An
         prediction_path = l2_cascade_root / relative_dir / "clinc150_l2_predictions.jsonl"
         if not prediction_path.exists():
             continue
+        summary_path = l2_cascade_root / relative_dir / "clinc150_l2_eval_summary.json"
+        selected_threshold = _selected_l2_threshold_value(summary_path)
         prediction_rows = _read_jsonl(prediction_path)
-        for threshold in CLINC150_STANDARD_L2_THRESHOLDS:
+        for knob_order, threshold in enumerate(CLINC150_STANDARD_L2_THRESHOLDS):
             metrics = _l2_threshold_metrics(prediction_rows, threshold=threshold)
+            point_role, annotation_label = _l2_threshold_point_annotation(
+                threshold,
+                selected_threshold=selected_threshold,
+            )
             rows.append(
                 _operating_row(
                     experiment_id=CLINC150_L2_CASCADE_EXPERIMENT_ID,
@@ -330,9 +373,38 @@ def clinc150_l2_operating_point_rows(l2_cascade_root: Path) -> list[dict[str, An
                     round_number=round_number,
                     split=split,
                     view=_view_for_split(split),
-                    policy_family="l2_guard_threshold",
-                    policy_label=f"guard_probability >= {threshold:g}",
+                    policy_family="guard_threshold",
+                    policy_label=f"guard >= {threshold:g}",
                     policy_value=threshold,
+                    curve_id=_curve_id(
+                        CLINC150_L2_CASCADE_EXPERIMENT_ID,
+                        "L2",
+                        candidate_id,
+                        split,
+                        "guard-threshold",
+                    ),
+                    curve_role=(
+                        "diagnostic_operating_curve"
+                        if split == "locked_test"
+                        else (
+                            "standard_operating_curve"
+                            if split == "validation"
+                            else "context_operating_curve"
+                        )
+                    ),
+                    knob_name="guard_threshold",
+                    knob_value=threshold,
+                    knob_label=f"guard >= {threshold:g}",
+                    knob_order=knob_order,
+                    knob_direction="strict_to_loose",
+                    primary_curve=split == "validation",
+                    point_role=point_role,
+                    annotation_label=annotation_label,
+                    curve_title=_curve_title(
+                        layer="L2",
+                        split=split,
+                        knob_name="guard_threshold",
+                    ),
                     metrics=metrics,
                     source_artifact=prediction_path,
                     selection_scope=(
@@ -340,7 +412,10 @@ def clinc150_l2_operating_point_rows(l2_cascade_root: Path) -> list[dict[str, An
                         if split == "locked_test"
                         else "agent_visible"
                     ),
-                    metadata={"artifact_support": "per_request_threshold_sweep"},
+                    metadata={
+                        "artifact_support": "per_request_threshold_sweep",
+                        "selected_summary_threshold": selected_threshold,
+                    },
                 )
             )
     return rows
@@ -467,6 +542,7 @@ def _write_standard_figures(
     operating_rows: list[dict[str, Any]],
     pareto_rows: list[dict[str, Any]],
 ) -> list[Path]:
+    del pareto_rows
     figures_dir = output_dir / "figures"
     figure_paths: list[Path] = []
 
@@ -483,20 +559,93 @@ def _write_standard_figures(
         )
     )
 
-    l1_operating_rows = [
-        row
-        for row in operating_rows
-        if row["layer"] == "L1"
-        and row["candidate_id"] == "round-001"
-        and row["split"] in {"train_dev", "visible_validation", "locked_test"}
-    ]
-    l1_frontier_rows = _matching_frontier_rows(pareto_rows, l1_operating_rows)
+    l1_train_dev_curve = _standard_curve_rows(
+        operating_rows,
+        layer="L1",
+        candidate_id="round-001",
+        split="train_dev",
+        knob_name="risk_tolerance",
+    )
     figure_paths.append(
-        plot_operating_frontier(
-            l1_operating_rows,
-            l1_frontier_rows,
-            figures_dir / "clinc150_l1_operating_frontier.png",
-            title="CLINC150 L1 Target-Adapter Overlay Frontier",
+        plot_single_operating_curve(
+            l1_train_dev_curve,
+            figures_dir / "clinc150_l1_train_dev_operating_curve.png",
+            title="CLINC150 L1 Train-Dev Operating Curve",
+            subtitle="target-adapter risk_tolerance overlay",
+        )
+    )
+
+    l1_validation_curve = _standard_curve_rows(
+        operating_rows,
+        layer="L1",
+        candidate_id="round-001",
+        split="visible_validation",
+        knob_name="risk_tolerance",
+    )
+    figure_paths.append(
+        plot_single_operating_curve(
+            l1_validation_curve,
+            figures_dir / "clinc150_l1_validation_operating_curve.png",
+            title="CLINC150 L1 Visible-Validation Operating Curve",
+            subtitle="target-adapter risk_tolerance overlay",
+        )
+    )
+
+    l1_locked_curve = _standard_curve_rows(
+        operating_rows,
+        layer="L1",
+        candidate_id="round-001",
+        split="locked_test",
+        knob_name="risk_tolerance",
+    )
+    figure_paths.append(
+        plot_single_operating_curve(
+            l1_locked_curve,
+            figures_dir / "clinc150_l1_locked_test_diagnostic_curve.png",
+            title="CLINC150 L1 Locked-Test Diagnostic Curve",
+            subtitle="same visible risk_tolerance overlay, diagnostic only",
+        )
+    )
+
+    l2_validation_curve = _standard_curve_rows(
+        operating_rows,
+        layer="L2",
+        candidate_id="teacher-full",
+        split="validation",
+        knob_name="guard_threshold",
+    )
+    figure_paths.append(
+        plot_single_operating_curve(
+            l2_validation_curve,
+            figures_dir / "clinc150_l2_validation_threshold_curve.png",
+            title="CLINC150 L2 Validation Threshold Curve",
+            subtitle="guard_threshold sweep",
+        )
+    )
+
+    l2_locked_curve = _standard_curve_rows(
+        operating_rows,
+        layer="L2",
+        candidate_id="teacher-full",
+        split="locked_test",
+        knob_name="guard_threshold",
+    )
+    figure_paths.append(
+        plot_single_operating_curve(
+            l2_locked_curve,
+            figures_dir / "clinc150_l2_locked_test_diagnostic_curve.png",
+            title="CLINC150 L2 Locked-Test Diagnostic Curve",
+            subtitle="same guard_threshold sweep, diagnostic only",
+        )
+    )
+
+    visible_comparison_rows = [*l1_validation_curve, *l2_validation_curve]
+    figure_paths.append(
+        plot_operating_curve_facets(
+            visible_comparison_rows,
+            figures_dir / "clinc150_l1_l2_visible_curve_comparison.png",
+            title="CLINC150 Visible Operating Curve Comparison",
+            columns=2,
         )
     )
 
@@ -507,86 +656,32 @@ def _write_standard_figures(
         and row["experiment_id"] == CLINC150_L2_CASCADE_EXPERIMENT_ID
         and row["split"] == "validation"
     ]
-    figure_paths.append(
-        plot_evolution_curve(
-            l2_round_rows,
-            figures_dir / "clinc150_l2_evolution.png",
-            title="CLINC150 L2 Candidate Evolution",
+    if l2_round_rows:
+        figure_paths.append(
+            plot_evolution_curve(
+                l2_round_rows,
+                figures_dir / "debug_clinc150_l2_evolution.png",
+                title="CLINC150 L2 Candidate Evolution",
+            )
         )
-    )
-
-    l2_operating_rows = [
-        row
-        for row in operating_rows
-        if row["layer"] == "L2"
-        and row["candidate_id"] == "teacher-full"
-        and row["split"] in {"validation", "validation_zipf_heavy", "locked_test"}
-    ]
-    l2_frontier_rows = _matching_frontier_rows(pareto_rows, l2_operating_rows)
-    figure_paths.append(
-        plot_operating_frontier(
-            l2_operating_rows,
-            l2_frontier_rows,
-            figures_dir / "clinc150_l2_operating_frontier.png",
-            title="CLINC150 L2 Threshold Operating Frontier",
-        )
-    )
-
-    comparison_rows = [
-        row
-        for row in operating_rows
-        if (
-            row["layer"] == "L1"
-            and row["candidate_id"] == "round-001"
-            and row["split"] in {"visible_validation", "locked_test"}
-        )
-        or (
-            row["layer"] == "L2"
-            and row["candidate_id"] == "teacher-full"
-            and row["split"] in {"validation", "locked_test"}
-        )
-    ]
-    comparison_frontier = _matching_frontier_rows(pareto_rows, comparison_rows)
-    figure_paths.append(
-        plot_operating_frontier(
-            comparison_rows,
-            comparison_frontier,
-            figures_dir / "clinc150_l1_l2_frontier_comparison.png",
-            title="CLINC150 L1/L2 Operating Frontier Comparison",
-            hue_key="layer",
-            style_key="selection_scope",
-        )
-    )
     return figure_paths
 
 
-def _matching_frontier_rows(
-    pareto_rows: list[dict[str, Any]],
+def _standard_curve_rows(
     operating_rows: list[dict[str, Any]],
+    *,
+    layer: str,
+    candidate_id: str,
+    split: str,
+    knob_name: str,
 ) -> list[dict[str, Any]]:
-    keys = {
-        (
-            row["experiment_id"],
-            row["layer"],
-            row["candidate_id"],
-            row["split"],
-            row["policy_family"],
-            row["policy_label"],
-        )
-        for row in operating_rows
-    }
     return [
         row
-        for row in pareto_rows
-        if (
-            row["experiment_id"],
-            row["layer"],
-            row["candidate_id"],
-            row["split"],
-            row["policy_family"],
-            row["policy_label"],
-        )
-        in keys
+        for row in operating_rows
+        if row["layer"] == layer
+        and row["candidate_id"] == candidate_id
+        and row["split"] == split
+        and row.get("knob_name") == knob_name
     ]
 
 
@@ -636,6 +731,17 @@ def _operating_row(
     policy_family: str,
     policy_label: str,
     policy_value: Any,
+    curve_id: str,
+    curve_role: str,
+    knob_name: str,
+    knob_value: Any,
+    knob_label: str,
+    knob_order: int,
+    knob_direction: str,
+    primary_curve: bool,
+    point_role: str,
+    annotation_label: str,
+    curve_title: str,
     metrics: dict[str, Any],
     source_artifact: Path,
     selection_scope: str,
@@ -658,6 +764,17 @@ def _operating_row(
             "policy_family": policy_family,
             "policy_label": policy_label,
             "policy_value": policy_value,
+            "curve_id": curve_id,
+            "curve_role": curve_role,
+            "knob_name": knob_name,
+            "knob_value": knob_value,
+            "knob_label": knob_label,
+            "knob_order": knob_order,
+            "knob_direction": knob_direction,
+            "primary_curve": primary_curve,
+            "point_role": point_role,
+            "annotation_label": annotation_label,
+            "curve_title": curve_title,
         }
     )
     return row
@@ -677,6 +794,7 @@ def _summary_operating_row(
     guard_rule = metrics.get("guard_rule") or {}
     policy_family = str(guard_rule.get("family") or metrics.get("guard_name") or "summary_guard")
     policy_label = str(metrics.get("guard_name") or _l2_policy_label(metrics))
+    policy_value = metrics.get("threshold")
     return _operating_row(
         experiment_id=experiment_id,
         layer="L2",
@@ -686,7 +804,24 @@ def _summary_operating_row(
         view=_view_for_split(split),
         policy_family=policy_family,
         policy_label=policy_label,
-        policy_value=metrics.get("threshold"),
+        policy_value=policy_value,
+        curve_id=_curve_id(
+            experiment_id,
+            "L2",
+            candidate_id,
+            split,
+            f"{_slug(policy_family)}-discrete",
+        ),
+        curve_role="discrete_context",
+        knob_name=policy_family,
+        knob_value=policy_value,
+        knob_label=policy_label,
+        knob_order=0,
+        knob_direction="none",
+        primary_curve=False,
+        point_role="context",
+        annotation_label=policy_label,
+        curve_title=_curve_title(layer="L2", split=split, knob_name=policy_family),
         metrics=metrics,
         source_artifact=summary_path,
         selection_scope=selection_scope,
@@ -694,70 +829,72 @@ def _summary_operating_row(
     )
 
 
-def _l1_overlay_policies() -> list[dict[str, Any]]:
-    policies: list[dict[str, Any]] = [
+def _l1_risk_tolerance_policies() -> list[dict[str, Any]]:
+    return [
         {
-            "family": "l1_overlay_raw",
-            "label": "raw accepts",
-            "value": None,
-            "min_positive": None,
-            "require_no_negative": False,
-            "require_no_oos_false": False,
-        }
-    ]
-    for min_positive in (2, 5, 10, 25, 50):
-        policies.append(
-            {
-                "family": "l1_overlay_rule_support",
-                "label": f"positive>={min_positive}",
-                "value": min_positive,
-                "min_positive": min_positive,
-                "require_no_negative": False,
-                "require_no_oos_false": False,
-            }
-        )
-    policies.append(
-        {
-            "family": "l1_overlay_rule_risk",
-            "label": "negative=0",
-            "value": 0,
-            "min_positive": None,
+            "knob_value": 0,
+            "knob_order": 0,
+            "knob_label": "strict: clean support >= 20",
+            "annotation_label": "strict\nsupport >= 20",
+            "point_role": "strict_endpoint",
+            "min_positive": 20,
             "require_no_negative": True,
-            "require_no_oos_false": False,
-        }
-    )
-    policies.append(
+            "require_no_oos_false": True,
+            "rule_description": (
+                "wrong_support=0, oos_false_support=0, positive_support>=20"
+            ),
+        },
         {
-            "family": "l1_overlay_rule_risk",
-            "label": "OOS false=0",
-            "value": 0,
+            "knob_value": 1,
+            "knob_order": 1,
+            "knob_label": "safe: clean support >= 10",
+            "annotation_label": "",
+            "point_role": "",
+            "min_positive": 10,
+            "require_no_negative": True,
+            "require_no_oos_false": True,
+            "rule_description": (
+                "wrong_support=0, oos_false_support=0, positive_support>=10"
+            ),
+        },
+        {
+            "knob_value": 2,
+            "knob_order": 2,
+            "knob_label": "medium: clean support >= 5",
+            "annotation_label": "medium\nsupport >= 5",
+            "point_role": "nominal",
+            "min_positive": 5,
+            "require_no_negative": True,
+            "require_no_oos_false": True,
+            "rule_description": (
+                "wrong_support=0, oos_false_support=0, positive_support>=5"
+            ),
+        },
+        {
+            "knob_value": 3,
+            "knob_order": 3,
+            "knob_label": "loose: clean support >= 2",
+            "annotation_label": "",
+            "point_role": "",
+            "min_positive": 2,
+            "require_no_negative": True,
+            "require_no_oos_false": True,
+            "rule_description": (
+                "wrong_support=0, oos_false_support=0, positive_support>=2"
+            ),
+        },
+        {
+            "knob_value": 4,
+            "knob_order": 4,
+            "knob_label": "raw: all recorded accepts",
+            "annotation_label": "raw\nall accepts",
+            "point_role": "loose_endpoint",
             "min_positive": None,
             "require_no_negative": False,
-            "require_no_oos_false": True,
-        }
-    )
-    for min_positive in (2, 5, 10, 25, 50):
-        policies.append(
-            {
-                "family": "l1_overlay_support_and_risk",
-                "label": f"positive>={min_positive}, negative=0",
-                "value": min_positive,
-                "min_positive": min_positive,
-                "require_no_negative": True,
-                "require_no_oos_false": False,
-            }
-        )
-        policies.append(
-            {
-                "family": "l1_overlay_support_and_risk",
-                "label": f"positive>={min_positive}, negative=0, OOS false=0",
-                "value": min_positive,
-                "min_positive": min_positive,
-                "require_no_negative": True,
-                "require_no_oos_false": True,
-            }
-        )
-    return policies
+            "require_no_oos_false": False,
+            "rule_description": "keep all recorded L1 accepts",
+        },
+    ]
 
 
 def _l1_rule_support(rows: list[dict[str, Any]]) -> dict[str, Counter[str]]:
@@ -883,11 +1020,69 @@ def _selected_l2_summary_threshold(summary: dict[str, Any]) -> dict[str, Any] | 
     return max(threshold_rows, key=lambda row: float(row.get("threshold") or 0.0))
 
 
+def _selected_l2_threshold_value(summary_path: Path) -> float | None:
+    if not summary_path.exists():
+        return None
+    metrics = _selected_l2_summary_threshold(_load_json(summary_path))
+    if metrics is None or metrics.get("threshold") is None:
+        return None
+    return float(metrics["threshold"])
+
+
+def _l2_threshold_point_annotation(
+    threshold: float,
+    *,
+    selected_threshold: float | None,
+) -> tuple[str, str]:
+    selected = (
+        selected_threshold is not None and abs(float(threshold) - float(selected_threshold)) < 1e-9
+    )
+    if threshold == CLINC150_STANDARD_L2_THRESHOLDS[0]:
+        label = "strict selected" if selected else "strict"
+        return "strict_endpoint", f"{label}\n{threshold:g}"
+    if threshold == CLINC150_STANDARD_L2_THRESHOLDS[-1]:
+        label = "loose selected" if selected else "loose"
+        return "loose_endpoint", f"{label}\n{threshold:g}"
+    if selected:
+        return "nominal", f"selected\n{threshold:g}"
+    return "", ""
+
+
 def _l2_policy_label(metrics: dict[str, Any]) -> str:
     threshold = metrics.get("threshold")
     if threshold is None:
         return "summary guard"
     return f"guard_probability >= {float(threshold):g}"
+
+
+def _curve_id(
+    experiment_id: str,
+    layer: str,
+    candidate_id: str,
+    split: str,
+    knob_slug: str,
+) -> str:
+    return "-".join(
+        _slug(part)
+        for part in (experiment_id, layer, candidate_id, split, knob_slug)
+        if part
+    )
+
+
+def _curve_title(*, layer: str, split: str, knob_name: str) -> str:
+    return f"{layer} {_title_label(split)} {_title_label(knob_name)}"
+
+
+def _title_label(value: str) -> str:
+    return str(value).replace("_", " ").replace("-", " ").title()
+
+
+def _slug(value: Any) -> str:
+    text = str(value).strip().lower().replace("_", "-").replace(" ", "-")
+    slug = "".join(char if char.isalnum() or char == "-" else "-" for char in text)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-") or "value"
 
 
 def _round_payload(summary: dict[str, Any], round_number: int) -> dict[str, Any] | None:

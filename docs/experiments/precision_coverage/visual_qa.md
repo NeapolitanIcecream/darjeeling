@@ -5,39 +5,41 @@ Date: 2026-06-24
 Figures inspected:
 
 - `figures/clinc150_l1_evolution.png`
-- `figures/clinc150_l1_operating_frontier.png`
-- `figures/clinc150_l2_evolution.png`
-- `figures/clinc150_l2_operating_frontier.png`
-- `figures/clinc150_l1_l2_frontier_comparison.png`
+- `figures/clinc150_l1_train_dev_operating_curve.png`
+- `figures/clinc150_l1_validation_operating_curve.png`
+- `figures/clinc150_l1_locked_test_diagnostic_curve.png`
+- `figures/clinc150_l2_validation_threshold_curve.png`
+- `figures/clinc150_l2_locked_test_diagnostic_curve.png`
+- `figures/clinc150_l1_l2_visible_curve_comparison.png`
 
-## First Render Issues
+## First Repaired Render Issues
 
-- Legend labels exposed machine field names such as `policy_family`,
-  `selection_scope`, and underscore-separated split names.
-- Evolution plots placed the `99% precision gate` label directly over the
-  top precision curve.
-- L1 frontier expanded the y-axis to a 101% tick even though all rates are
-  capped at 100%.
-- Locked-test diagnostic points were distinct by marker, but the legend wording
-  needed to make the diagnostic status easier to scan.
+- L1 train-dev and visible-validation endpoint labels sat too close to the
+  title because several points are exactly at 100% accepted precision.
+- The first L2 operating-curve arrow ran diagonally across the whole plot and
+  looked like a second data series instead of a direction cue.
+- In the comparison figure, L1 labels overlapped the subplot title for the same
+  100% precision reason.
 
-## Final Style Decisions
+## Iterations
 
-- Use Seaborn with the colorblind palette, a white background, and a light grid.
-- Format all precision/coverage axes as percentages.
-- Keep legends outside the plot area so they do not cover points or frontier
-  lines.
-- Render evolution curves as line plus marker, with split shown by line style
-  rather than color.
-- Render operating points as scatter plots and overlay Pareto frontier points
-  with black rings and connecting lines per candidate/split.
-- Show locked-test diagnostic points with a different marker from agent-visible
-  selection data.
-- Keep the 99% accepted-precision reference line visible in every figure.
-- Do not smooth curves or interpolate beyond the observed policies.
+- Moved high-precision point labels below the points and right-edge labels to
+  the inside of the plot.
+- Replaced the long data-space direction arrow with a small
+  `order: strict -> loose` note inside each subplot.
+- Added slight y-axis headroom for 100% markers while keeping y-axis ticks
+  capped at 100%, so the plots avoid the earlier 101% tick problem.
+- Regenerated all JSONL and PNG outputs after the plotting adjustment.
 
 ## Final Check
 
-The second visual pass fixed the label and axis issues. Text is readable at
-report size, legends do not cover data, locked-test diagnostics are visually
-distinct, and the Pareto frontier markers remain visible in grayscale.
+- Each standard operating-curve subplot contains exactly one connected
+  `curve_id`.
+- L1 train-dev, L1 visible validation, and L1 locked-test diagnostic curves are
+  separate figures.
+- L2 validation and L2 locked-test diagnostic curves are separate figures.
+- The comparison figure uses separate facets for L1 `risk_tolerance` and L2
+  `guard_threshold`; it does not connect L1 and L2 points.
+- Axes are percentages, the 99% precision gate remains visible, endpoint labels
+  are readable, and no smoothing or interpolation is used.
+- No mixed scatter/Pareto frontier figure is retained as a standard output.

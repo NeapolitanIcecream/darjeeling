@@ -147,7 +147,9 @@ Current decision: implemented as the standard static reporting pattern.
 
 L1/L2 reports now have normalized JSONL outputs under
 [`precision_coverage/`](precision_coverage/) and static Seaborn figures for:
-round/generation evolution curves, candidate-local operating frontiers, Pareto
-frontier rows, and an L1/L2 frontier comparison. L1 operating frontiers are
-target-adapter overlays over recorded L1 outputs, not requirements pushed into
-the generated L1 artifact.
+round/generation evolution curves, single-knob operating curves, Pareto context
+rows, and an L1/L2 visible-curve comparison. Standard operating curves connect
+only rows with the same `curve_id`: L1 uses target-adapter `risk_tolerance`
+overlays over recorded L1 outputs, and L2 uses `guard_threshold` sweeps. Locked
+test diagnostics are rendered separately from agent-visible curves; no plotting
+or frontier mechanism is pushed into the generated L1 artifact.

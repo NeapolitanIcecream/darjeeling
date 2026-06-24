@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,13 @@ NORMALIZED_POINT_REQUIRED_FIELDS = (
     "accepted_precision",
     "coverage",
     "source_artifact",
+)
+OPERATING_CURVE_REQUIRED_FIELDS = (
+    "curve_id",
+    "knob_name",
+    "knob_label",
+    "knob_order",
+    "knob_direction",
 )
 
 
@@ -187,7 +195,7 @@ def plot_evolution_curve(
     dataframe = dataframe.sort_values(["split", "metric", "step"])
     dataframe["split"] = dataframe["split"].map(_display_label)
 
-    sns.set_theme(style="whitegrid", context="talk", palette="colorblind")
+    sns.set_theme(style="whitegrid", context="notebook", palette="colorblind")
     fig, ax = plt.subplots(figsize=(10.5, 5.8))
     sns.lineplot(
         data=dataframe,
@@ -218,6 +226,150 @@ def plot_evolution_curve(
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(1.0, decimals=0))
     ax.set_ylim(_rate_axis_limits(dataframe["value"].tolist()))
     ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return output_path
+
+
+def validate_operating_curve_rows(
+    rows: Sequence[dict[str, Any]],
+    *,
+    require_single_curve: bool = True,
+) -> list[dict[str, Any]]:
+    """Validate normalized rows that may be connected as operating curves.
+
+    The helper is target-neutral: it only checks that rows carry a stable curve
+    identity, a single ordered knob inside each curve, and one selection scope.
+    Target packages decide what the knob means.
+    """
+
+    plottable_rows = [
+        normalize_precision_coverage_row(row)
+        for row in rows
+        if row.get("accepted_precision") is not None and row.get("coverage") is not None
+    ]
+    if not plottable_rows:
+        raise ValueError("no plottable operating curve rows")
+
+    missing_by_index: list[str] = []
+    for index, row in enumerate(plottable_rows):
+        missing = [field for field in OPERATING_CURVE_REQUIRED_FIELDS if field not in row]
+        if missing:
+            missing_by_index.append(f"row {index}: {', '.join(missing)}")
+    if missing_by_index:
+        raise ValueError(
+            "operating curve row missing required fields: " + "; ".join(missing_by_index)
+        )
+
+    curve_ids = {str(row["curve_id"]) for row in plottable_rows}
+    if require_single_curve and len(curve_ids) != 1:
+        raise ValueError("operating curve rows must share one curve_id")
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in plottable_rows:
+        groups.setdefault(str(row["curve_id"]), []).append(row)
+
+    for curve_id, group in groups.items():
+        knob_names = {str(row["knob_name"]) for row in group}
+        if len(knob_names) != 1:
+            raise ValueError(f"operating curve {curve_id} has mixed knob_name values")
+        directions = {str(row["knob_direction"]) for row in group}
+        if len(directions) != 1:
+            raise ValueError(f"operating curve {curve_id} has mixed knob_direction values")
+        scopes = {str(row.get("selection_scope", "agent_visible")) for row in group}
+        if len(scopes) != 1:
+            raise ValueError(f"operating curve {curve_id} has mixed selection_scope values")
+        orders = [int(row["knob_order"]) for row in group]
+        if len(orders) != len(set(orders)):
+            raise ValueError(f"operating curve {curve_id} has duplicate knob_order values")
+
+    return sorted(
+        plottable_rows,
+        key=lambda row: (str(row["curve_id"]), int(row["knob_order"])),
+    )
+
+
+def plot_single_operating_curve(
+    rows: Sequence[dict[str, Any]],
+    output_path: Path,
+    *,
+    title: str,
+    subtitle: str | None = None,
+) -> Path:
+    """Render one ordered operating curve for one curve_id."""
+
+    curve_rows = validate_operating_curve_rows(rows, require_single_curve=True)
+    sns, plt, mticker, pd = _plotting_modules()
+    dataframe = pd.DataFrame(curve_rows).sort_values("knob_order")
+
+    sns.set_theme(style="whitegrid", context="notebook", palette="colorblind")
+    fig, ax = plt.subplots(figsize=(9.4, 6.0))
+    _draw_operating_curve(ax, dataframe, plt=plt, annotate_points=True)
+    _format_operating_curve_axis(
+        ax,
+        mticker=mticker,
+        title=title,
+        subtitle=subtitle,
+        coverage_values=dataframe["coverage"].tolist(),
+        precision_values=dataframe["accepted_precision"].tolist(),
+    )
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return output_path
+
+
+def plot_operating_curve_facets(
+    rows: Sequence[dict[str, Any]],
+    output_path: Path,
+    *,
+    title: str,
+    columns: int = 2,
+) -> Path:
+    """Render multiple operating curves as explicit facets.
+
+    Each subplot is still one curve_id. The helper never connects points across
+    curve boundaries.
+    """
+
+    curve_rows = validate_operating_curve_rows(rows, require_single_curve=False)
+    sns, plt, mticker, pd = _plotting_modules()
+    dataframe = pd.DataFrame(curve_rows)
+    curve_ids = list(dict.fromkeys(dataframe["curve_id"].astype(str).tolist()))
+    if not curve_ids:
+        raise ValueError("no operating curves to facet")
+
+    columns = max(1, min(columns, len(curve_ids)))
+    rows_count = (len(curve_ids) + columns - 1) // columns
+    sns.set_theme(style="whitegrid", context="talk", palette="colorblind")
+    fig, axes = plt.subplots(
+        rows_count,
+        columns,
+        figsize=(8.2 * columns, 5.7 * rows_count),
+        squeeze=False,
+        sharex=False,
+        sharey=False,
+    )
+    for index, curve_id in enumerate(curve_ids):
+        ax = axes[index // columns][index % columns]
+        group = dataframe[dataframe["curve_id"].astype(str) == curve_id].sort_values(
+            "knob_order"
+        )
+        _draw_operating_curve(ax, group, plt=plt, annotate_points=True)
+        _format_operating_curve_axis(
+            ax,
+            mticker=mticker,
+            title=str(group.iloc[0].get("curve_title") or _display_label(curve_id)),
+            subtitle=None,
+            coverage_values=group["coverage"].tolist(),
+            precision_values=group["accepted_precision"].tolist(),
+        )
+    for index in range(len(curve_ids), rows_count * columns):
+        axes[index // columns][index % columns].axis("off")
+    fig.suptitle(title, y=1.02, fontsize=18)
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=180, bbox_inches="tight", facecolor="white")
@@ -275,8 +427,9 @@ def plot_operating_frontier(
         frontier = pd.DataFrame(frontier_points)
         frontier["split"] = frontier["split"].map(_display_label)
         frontier["candidate_id"] = frontier["candidate_id"].map(_display_label)
-        frontier = frontier.sort_values(["split", "candidate_id", "coverage"])
-        for (_split, _candidate), group in frontier.groupby(["split", "candidate_id"]):
+        group_columns = ["curve_id"] if "curve_id" in frontier else ["split", "candidate_id"]
+        frontier = frontier.sort_values([*group_columns, "coverage"])
+        for _, group in frontier.groupby(group_columns, sort=False):
             if len(group) == 1:
                 ax.scatter(
                     group["coverage"],
@@ -345,6 +498,144 @@ def _plotting_modules() -> tuple[Any, Any, Any, Any]:
     return sns, plt, mticker, pd
 
 
+def _draw_operating_curve(
+    ax: Any,
+    dataframe: Any,
+    *,
+    plt: Any,
+    annotate_points: bool,
+) -> None:
+    palette = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["#0072B2"])
+    color = palette[0]
+    ax.plot(
+        dataframe["coverage"],
+        dataframe["accepted_precision"],
+        color=color,
+        linewidth=2.2,
+        marker="o",
+        markersize=6.5,
+        zorder=3,
+    )
+    for _, row in dataframe.iterrows():
+        point_role = str(row.get("point_role") or "")
+        if point_role:
+            marker_size = 92 if "endpoint" in point_role else 80
+            ax.scatter(
+                [row["coverage"]],
+                [row["accepted_precision"]],
+                s=marker_size,
+                color=color,
+                edgecolors="black",
+                linewidths=0.8,
+                zorder=4,
+            )
+
+    if len(dataframe) >= 2:
+        direction = _display_label(
+            str(dataframe.iloc[0].get("knob_direction") or "knob direction")
+        ).replace(" to ", " -> ")
+        ax.text(
+            0.02,
+            0.04,
+            f"order: {direction}",
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=9,
+            color="0.25",
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.86, "pad": 1.8},
+            zorder=5,
+        )
+
+    if annotate_points:
+        for _, row in _annotation_rows(dataframe).iterrows():
+            y_value = float(row["accepted_precision"])
+            x_value = float(row["coverage"])
+            x_offset = -8 if x_value >= 0.82 else 8
+            y_offset = -12 if y_value >= 0.985 else 8
+            horizontal_alignment = "right" if x_offset < 0 else "left"
+            vertical_alignment = "top" if y_offset < 0 else "bottom"
+            ax.annotate(
+                _operating_point_label(row),
+                xy=(row["coverage"], row["accepted_precision"]),
+                xytext=(x_offset, y_offset),
+                textcoords="offset points",
+                fontsize=9,
+                ha=horizontal_alignment,
+                va=vertical_alignment,
+                bbox={
+                    "boxstyle": "round,pad=0.25",
+                    "facecolor": "white",
+                    "edgecolor": "0.82",
+                    "alpha": 0.9,
+                },
+                arrowprops={"arrowstyle": "-", "color": "0.65", "linewidth": 0.8},
+                zorder=5,
+            )
+
+
+def _format_operating_curve_axis(
+    ax: Any,
+    *,
+    mticker: Any,
+    title: str,
+    subtitle: str | None,
+    coverage_values: Sequence[float],
+    precision_values: Sequence[float],
+) -> None:
+    ax.axhline(0.99, color="0.35", linestyle=":", linewidth=1.3)
+    ax.text(
+        0.995,
+        0.99,
+        "99% precision gate",
+        color="0.25",
+        fontsize=9,
+        ha="right",
+        va="bottom",
+        transform=ax.get_yaxis_transform(),
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82, "pad": 1.5},
+    )
+    ax.set_title(title if subtitle is None else f"{title}\n{subtitle}", pad=14)
+    ax.set_xlabel("Accepted coverage")
+    ax.set_ylabel("Accepted precision")
+    ax.xaxis.set_major_formatter(mticker.PercentFormatter(1.0, decimals=0))
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(1.0, decimals=0))
+    ax.set_xlim(_rate_axis_limits(coverage_values, lower_floor=0.0))
+    y_limits = _rate_axis_limits([*precision_values, 0.99])
+    ax.set_ylim(y_limits)
+    if max([*precision_values, 0.99]) <= 1.0 and y_limits[1] > 1.0:
+        step = 0.01 if 1.0 - y_limits[0] <= 0.065 else 0.02
+        start = math.ceil(y_limits[0] / step) * step
+        ticks = []
+        current = start
+        while current <= 1.0 + 1e-9:
+            ticks.append(round(current, 4))
+            current += step
+        ax.set_yticks(ticks)
+
+
+def _annotation_rows(dataframe: Any) -> Any:
+    if "point_role" in dataframe:
+        annotated = dataframe[dataframe["point_role"].fillna("").astype(str) != ""]
+        if not annotated.empty:
+            return annotated
+    indexes = {dataframe.index[0], dataframe.index[-1]}
+    if len(dataframe) > 2:
+        indexes.add(dataframe.index[len(dataframe) // 2])
+    return dataframe.loc[list(indexes)].sort_values("knob_order")
+
+
+def _operating_point_label(row: Any) -> str:
+    label = row.get("annotation_label")
+    if label:
+        return str(label)
+    point_role = _display_label(row.get("point_role") or "")
+    knob_label = str(row.get("knob_label") or row.get("knob_value") or "")
+    if point_role:
+        return f"{point_role}\n{knob_label}"
+    return knob_label
+
+
 def _rate_axis_limits(
     values: Sequence[float],
     *,
@@ -359,7 +650,7 @@ def _rate_axis_limits(
     lower = max(0.0, low - pad)
     if lower_floor is not None:
         lower = min(lower, lower_floor)
-    upper = min(1.005 if high <= 1.0 else 1.02, high + pad)
+    upper = min(1.006 if high <= 1.0 else 1.02, high + pad)
     if upper - lower < 0.05:
         lower = max(0.0, upper - 0.05)
     return (lower, upper)
