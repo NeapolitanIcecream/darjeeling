@@ -31,6 +31,7 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     evaluate_clinc150_l2,
     load_teacher_rows,
     run_clinc150_calibration_repair,
+    run_clinc150_l2_autoresearch,
     run_clinc150_teacher_live_eval,
     sample_clinc150_records,
     train_clinc150_l2,
@@ -941,6 +942,84 @@ def clinc150_l1_eval(
     if artifact.details_jsonl_path is not None:
         console.print(f"wrote {artifact.details_jsonl_path}")
     console.print_json(data=artifact.summary)
+
+
+@clinc150_app.command("l2-autoresearch")
+def clinc150_l2_autoresearch(
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for CLINC150 L2 AutoResearch artifacts."),
+    ] = Path("runs/clinc150-l2-autoresearch-20260624"),
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed CLINC150 data directory."),
+    ] = Path("data/processed/clinc150_data_full"),
+    train_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing train live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "train-full-stratified/teacher_live_vs_gold.details.jsonl"
+    ),
+    validation_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing validation live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "validation-full/teacher_live_vs_gold.details.jsonl"
+    ),
+    test_teacher_details: Annotated[
+        Path,
+        typer.Option(help="Existing locked-test live L4 teacher details JSONL."),
+    ] = Path(
+        "runs/clinc150-l2-cascade-20260623/teacher-traces/"
+        "test-full/teacher_live_vs_gold.details.jsonl"
+    ),
+    mode: Annotated[
+        str,
+        typer.Option(help="Target-evolution mode: agent-session, local-search, or dry-run."),
+    ] = "agent-session",
+    rounds: Annotated[int, typer.Option(min=1)] = 16,
+    budget_profile: Annotated[
+        str,
+        typer.Option(help="Target-evolution budget profile."),
+    ] = "fixed-inner",
+    max_agent_rounds: Annotated[int | None, typer.Option(min=0)] = None,
+    timeout_s: Annotated[float | None, typer.Option(min=0.1)] = None,
+    local_search_trials: Annotated[int, typer.Option(min=1)] = 32,
+) -> None:
+    """Run CLINC150 target-local L2 AutoResearch over reused replay-oracle rows."""
+
+    if mode not in {"agent-session", "local-search", "dry-run", "codex-cli"}:
+        raise typer.BadParameter("mode must be agent-session, local-search, dry-run, or codex-cli")
+    if budget_profile not in {"fixed-inner", "standard", "smoke"}:
+        raise typer.BadParameter("budget-profile must be fixed-inner, standard, or smoke")
+    settings = _load_cli_settings()
+    result = run_clinc150_l2_autoresearch(
+        data_dir=data_dir,
+        out_dir=out_dir,
+        source_repo_dir=Path.cwd(),
+        train_teacher_details=train_teacher_details,
+        validation_teacher_details=validation_teacher_details,
+        test_teacher_details=test_teacher_details,
+        mode=mode,
+        rounds=rounds,
+        budget_profile=budget_profile,
+        max_agent_rounds=max_agent_rounds,
+        timeout_s=timeout_s,
+        local_search_trials=local_search_trials,
+        codex_command=settings.l2_target_agent_codex_command,
+        codex_model=settings.l2_target_agent_model,
+    )
+    console.print(f"wrote {result['summary_path']}")
+    console.print_json(
+        data={
+            "target_evolution_run": result["target_evolution_run"],
+            "candidate": result["candidate"],
+            "locked_test_exposures": result["locked_test_exposures"],
+            "summary_path": result["summary_path"],
+        }
+    )
 
 
 @teacher_app.command("eval-live")

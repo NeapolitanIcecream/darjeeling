@@ -64,6 +64,8 @@ class L2TargetEvolutionConfig:
     visible_validation_ratio: float | None = None
     visible_cross_audit_folds: int = 0
     max_agent_rounds: int | None = None
+    initial_target_config: dict[str, Any] | None = None
+    target_context: dict[str, Any] | None = None
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
     ignore_user_config: bool = True
@@ -146,6 +148,8 @@ def run_l2_target_evolution(
         source_repo_dir=config.source_repo_dir,
         workspace_root=workspace_root,
         split=split,
+        initial_target_config=config.initial_target_config,
+        target_context=config.target_context,
     )
 
     baseline = _evaluate_target_candidate(
@@ -792,6 +796,8 @@ def prepare_l2_target_workspace(
     workspace_root: Path,
     split: dict[str, list[TeacherTrace]],
     slot_cue_probe_specs: list[dict[str, Any]] | None = None,
+    initial_target_config: dict[str, Any] | None = None,
+    target_context: dict[str, Any] | None = None,
 ) -> None:
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
@@ -805,6 +811,11 @@ def prepare_l2_target_workspace(
         _target_l2_template(),
         encoding="utf-8",
     )
+    if initial_target_config is not None:
+        (workspace_root / "target" / "config.json").write_text(
+            json.dumps(initial_target_config, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     visible_validation_splits = _visible_validation_split_names_from_split(split)
     for name in ["train", *visible_validation_splits]:
         _write_jsonl(
@@ -823,6 +834,11 @@ def prepare_l2_target_workspace(
                 sort_keys=True,
             )
             + "\n",
+            encoding="utf-8",
+        )
+    if target_context is not None:
+        (workspace_root / "data" / "target_context.json").write_text(
+            json.dumps(target_context, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
     (workspace_root / "program.md").write_text(_target_program_text(), encoding="utf-8")
@@ -857,6 +873,10 @@ def prepare_l2_target_workspace(
             "commands.md",
         ],
         "optional_target_probe_files": [SLOT_CUE_PROBE_SPECS_FILE],
+        "target_context_file": (
+            "target_context.json" if target_context is not None else None
+        ),
+        "initial_target_config": initial_target_config,
         "commands": {
             "inspect_context": "python3 tools/inspect_context.py",
             "evaluate_visible_validation": (
@@ -3936,6 +3956,10 @@ def _target_program_text() -> str:
             "- `data/round_state.json` contains visible validation history.",
             "- `data/target_diagnostics.json` summarizes visible validation",
             "  opportunities and risks by teacher intent family.",
+            "- `data/target_context.json`, when present, contains target-supplied",
+            "  visible-only experiment context such as benchmark gates, reused",
+            "  artifact notes, and target-local risk signals. It must not contain",
+            "  private holdout or locked-test examples.",
             "  Read `latest_safety_backlog` first; if it has items, clear those",
             "  visible accepted-wrong families before working on near-miss coverage.",
             "  If accepted-wrong backlogs are empty, read `latest_slot_risk_backlog`",
