@@ -964,6 +964,10 @@ def evolve_l1_candidate(
 
     metrics["l1_agent_succeeded"] = l1_agent_result.succeeded
     metrics["l1_agent_return_code"] = l1_agent_result.return_code
+    metrics["l1_agent_stop_reason"] = l1_agent_result.stop_reason
+    metrics["l1_agent_rounds_requested"] = l1_agent_result.rounds_requested
+    metrics["l1_agent_rounds_completed"] = l1_agent_result.rounds_completed
+    metrics["l1_agent_budget"] = l1_agent_result.agent_budget
     for key, path in {
         "l1_agent_dir": l1_agent_result.job_dir,
         "l1_agent_diff": l1_agent_result.diff_path,
@@ -1113,6 +1117,9 @@ def _l2_target_evolution_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "mode": summary.get("mode"),
         "rounds_completed": summary.get("rounds_completed"),
         "stop_reason": summary.get("stop_reason"),
+        "budget_policy": summary.get("budget_policy"),
+        "evidence_policy": summary.get("evidence_policy"),
+        "agent_budget": summary.get("agent_budget"),
         "adoption_decision": summary.get("adoption_decision"),
         "selection_decision": summary.get("selection_decision"),
         "target_scope": summary.get("target_scope"),

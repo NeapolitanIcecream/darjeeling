@@ -9,6 +9,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from darjeeling.compiler.evolution_policy import (
+    EvolutionBudgetProfile,
+    EvolutionEvidenceRequirements,
+    OuterEvolutionPolicy,
+)
+from darjeeling.compiler.evolution_policy import (
+    agent_budget_payload as outer_agent_budget_payload,
+)
+from darjeeling.compiler.evolution_policy import (
+    budget_policy_payload as outer_budget_policy_payload,
+)
+from darjeeling.compiler.evolution_policy import (
+    evidence_policy_payload as outer_evidence_policy_payload,
+)
 from darjeeling.targets.nlu.layers.l3_local_slm import (
     L3LocalSLMLayer,
     L3PromptArtifact,
@@ -64,6 +78,7 @@ class L3PromptEvolutionConfig:
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
     max_agent_sessions: int = 1
+    budget_profile: EvolutionBudgetProfile = "standard"
     skip_replay: bool = False
     min_accepted_accuracy: float = 0.90
     max_wrong_accept_rate: float = 0.05
@@ -144,6 +159,9 @@ def run_l3_prompt_evolution(
         raise ValueError("L3 prompt evolution mode must be agent-session")
     if config.max_agent_sessions < 0:
         raise ValueError("max_agent_sessions must be non-negative")
+    if config.budget_profile not in {"standard", "fixed-inner", "smoke"}:
+        raise ValueError("budget_profile must be standard, fixed-inner, or smoke")
+    policy = _l3_outer_policy(config)
     teacher_traces = _teacher_visible_traces(traces)
     split = _split_l3_prompt_traces(teacher_traces)
 
@@ -264,11 +282,55 @@ def run_l3_prompt_evolution(
                     backend=backend,
                     label="candidate",
                 )
+    rounds_completed = 1 if stop_reason == "agent_session_completed" else 0
 
     summary = {
         "schema_version": "l3-prompt-evolution-v1",
         "created_at": datetime.now(UTC).isoformat(),
         "mode": config.mode,
+        "rounds_requested": policy.rounds_requested,
+        "rounds_completed": rounds_completed,
+        "budget_policy": outer_budget_policy_payload(
+            policy,
+            profile_guidance_schema_version="l3-prompt-budget-profile-guidance-v1",
+            extra={"max_agent_sessions": config.max_agent_sessions},
+        ),
+        "evidence_policy": outer_evidence_policy_payload(
+            policy,
+            schema_version="l3-prompt-evidence-policy-v1",
+            requirements=EvolutionEvidenceRequirements(
+                min_rounds_requested=1,
+                min_codex_cli_agent_rounds=1,
+                requires_private_selection_gate=True,
+                requires_private_promotion_gate=True,
+                requires_outer_replay=True,
+            ),
+            rounds_completed=rounds_completed,
+            stop_reason=stop_reason,
+            supported_interpretation=(
+                "May be used as L3 prompt-evolution quality evidence only after "
+                "private selection/promotion gates and outer replay also pass."
+            ),
+            unsupported_interpretation=(
+                "Use this run for wiring, debugging, or bounded probing only; do not "
+                "treat failure as evidence that L3 prompt evolution is exhausted."
+            ),
+        ),
+        "agent_budget": outer_agent_budget_payload(
+            policy,
+            schema_version="l3-prompt-agent-budget-v1",
+            agent_rounds_started=agent_sessions_started,
+            agent_rounds_succeeded=agent_sessions_succeeded,
+            extra={
+                "max_agent_sessions": config.max_agent_sessions,
+                "agent_sessions_started": agent_sessions_started,
+                "agent_sessions_succeeded": agent_sessions_succeeded,
+                "agent_sessions_remaining": max(
+                    0,
+                    config.max_agent_sessions - agent_sessions_started,
+                ),
+            },
+        ),
         "workspace": str(workspace_root),
         "data_split": {name: len(rows) for name, rows in split.items()},
         "agent_session": {
@@ -615,7 +677,30 @@ def _l3_adoption_decision(candidate: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _l3_outer_policy(config: L3PromptEvolutionConfig) -> OuterEvolutionPolicy:
+    return OuterEvolutionPolicy(
+        layer_name="L3",
+        mode=config.mode,
+        rounds_requested=1,
+        budget_profile=config.budget_profile,
+        timeout_s=config.timeout_s,
+        max_agent_rounds=config.max_agent_sessions,
+        inner_patience_rounds=0,
+        stop_on_selection_gate=False,
+        codex_command=config.codex_command,
+        codex_model=config.codex_model,
+        local_search_consumes_llm=False,
+        prompt_strategy=(
+            "stable short stdin prompt; dynamic prompt context stays in workspace files"
+        ),
+        cost_policy=(
+            "live agent sessions consume GPT budget; local replay is target-owned validation"
+        ),
+    )
+
+
 def _l3_objective_payload(config: L3PromptEvolutionConfig) -> dict[str, Any]:
+    policy = _l3_outer_policy(config)
     return {
         "schema_version": "l3-prompt-objective-v1",
         "primary_objective": "increase safe local SLM would-accepts without wrong accepts",
@@ -647,6 +732,23 @@ def _l3_objective_payload(config: L3PromptEvolutionConfig) -> dict[str, Any]:
             "internal_loop_control": "agent_decides_prompt_context_guard_eval_bench_stop",
             "adoption_authority": "outer_private_gates_and_outer_replay",
         },
+        "budget_policy": outer_budget_policy_payload(
+            policy,
+            profile_guidance_schema_version="l3-prompt-budget-profile-guidance-v1",
+            extra={"max_agent_sessions": config.max_agent_sessions},
+        ),
+        "agent_budget": outer_agent_budget_payload(
+            policy,
+            schema_version="l3-prompt-agent-budget-v1",
+            agent_rounds_started=0,
+            agent_rounds_succeeded=0,
+            extra={
+                "max_agent_sessions": config.max_agent_sessions,
+                "agent_sessions_started": 0,
+                "agent_sessions_succeeded": 0,
+                "agent_sessions_remaining": config.max_agent_sessions,
+            },
+        ),
     }
 
 

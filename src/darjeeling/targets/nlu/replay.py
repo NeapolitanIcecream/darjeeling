@@ -163,7 +163,10 @@ def _validate_resume_prefix(
             f"cannot resume {traces_path}: existing traces exceed requested workload "
             f"({len(existing_traces)} > {len(stream_items)})"
         )
-    for index, (trace, item) in enumerate(zip(existing_traces, stream_items), start=1):
+    for index, (trace, item) in enumerate(
+        zip(existing_traces, stream_items, strict=False),
+        start=1,
+    ):
         record = item.record
         if trace.request_id != record.request_id or trace.utterance != record.utterance:
             raise ValueError(

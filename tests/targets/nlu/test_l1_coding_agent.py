@@ -84,6 +84,13 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l1-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"
+    assert provenance["rounds_requested"] == 1
+    assert provenance["rounds_completed"] == 1
+    assert provenance["stop_reason"] == "round_budget_exhausted"
+    assert provenance["budget_policy"]["profile"] == "standard"
+    assert provenance["agent_budget"]["mode"] == "dry-run"
+    assert provenance["agent_budget"]["applies_to_mode"] is False
+    assert provenance["rounds"][0]["mode"] == "dry-run"
     assert provenance["diff"]["changed_file_count"] == 1
 
     context_text = "\n".join(
@@ -240,6 +247,8 @@ def test_l1_agent_session_uses_workspace_root_and_records_policy(
     manifest = json.loads((workspace_root / "workspace_manifest.json").read_text(encoding="utf-8"))
 
     assert result.succeeded
+    assert result.stop_reason == "agent_session_completed"
+    assert result.rounds_completed == 1
     assert Path(command[command.index("--cd") + 1]) == workspace_root.resolve()
     assert (result.workspace_crate_dir / "AGENT_SESSION_MARKER").exists()
     assert (workspace_root / "runs" / "agent_note.txt").exists()
@@ -247,10 +256,14 @@ def test_l1_agent_session_uses_workspace_root_and_records_policy(
     assert provenance["agent_session"]["internal_loop_control"] == (
         "agent_decides_edit_compile_test_bench_replay_stop"
     )
+    assert provenance["agent_budget"]["agent_rounds_started"] == 1
+    assert provenance["agent_budget"]["agent_rounds_succeeded"] == 1
+    assert provenance["evidence_policy"]["mode"] == "agent-session"
     assert provenance["workspace_scope_policy"]["candidate_code_writable_roots"] == [
         "l1_programbank/"
     ]
     assert manifest["agent_session_policy"]["applies_to_mode"] is True
+    assert manifest["budget_policy"]["profile"] == "standard"
     assert manifest["tools"]["bench"] == (
         "edge-mvp-nlu l1 bench "
         "--crate-dir l1_programbank --out runs/l1_benchmark.json"

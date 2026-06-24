@@ -10,6 +10,21 @@ from difflib import unified_diff
 from pathlib import Path
 from typing import Any, Literal
 
+from darjeeling.compiler.evolution_policy import (
+    EvolutionBudgetProfile,
+    EvolutionEvidenceRequirements,
+    OuterEvolutionPolicy,
+    resolve_max_agent_rounds,
+)
+from darjeeling.compiler.evolution_policy import (
+    agent_budget_payload as outer_agent_budget_payload,
+)
+from darjeeling.compiler.evolution_policy import (
+    budget_policy_payload as outer_budget_policy_payload,
+)
+from darjeeling.compiler.evolution_policy import (
+    evidence_policy_payload as outer_evidence_policy_payload,
+)
 from darjeeling.targets.nlu.compiler.focus_tasks import (
     build_focus_tasks,
     focus_task_document_with_fields,
@@ -32,6 +47,9 @@ class L1CodingAgentJobConfig:
     mode: L1AgentMode
     source_crate_dir: Path
     job_dir: Path
+    rounds: int = 1
+    budget_profile: EvolutionBudgetProfile = "standard"
+    max_agent_rounds: int | None = None
     codex_command: str = "codex"
     codex_model: str | None = None
     timeout_s: float = 900.0
@@ -55,6 +73,10 @@ class L1CodingAgentJobResult:
     report_path: Path
     return_code: int
     succeeded: bool
+    stop_reason: str
+    rounds_requested: int
+    rounds_completed: int
+    agent_budget: dict[str, Any]
     command_results: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -84,6 +106,9 @@ class L4CodingAgentAdapter:
             mode=self.settings.l1_agent_mode,
             source_crate_dir=source_crate_dir,
             job_dir=job_dir,
+            rounds=self.settings.l1_agent_rounds,
+            budget_profile=self.settings.l1_agent_budget_profile,
+            max_agent_rounds=self.settings.l1_agent_max_agent_rounds,
             codex_command=self.settings.l1_agent_codex_command,
             codex_model=self.settings.l1_agent_model,
             timeout_s=self.settings.l1_agent_timeout_s,
@@ -109,6 +134,18 @@ def run_l1_coding_agent_job(
     current_metrics: dict[str, Any],
     objective: dict[str, Any],
 ) -> L1CodingAgentJobResult:
+    if config.rounds < 1:
+        raise ValueError("rounds must be at least 1")
+    if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
+        raise ValueError("max_agent_rounds must be non-negative")
+    if config.budget_profile not in {"standard", "fixed-inner", "smoke"}:
+        raise ValueError("budget_profile must be standard, fixed-inner, or smoke")
+    policy = _l1_outer_policy(config)
+    max_agent_rounds = resolve_max_agent_rounds(
+        mode=config.mode,
+        budget_profile=config.budget_profile,
+        max_agent_rounds=config.max_agent_rounds,
+    )
     job_dir = config.job_dir
     workspace_root = job_dir / "workspace"
     context_dir = workspace_root / "contexts"
@@ -142,6 +179,7 @@ def run_l1_coding_agent_job(
     )
     _write_l1_workspace_manifest(
         mode=config.mode,
+        policy=policy,
         workspace_root=workspace_root,
         workspace_crate_dir=workspace_crate_dir,
         context_dir=context_dir,
@@ -149,6 +187,10 @@ def run_l1_coding_agent_job(
     )
 
     command_results: list[dict[str, Any]] = []
+    stop_reason = "round_budget_exhausted"
+    agent_rounds_started = 0
+    agent_rounds_succeeded = 0
+    scope_violation_report: dict[str, Any] | None = None
     if config.mode == "dry-run":
         result_code = _run_dry_run_job(
             config=config,
@@ -157,30 +199,57 @@ def run_l1_coding_agent_job(
             report_path=report_path,
             command_results=command_results,
         )
+        if result_code != 0:
+            stop_reason = "dry_run_patch_failed"
     else:
-        protected_snapshot = _protected_l1_workspace_snapshot(workspace_root)
-        result_code = _run_codex_cli_job(
-            config=config,
-            workspace_root=workspace_root,
-            workspace_crate_dir=workspace_crate_dir,
-            prompt_path=prompt_path,
-            transcript_path=transcript_path,
-            report_path=report_path,
-            command_results=command_results,
-        )
-        if config.mode == "agent-session":
-            scope_report = _l1_workspace_scope_violation_report(
-                workspace_root=workspace_root,
-                before=protected_snapshot,
+        if max_agent_rounds is not None and max_agent_rounds <= 0:
+            result_code = 0
+            stop_reason = (
+                "agent_session_budget_exhausted"
+                if config.mode == "agent-session"
+                else "agent_round_budget_exhausted"
             )
-            if scope_report is not None:
-                command_results.append(
-                    _l1_workspace_scope_violation_command_result(
-                        workspace_root=workspace_root,
-                        report=scope_report,
-                    ),
+            transcript_path.write_text("", encoding="utf-8")
+            report_path.write_text(
+                "L1 coding-agent launch skipped by outer policy.\n",
+                encoding="utf-8",
+            )
+        else:
+            agent_rounds_started = 1
+            protected_snapshot = _protected_l1_workspace_snapshot(workspace_root)
+            result_code = _run_codex_cli_job(
+                config=config,
+                workspace_root=workspace_root,
+                workspace_crate_dir=workspace_crate_dir,
+                prompt_path=prompt_path,
+                transcript_path=transcript_path,
+                report_path=report_path,
+                command_results=command_results,
+            )
+            if result_code != 0:
+                stop_reason = (
+                    "agent_session_failed"
+                    if config.mode == "agent-session"
+                    else "agent_command_failed"
                 )
-                result_code = 1
+            elif config.mode == "agent-session":
+                scope_violation_report = _l1_workspace_scope_violation_report(
+                    workspace_root=workspace_root,
+                    before=protected_snapshot,
+                )
+                if scope_violation_report is not None:
+                    command_results.append(
+                        _l1_workspace_scope_violation_command_result(
+                            workspace_root=workspace_root,
+                            report=scope_violation_report,
+                        ),
+                    )
+                    result_code = 1
+                    stop_reason = "workspace_scope_violation"
+                else:
+                    agent_rounds_succeeded = 1
+            else:
+                agent_rounds_succeeded = 1
 
     if config.run_validation and result_code == 0:
         cargo_result = _run_command(
@@ -191,7 +260,30 @@ def run_l1_coding_agent_job(
         command_results.append(cargo_result)
         if cargo_result["return_code"] != 0 and result_code == 0:
             result_code = int(cargo_result["return_code"])
+            stop_reason = "candidate_validation_failed"
 
+    if stop_reason == "round_budget_exhausted" and config.mode == "agent-session":
+        stop_reason = "agent_session_completed"
+    budget_stop_reasons = {"agent_round_budget_exhausted", "agent_session_budget_exhausted"}
+    job_succeeded = result_code == 0 and stop_reason not in budget_stop_reasons
+    rounds_completed = 1 if job_succeeded else 0
+    round_results = [
+        {
+            "round": 1,
+            "mode": config.mode,
+            "return_code": result_code,
+            "succeeded": job_succeeded,
+            "stop_reason": stop_reason,
+            "workspace_scope_violation": scope_violation_report,
+        }
+    ]
+    agent_budget = outer_agent_budget_payload(
+        policy,
+        schema_version="l1-agent-budget-v1",
+        agent_rounds_started=agent_rounds_started,
+        agent_rounds_succeeded=agent_rounds_succeeded,
+        max_agent_rounds=max_agent_rounds,
+    )
     diff_text = _crate_diff(config.source_crate_dir, workspace_crate_dir)
     diff_path.write_text(diff_text, encoding="utf-8")
     _write_jsonl(commands_path, command_results)
@@ -207,6 +299,10 @@ def run_l1_coding_agent_job(
         commands_path=commands_path,
         report_path=report_path,
         return_code=result_code,
+        stop_reason=stop_reason,
+        rounds_completed=rounds_completed,
+        round_results=round_results,
+        agent_budget=agent_budget,
         command_results=command_results,
         diff_text=diff_text,
     )
@@ -223,7 +319,11 @@ def run_l1_coding_agent_job(
         provenance_path=provenance_path,
         report_path=report_path,
         return_code=result_code,
-        succeeded=result_code == 0,
+        succeeded=job_succeeded,
+        stop_reason=stop_reason,
+        rounds_requested=config.rounds,
+        rounds_completed=rounds_completed,
+        agent_budget=agent_budget,
         command_results=command_results,
     )
 
@@ -299,6 +399,7 @@ def _build_l1_agent_prompt(*, context_dir: Path, workspace_crate_dir: Path) -> s
 def _write_l1_workspace_manifest(
     *,
     mode: L1AgentMode,
+    policy: OuterEvolutionPolicy,
     workspace_root: Path,
     workspace_crate_dir: Path,
     context_dir: Path,
@@ -323,6 +424,16 @@ def _write_l1_workspace_manifest(
             "replay": "edge-mvp run ...",
         },
         "agent_session_policy": _l1_agent_session_policy(mode),
+        "budget_policy": outer_budget_policy_payload(
+            policy,
+            profile_guidance_schema_version="l1-agent-budget-profile-guidance-v1",
+        ),
+        "agent_budget": outer_agent_budget_payload(
+            policy,
+            schema_version="l1-agent-budget-v1",
+            agent_rounds_started=0,
+            agent_rounds_succeeded=0,
+        ),
     }
     (workspace_root / "runs").mkdir(exist_ok=True)
     (workspace_root / "workspace_manifest.json").write_text(
@@ -584,15 +695,49 @@ def _write_l1_agent_provenance(
     commands_path: Path,
     report_path: Path,
     return_code: int,
+    stop_reason: str,
+    rounds_completed: int,
+    round_results: list[dict[str, Any]],
+    agent_budget: dict[str, Any],
     command_results: list[dict[str, Any]],
     diff_text: str,
 ) -> None:
+    policy = _l1_outer_policy(config)
     payload = {
         "schema_version": "l1-agent-provenance-v1",
         "created_at": datetime.now(UTC).isoformat(),
         "mode": config.mode,
-        "succeeded": return_code == 0,
+        "succeeded": rounds_completed > 0,
         "return_code": return_code,
+        "rounds_requested": config.rounds,
+        "rounds_completed": rounds_completed,
+        "stop_reason": stop_reason,
+        "budget_policy": outer_budget_policy_payload(
+            policy,
+            profile_guidance_schema_version="l1-agent-budget-profile-guidance-v1",
+        ),
+        "evidence_policy": outer_evidence_policy_payload(
+            policy,
+            schema_version="l1-agent-evidence-policy-v1",
+            requirements=EvolutionEvidenceRequirements(
+                min_rounds_requested=1,
+                min_codex_cli_agent_rounds=1,
+                min_teacher_labeled_traces=None,
+                requires_outer_replay=True,
+            ),
+            rounds_completed=rounds_completed,
+            stop_reason=stop_reason,
+            supported_interpretation=(
+                "May be used as L1 coding-agent evolution evidence only after "
+                "workspace validation and outer replay/promotion also pass."
+            ),
+            unsupported_interpretation=(
+                "Use this run for wiring, debugging, or bounded probing only; do not "
+                "treat failure as evidence that L1 agent evolution is exhausted."
+            ),
+        ),
+        "agent_budget": agent_budget,
+        "rounds": round_results,
         "codex_command": config.codex_command,
         "codex_model": config.codex_model,
         "sandbox": config.sandbox,
@@ -726,6 +871,24 @@ def _diff_summary(diff_text: str) -> dict[str, Any]:
         "additions": additions,
         "deletions": deletions,
     }
+
+
+def _l1_outer_policy(config: L1CodingAgentJobConfig) -> OuterEvolutionPolicy:
+    return OuterEvolutionPolicy(
+        layer_name="L1",
+        mode=config.mode,
+        rounds_requested=config.rounds,
+        budget_profile=config.budget_profile,
+        timeout_s=config.timeout_s,
+        max_agent_rounds=config.max_agent_rounds,
+        inner_patience_rounds=0,
+        stop_on_selection_gate=False,
+        codex_command=config.codex_command,
+        codex_model=config.codex_model,
+        local_search_consumes_llm=False,
+        prompt_strategy="stable prompt file for codex-cli; short stdin prompt for agent-session",
+        cost_policy="live agent modes consume GPT budget; dry-run patch mode is fixture evidence",
+    )
 
 
 def _l1_agent_session_policy(mode: L1AgentMode | str) -> dict[str, Any]:

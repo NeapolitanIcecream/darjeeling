@@ -10,6 +10,23 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
+from darjeeling.compiler.evolution_policy import (
+    EvolutionEvidenceRequirements,
+    OuterEvolutionPolicy,
+    resolve_max_agent_rounds,
+)
+from darjeeling.compiler.evolution_policy import (
+    agent_budget_payload as outer_agent_budget_payload,
+)
+from darjeeling.compiler.evolution_policy import (
+    budget_policy_payload as outer_budget_policy_payload,
+)
+from darjeeling.compiler.evolution_policy import (
+    evidence_policy_payload as outer_evidence_policy_payload,
+)
+from darjeeling.compiler.evolution_policy import (
+    profile_guidance_payload as outer_profile_guidance_payload,
+)
 from darjeeling.targets.nlu.layers.l2_student import (
     L2StudentConfig,
     train_l2_student,
@@ -41,6 +58,22 @@ DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS = 3
 DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K = 4
 MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD = 2
 SLOT_CUE_PROBE_SPECS_FILE = "slot_cue_probes.json"
+
+_L2_TARGET_PROFILE_GUIDANCE: dict[L2TargetBudgetProfile, str] = {
+    "fixed-inner": (
+        "Use this profile for the main L2 target-evolution research loop; "
+        "it is intentionally decoupled from outer replay cadence."
+    ),
+    "smoke": (
+        "Use this profile only to check wiring; do not treat its result as "
+        "evidence about L2 evolve quality."
+    ),
+    "standard": (
+        "The standard profile is cost-capped. For codex-cli it may launch "
+        "only a few live agent rounds, so failure here is not evidence that "
+        "L2 target evolution has been exhausted."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -2717,35 +2750,36 @@ def _agent_budget_payload(
     agent_rounds_succeeded: int,
 ) -> dict[str, Any]:
     max_rounds = _effective_max_agent_rounds(config)
-    remaining = None if max_rounds is None else max(0, max_rounds - agent_rounds_started)
-    live_agent_mode = config.mode in {"codex-cli", "agent-session"}
-    return {
-        "schema_version": "l2-target-agent-budget-v1",
-        "applies_to_mode": live_agent_mode,
-        "mode": config.mode,
-        "codex_command": config.codex_command if live_agent_mode else None,
-        "codex_model": config.codex_model if live_agent_mode else None,
-        "timeout_s": config.timeout_s if live_agent_mode else None,
-        "max_agent_rounds": max_rounds,
-        "agent_rounds_started": agent_rounds_started,
-        "agent_rounds_succeeded": agent_rounds_succeeded,
-        "agent_rounds_remaining": remaining,
-        "agent_session_scope": (
-            "single_session_agent_controls_internal_loop"
-            if config.mode == "agent-session"
-            else "one_codex_process_per_outer_round"
-            if config.mode == "codex-cli"
-            else None
-        ),
-        "local_search_consumes_llm": False,
-        "prompt_strategy": (
+    return outer_agent_budget_payload(
+        _outer_policy(config),
+        schema_version="l2-target-agent-budget-v1",
+        agent_rounds_started=agent_rounds_started,
+        agent_rounds_succeeded=agent_rounds_succeeded,
+        max_agent_rounds=max_rounds,
+    )
+
+
+def _outer_policy(config: L2TargetEvolutionConfig) -> OuterEvolutionPolicy:
+    return OuterEvolutionPolicy(
+        layer_name="L2",
+        mode=config.mode,
+        rounds_requested=config.rounds,
+        budget_profile=config.budget_profile,
+        timeout_s=config.timeout_s,
+        max_agent_rounds=config.max_agent_rounds,
+        inner_patience_rounds=config.inner_patience_rounds,
+        stop_on_selection_gate=config.stop_on_selection_gate,
+        codex_command=config.codex_command,
+        codex_model=config.codex_model,
+        local_search_consumes_llm=False,
+        prompt_strategy=(
             "stable short stdin prompt; dynamic target context stays in workspace files"
         ),
-        "cost_policy": (
+        cost_policy=(
             "live agent modes consume GPT budget; local-search/tool calls are cheap "
             "deterministic/Optuna work and do not count as live agent launches"
         ),
-    }
+    )
 
 
 def _target_budget_policy_payload(
@@ -2758,23 +2792,26 @@ def _target_budget_policy_payload(
         if max_agent_rounds is None
         else max_agent_rounds
     )
-    return {
-        "inner_patience_rounds": config.inner_patience_rounds,
-        "stop_on_selection_gate": config.stop_on_selection_gate,
-        "local_search_trials": config.local_search_trials,
-        "local_search_timeout_s": config.local_search_timeout_s,
-        "local_search_space": config.local_search_space,
-        "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
-        "max_agent_rounds": resolved_max_agent_rounds,
-        "profile": config.budget_profile,
-        "profile_intent": _target_budget_profile_intent_payload(
-            config,
-            max_agent_rounds=resolved_max_agent_rounds,
-        ),
-        "visible_validation_folds": config.visible_validation_folds,
-        "visible_validation_ratio": config.visible_validation_ratio,
-        "visible_cross_audit_folds": config.visible_cross_audit_folds,
-    }
+    payload = outer_budget_policy_payload(
+        _outer_policy(config),
+        profile_guidance_schema_version="l2-target-budget-profile-intent-v1",
+        max_agent_rounds=resolved_max_agent_rounds,
+        guidance_by_profile=_L2_TARGET_PROFILE_GUIDANCE,
+        profile_guidance_extra={
+            "rounds_are_l2_train_eval_iterations": config.mode != "agent-session",
+        },
+        extra={
+            "local_search_trials": config.local_search_trials,
+            "local_search_timeout_s": config.local_search_timeout_s,
+            "local_search_space": config.local_search_space,
+            "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
+            "visible_validation_folds": config.visible_validation_folds,
+            "visible_validation_ratio": config.visible_validation_ratio,
+            "visible_cross_audit_folds": config.visible_cross_audit_folds,
+        },
+    )
+    payload["profile_intent"] = payload.pop("profile_guidance")
+    return payload
 
 
 def _target_budget_profile_intent_payload(
@@ -2782,43 +2819,13 @@ def _target_budget_profile_intent_payload(
     *,
     max_agent_rounds: int | None,
 ) -> dict[str, Any]:
-    if config.budget_profile == "fixed-inner":
-        profile_role = "fixed_snapshot_research"
-        guidance = (
-            "Use this profile for the main L2 target-evolution research loop; "
-            "it is intentionally decoupled from outer replay cadence."
-        )
-    elif config.budget_profile == "smoke":
-        profile_role = "connectivity_smoke"
-        guidance = (
-            "Use this profile only to check wiring; do not treat its result as "
-            "evidence about L2 evolve quality."
-        )
-    else:
-        profile_role = "cost_capped_default"
-        guidance = (
-            "The standard profile is cost-capped. For codex-cli it may launch "
-            "only a few live agent rounds, so failure here is not evidence that "
-            "L2 target evolution has been exhausted."
-        )
-    return {
-        "schema_version": "l2-target-budget-profile-intent-v1",
-        "profile": config.budget_profile,
-        "profile_role": profile_role,
-        "recommended_quality_profile": "fixed-inner",
-        "guidance": guidance,
-        "fixed_trace_snapshot_inner_loop": True,
-        "outer_replay_cadence_bound": False,
-        "rounds_are_l2_train_eval_iterations": config.mode != "agent-session",
-        "agent_session_controls_internal_loop": config.mode == "agent-session",
-        "local_search_consumes_llm": False,
-        "codex_cli_rounds_consume_llm": config.mode == "codex-cli",
-        "live_agent_session_consumes_llm": config.mode == "agent-session",
-        "effective_max_agent_rounds": max_agent_rounds,
-        "agent_round_cap_is_cost_control": (
-            config.mode in {"codex-cli", "agent-session"} and max_agent_rounds is not None
-        ),
-    }
+    return outer_profile_guidance_payload(
+        _outer_policy(config),
+        schema_version="l2-target-budget-profile-intent-v1",
+        max_agent_rounds=max_agent_rounds,
+        guidance_by_profile=_L2_TARGET_PROFILE_GUIDANCE,
+        extra={"rounds_are_l2_train_eval_iterations": config.mode != "agent-session"},
+    )
 
 
 def _target_evidence_policy_payload(
@@ -2834,133 +2841,38 @@ def _target_evidence_policy_payload(
         if max_agent_rounds is None
         else max_agent_rounds
     )
-    min_quality_rounds = 16
-    min_quality_codex_agent_rounds = 8
-    min_quality_teacher_labeled_traces = 500
-    blocking_reasons: list[str] = []
-
-    if config.budget_profile == "smoke":
-        evidence_class = "connectivity_smoke"
-        blocking_reasons.append("smoke profile only validates wiring")
-    elif config.budget_profile == "standard":
-        evidence_class = "cost_capped_probe"
-        blocking_reasons.append(
-            "standard profile is cost-capped and may launch only a few live agent rounds"
-        )
-    elif config.rounds < min_quality_rounds:
-        evidence_class = "short_fixed_snapshot_probe"
-        blocking_reasons.append(
-            f"round budget {config.rounds} is below quality minimum {min_quality_rounds}"
-        )
-    elif (
-        teacher_labeled_traces is not None
-        and teacher_labeled_traces < min_quality_teacher_labeled_traces
-    ):
-        evidence_class = "small_snapshot_probe"
-        blocking_reasons.append(
-            "teacher-labeled snapshot size "
-            f"{teacher_labeled_traces} is below quality minimum "
-            f"{min_quality_teacher_labeled_traces}"
-        )
-    elif (
-        config.mode == "codex-cli"
-        and resolved_max_agent_rounds is not None
-        and resolved_max_agent_rounds < min_quality_codex_agent_rounds
-    ):
-        evidence_class = "agent_budget_capped_fixed_snapshot"
-        blocking_reasons.append(
-            "codex-cli agent round cap is below the quality evidence minimum"
-        )
-    elif config.mode == "agent-session" and resolved_max_agent_rounds == 0:
-        evidence_class = "agent_session_not_launched_probe"
-        blocking_reasons.append("agent-session mode did not launch a live agent session")
-    elif (
-        config.mode == "agent-session"
-        and stop_reason is not None
-        and (
-            stop_reason != "agent_session_completed"
-            or rounds_completed is None
-            or rounds_completed < 1
-        )
-    ):
-        evidence_class = "incomplete_agent_session_probe"
-        blocking_reasons.append(
-            "agent-session did not complete one scoped candidate evaluation"
-        )
-    else:
-        evidence_class = "fixed_snapshot_research"
-
-    if (
-        evidence_class == "fixed_snapshot_research"
-        and config.mode != "agent-session"
-        and stop_reason is not None
-        and rounds_completed is not None
-        and rounds_completed < min(config.rounds, min_quality_rounds)
-    ):
-        if stop_reason not in {"selection_gate_passed", "baseline_selection_gate_passed"}:
-            evidence_class = "incomplete_fixed_snapshot_probe"
-            blocking_reasons.append(
-                f"completed {rounds_completed} rounds before reaching the requested evidence budget"
-            )
-
-    quality_claim_supported = evidence_class == "fixed_snapshot_research"
-    return {
-        "schema_version": "l2-target-evidence-policy-v1",
-        "evidence_class": evidence_class,
-        "quality_claim_supported": quality_claim_supported,
-        "quality_claim": (
-            "eligible_after_private_gates_and_outer_replay"
-            if quality_claim_supported
-            else "not_supported_by_this_run"
+    return outer_evidence_policy_payload(
+        _outer_policy(config),
+        schema_version="l2-target-evidence-policy-v1",
+        requirements=EvolutionEvidenceRequirements(
+            min_rounds_requested=16,
+            min_codex_cli_agent_rounds=8,
+            min_teacher_labeled_traces=500,
+            requires_private_selection_gate=True,
+            requires_private_promotion_gate=True,
+            requires_outer_replay=True,
         ),
-        "result_interpretation": (
+        rounds_completed=rounds_completed,
+        stop_reason=stop_reason,
+        teacher_labeled_traces=teacher_labeled_traces,
+        max_agent_rounds=resolved_max_agent_rounds,
+        supported_interpretation=(
             "May be used as L2 target-evolution quality evidence only after private "
             "selection/promotion gates and outer e2e replay also pass."
-            if quality_claim_supported
-            else (
-                "Use this run for wiring, debugging, or bounded probing only; do not "
-                "treat failure as evidence that L2 target evolution is exhausted."
-            )
         ),
-        "required_for_quality_claim": {
-            "budget_profile": "fixed-inner",
-            "min_rounds_requested": min_quality_rounds,
-            "min_codex_cli_agent_rounds": min_quality_codex_agent_rounds,
-            "agent_session_requires_one_completed_session": True,
-            "min_teacher_labeled_traces": min_quality_teacher_labeled_traces,
-            "requires_private_selection_gate": True,
-            "requires_private_promotion_gate": True,
-            "requires_outer_replay": True,
-        },
-        "blocking_reasons": blocking_reasons,
-        "profile": config.budget_profile,
-        "mode": config.mode,
-        "rounds_requested": config.rounds,
-        "rounds_completed": rounds_completed,
-        "stop_reason": stop_reason,
-        "teacher_labeled_traces": teacher_labeled_traces,
-        "fixed_trace_snapshot_inner_loop": True,
-        "outer_replay_cadence_bound": False,
-        "effective_max_agent_rounds": resolved_max_agent_rounds,
-        "agent_round_cap_is_cost_control": (
-            config.mode in {"codex-cli", "agent-session"}
-            and resolved_max_agent_rounds is not None
+        unsupported_interpretation=(
+            "Use this run for wiring, debugging, or bounded probing only; do not "
+            "treat failure as evidence that L2 target evolution is exhausted."
         ),
-    }
+    )
 
 
 def _effective_max_agent_rounds(config: L2TargetEvolutionConfig) -> int | None:
-    if config.mode not in {"codex-cli", "agent-session"}:
-        return config.max_agent_rounds
-    if config.max_agent_rounds is not None:
-        return config.max_agent_rounds
-    if config.mode == "agent-session":
-        return 1
-    if config.budget_profile == "standard":
-        return 3
-    if config.budget_profile == "fixed-inner":
-        return 16
-    return 1
+    return resolve_max_agent_rounds(
+        mode=config.mode,
+        budget_profile=config.budget_profile,
+        max_agent_rounds=config.max_agent_rounds,
+    )
 
 
 def _target_objective_payload(

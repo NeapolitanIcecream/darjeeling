@@ -195,7 +195,13 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
     ]
 
     assert summary["mode"] == "agent-session"
+    assert summary["rounds_requested"] == 1
+    assert summary["rounds_completed"] == 1
     assert summary["stop_reason"] == "agent_session_completed"
+    assert summary["budget_policy"]["profile"] == "standard"
+    assert summary["agent_budget"]["agent_rounds_started"] == 1
+    assert summary["agent_budget"]["agent_sessions_started"] == 1
+    assert summary["evidence_policy"]["mode"] == "agent-session"
     assert summary["agent_session"]["agent_sessions_started"] == 1
     assert summary["agent_session"]["agent_sessions_succeeded"] == 1
     assert summary["selection_decision"]["selected"] is True
@@ -297,6 +303,33 @@ def test_l3_prompt_evolution_agent_session_rejects_protected_context_edits(
     assert "contexts/train.jsonl" in commands[-1]["stderr"]
 
 
+def test_l3_prompt_evolution_zero_agent_sessions_records_outer_policy(
+    tmp_path: Path,
+) -> None:
+    summary = run_l3_prompt_evolution(
+        config=L3PromptEvolutionConfig(
+            job_dir=tmp_path / "job",
+            max_agent_sessions=0,
+            budget_profile="fixed-inner",
+            skip_replay=True,
+        ),
+        traces=_beta_traces(10),
+        task_schema=TaskSchema(intent_names=["intent_beta"], slot_names=[]),
+        local_slm_config=LocalSLMConfig(mode="shadow"),
+    )
+    commands_text = (tmp_path / "job" / "commands.jsonl").read_text(encoding="utf-8")
+
+    assert summary["stop_reason"] == "agent_session_budget_exhausted"
+    assert summary["rounds_completed"] == 0
+    assert summary["agent_budget"]["max_agent_rounds"] == 0
+    assert summary["agent_budget"]["max_agent_sessions"] == 0
+    assert summary["agent_budget"]["agent_rounds_started"] == 0
+    assert summary["agent_budget"]["agent_sessions_remaining"] == 0
+    assert summary["budget_policy"]["profile"] == "fixed-inner"
+    assert summary["evidence_policy"]["evidence_class"] == "agent_session_not_launched_probe"
+    assert commands_text == ""
+
+
 def _l3_shadow_trace(
     request_id: str,
     *,
@@ -338,4 +371,3 @@ def _beta_traces(count: int) -> list[TraceRecord]:
         )
         for index in range(count)
     ]
-

@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
+from darjeeling.compiler.evolution_policy import resolve_max_agent_rounds
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.targets import registry as target_registry
 from darjeeling.targets.nlu.adapters.clinc150 import prepare_clinc150_dataset
@@ -1319,6 +1320,12 @@ def l3_prompt_evolve(
         int,
         typer.Option(min=0, help="Maximum live agent sessions; 0 prepares workspace only."),
     ] = 1,
+    budget_profile: Annotated[
+        str,
+        typer.Option(
+            help="Outer budget profile: standard, fixed-inner, or smoke.",
+        ),
+    ] = "standard",
     skip_replay: Annotated[
         bool,
         typer.Option(help="Skip local SLM replay; use only for wiring smoke/no-model runs."),
@@ -1334,6 +1341,8 @@ def l3_prompt_evolve(
 ) -> None:
     """Run one L3 prompt-evolution agent session over an isolated workspace."""
 
+    if budget_profile not in {"standard", "fixed-inner", "smoke"}:
+        raise typer.BadParameter("budget_profile must be standard, fixed-inner, or smoke")
     settings = _load_cli_settings()
     trace_records = read_traces(traces)
     if max_traces is not None:
@@ -1347,6 +1356,7 @@ def l3_prompt_evolve(
             sandbox=settings.l3_agent_sandbox,
             approval_policy=settings.l3_agent_approval_policy,
             max_agent_sessions=max_agent_sessions,
+            budget_profile=budget_profile,  # type: ignore[arg-type]
             skip_replay=skip_replay,
             min_accepted_accuracy=min_accepted_accuracy,
             max_wrong_accept_rate=max_wrong_accept_rate,
@@ -1871,17 +1881,11 @@ def _resolve_l2_target_agent_rounds(
     budget_profile: L2TargetBudgetProfile,
     max_agent_rounds: int | None,
 ) -> int | None:
-    if mode not in {"codex-cli", "agent-session"}:
-        return max_agent_rounds
-    if max_agent_rounds is not None:
-        return max_agent_rounds
-    if mode == "agent-session":
-        return 1
-    if budget_profile == "standard":
-        return 3
-    if budget_profile == "fixed-inner":
-        return 16
-    return 1
+    return resolve_max_agent_rounds(
+        mode=mode,
+        budget_profile=budget_profile,
+        max_agent_rounds=max_agent_rounds,
+    )
 
 
 def _resolve_l2_target_visible_validation_folds(
