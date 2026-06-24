@@ -362,7 +362,10 @@ def test_run_replay_full_audits_unverified_live_residual_completion(
                 intent="intent_alpha",
                 slots={"slot_alpha": "teacher value", "slot_beta": "teacher residual"},
             ),
-            raw_response='{"intent":"intent_alpha","slots":{"slot_alpha":"teacher value","slot_beta":"teacher residual"}}',
+            raw_response=(
+                '{"intent":"intent_alpha","slots":{"slot_alpha":"teacher value",'
+                '"slot_beta":"teacher residual"}}'
+            ),
             usage={"total_tokens": 11},
             model="fake-teacher",
             context_hash="ctx-full",
@@ -400,7 +403,12 @@ def test_run_replay_full_audits_unverified_live_residual_completion(
     assert trace["metadata"]["residual_l4_full_audit_reason"] == (
         "unverified_accepted_fields"
     )
-    assert [result["metadata"]["l4_call_kind"] for result in trace["layer_results"] if result["layer"] == "L4"] == [
+    l4_call_kinds = [
+        result["metadata"]["l4_call_kind"]
+        for result in trace["layer_results"]
+        if result["layer"] == "L4"
+    ]
+    assert l4_call_kinds == [
         "residual",
         "full",
     ]

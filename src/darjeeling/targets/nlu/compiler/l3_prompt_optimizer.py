@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from darjeeling.compiler.evolution_policy import EvolutionRoundResult, EvolutionRunPolicy
 from darjeeling.targets.nlu.layers.l3_local_slm import (
     L3LocalSLMLayer,
     L3PromptArtifact,
@@ -63,7 +64,7 @@ class L3PromptEvolutionConfig:
     timeout_s: float = 7200.0
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
-    max_agent_sessions: int = 1
+    max_rounds: int = 1
     skip_replay: bool = False
     min_accepted_accuracy: float = 0.90
     max_wrong_accept_rate: float = 0.05
@@ -142,8 +143,9 @@ def run_l3_prompt_evolution(
 ) -> dict[str, Any]:
     if config.mode != L3_PROMPT_EVOLUTION_MODE:
         raise ValueError("L3 prompt evolution mode must be agent-session")
-    if config.max_agent_sessions < 0:
-        raise ValueError("max_agent_sessions must be non-negative")
+    if config.max_rounds < 0:
+        raise ValueError("max_rounds must be non-negative")
+    policy = _l3_run_policy(config)
     teacher_traces = _teacher_visible_traces(traces)
     split = _split_l3_prompt_traces(teacher_traces)
 
@@ -194,26 +196,34 @@ def run_l3_prompt_evolution(
         else None
     )
 
-    stop_reason = "agent_session_completed"
-    agent_sessions_started = 0
-    agent_sessions_succeeded = 0
-    if config.max_agent_sessions == 0:
-        stop_reason = "agent_session_budget_exhausted"
-    else:
+    candidate_prompt_path = workspace_root / "prompt" / "l3_prompt.json"
+    candidate_prompt: L3PromptArtifact | None = None
+    candidate: dict[str, Any] | None = None
+    candidate_snapshot: str | None = None
+    round_results: list[EvolutionRoundResult] = []
+    stop_reason = "max_rounds_exhausted"
+    if config.max_rounds == 0:
+        stop_reason = "workspace_prepared"
+
+    best_candidate = baseline
+    for round_index in range(1, config.max_rounds + 1):
         protected_snapshot = _protected_l3_workspace_snapshot(workspace_root)
-        transcript_path = transcript_dir / "agent_session.jsonl"
-        report_path = candidates_dir / "agent_session_report.md"
-        agent_sessions_started = 1
-        command_results.append(
-            _run_l3_agent_session(
-                config=config,
-                workspace_root=workspace_root,
-                transcript_path=transcript_path,
-                report_path=report_path,
-            )
+        transcript_path = transcript_dir / f"round_{round_index:03d}_agent_session.jsonl"
+        report_path = candidates_dir / f"round_{round_index:03d}_agent_report.md"
+        command_result = _run_l3_agent_session(
+            config=config,
+            workspace_root=workspace_root,
+            transcript_path=transcript_path,
+            report_path=report_path,
         )
-        if command_results[-1]["return_code"] != 0:
-            stop_reason = "agent_session_failed"
+        command_results.append(command_result)
+        round_stop_reason = "round_completed"
+        scope_report: dict[str, Any] | None = None
+        candidate_ref: str | None = None
+        candidate = None
+        candidate_prompt = None
+        if command_result["return_code"] != 0:
+            round_stop_reason = "agent_session_failed"
         else:
             scope_report = _l3_workspace_scope_violation_report(
                 workspace_root=workspace_root,
@@ -226,75 +236,119 @@ def run_l3_prompt_evolution(
                         report=scope_report,
                     ),
                 )
-                stop_reason = "workspace_scope_violation"
-            else:
-                agent_sessions_succeeded = 1
+                round_stop_reason = "workspace_scope_violation"
 
-    candidate_prompt_path = workspace_root / "prompt" / "l3_prompt.json"
-    candidate_prompt: L3PromptArtifact | None = None
-    candidate: dict[str, Any] | None = None
-    candidate_snapshot: str | None = None
-    if stop_reason == "agent_session_completed":
+        if round_stop_reason == "round_completed":
+            try:
+                candidate_prompt = L3PromptArtifact.model_validate_json(
+                    candidate_prompt_path.read_text(encoding="utf-8"),
+                )
+            except ValueError as exc:
+                round_stop_reason = "candidate_prompt_invalid"
+                command_results.append(
+                    _l3_prompt_validation_command_result(
+                        workspace_root=workspace_root,
+                        error=str(exc),
+                    )
+                )
+            else:
+                snapshot_path = candidates_dir / f"round_{round_index:03d}_l3_prompt.json"
+                snapshot_path.write_text(
+                    candidate_prompt.model_dump_json(indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                candidate_snapshot = snapshot_path.relative_to(job_dir).as_posix()
+                candidate_ref = candidate_snapshot
+                if not config.skip_replay:
+                    candidate = _evaluate_l3_prompt_candidate(
+                        prompt_artifact=candidate_prompt,
+                        split=split,
+                        config=config,
+                        task_schema=task_schema,
+                        local_slm_config=local_slm_config,
+                        backend=backend,
+                        label=f"round_{round_index:03d}",
+                    )
+                    best_candidate = _best_l3_candidate(best_candidate, candidate)
+
+        status = _l3_round_status(
+            int(command_result["return_code"]),
+            round_stop_reason,
+        )
+        adoptable = bool(candidate is not None and _l3_adoption_decision(candidate)["adopted"])
+        improved = bool(candidate is not None and best_candidate is candidate)
+        round_result = EvolutionRoundResult(
+            round_index=round_index,
+            status=status,
+            candidate_ref=candidate_ref,
+            metrics={
+                "return_code": command_result["return_code"],
+                "candidate_prompt_hash": (
+                    l3_prompt_artifact_hash(candidate_prompt)
+                    if candidate_prompt is not None
+                    else None
+                ),
+                "selection_decision": _l3_selection_decision(candidate),
+                "adoption_decision": _l3_adoption_decision(candidate),
+            },
+            diagnostics={
+                "transcript": transcript_path.relative_to(job_dir).as_posix(),
+                "report": report_path.relative_to(job_dir).as_posix(),
+                "workspace_scope_violation": scope_report,
+                "candidate": _candidate_evaluation_summary(candidate),
+            },
+            improved=improved,
+            adoptable=adoptable,
+            stop_reason=None if status == "completed" else round_stop_reason,
+        )
+        round_results.append(round_result)
+        (candidates_dir / f"round_{round_index:03d}_result.json").write_text(
+            json.dumps(round_result.to_payload(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if status != "completed":
+            stop_reason = round_stop_reason
+            break
+
+    if round_results:
+        final_result = round_results[-1]
+        if final_result.status != "completed":
+            stop_reason = final_result.stop_reason or "round_failed"
+    rounds_completed = sum(1 for result in round_results if result.status == "completed")
+
+    if candidate_prompt is None and candidate_prompt_path.exists():
         try:
             candidate_prompt = L3PromptArtifact.model_validate_json(
                 candidate_prompt_path.read_text(encoding="utf-8"),
             )
-        except ValueError as exc:
-            stop_reason = "candidate_prompt_invalid"
-            command_results.append(
-                _l3_prompt_validation_command_result(
-                    workspace_root=workspace_root,
-                    error=str(exc),
-                )
-            )
-        else:
-            snapshot_path = candidates_dir / "candidate_l3_prompt.json"
-            snapshot_path.write_text(
-                candidate_prompt.model_dump_json(indent=2) + "\n",
-                encoding="utf-8",
-            )
-            candidate_snapshot = snapshot_path.relative_to(job_dir).as_posix()
-            if not config.skip_replay:
-                candidate = _evaluate_l3_prompt_candidate(
-                    prompt_artifact=candidate_prompt,
-                    split=split,
-                    config=config,
-                    task_schema=task_schema,
-                    local_slm_config=local_slm_config,
-                    backend=backend,
-                    label="candidate",
-                )
+        except ValueError:
+            candidate_prompt = None
 
     summary = {
         "schema_version": "l3-prompt-evolution-v1",
         "created_at": datetime.now(UTC).isoformat(),
         "mode": config.mode,
+        "max_rounds": config.max_rounds,
+        "rounds_completed": rounds_completed,
+        "stop_reason": stop_reason,
+        "round_policy": _l3_run_policy_payload(policy),
+        "round_results": [result.to_payload() for result in round_results],
         "workspace": str(workspace_root),
         "data_split": {name: len(rows) for name, rows in split.items()},
-        "agent_session": {
-            "schema_version": "l3-agent-session-v1",
-            "session_scope": "single long-running L4 agent session",
-            "internal_loop_control": (
-                "agent_decides_prompt_context_guard_eval_bench_stop"
-            ),
-            "agent_sessions_started": agent_sessions_started,
-            "agent_sessions_succeeded": agent_sessions_succeeded,
-            "max_agent_sessions": config.max_agent_sessions,
-        },
         "workspace_scope_policy": _l3_workspace_scope_policy(),
         "private_data_scope": (
             "selection and promotion holdouts are stored outside the agent workspace"
         ),
         "skip_replay": config.skip_replay,
-        "stop_reason": stop_reason,
         "baseline": _candidate_evaluation_summary(baseline),
         "candidate": _candidate_evaluation_summary(candidate),
+        "best_candidate": _candidate_evaluation_summary(best_candidate),
         "candidate_prompt_snapshot": candidate_snapshot,
         "candidate_prompt_hash": (
             l3_prompt_artifact_hash(candidate_prompt) if candidate_prompt is not None else None
         ),
-        "selection_decision": _l3_selection_decision(candidate),
-        "adoption_decision": _l3_adoption_decision(candidate),
+        "selection_decision": _l3_selection_decision(best_candidate),
+        "adoption_decision": _l3_adoption_decision(best_candidate),
     }
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
@@ -615,7 +669,57 @@ def _l3_adoption_decision(candidate: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _best_l3_candidate(
+    current: dict[str, Any] | None,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    if current is None:
+        return candidate
+    return candidate if _l3_candidate_score(candidate) > _l3_candidate_score(current) else current
+
+
+def _l3_candidate_score(candidate: dict[str, Any]) -> tuple[int, int, float, float]:
+    visible = candidate["visible_validation"]
+    selected = int(_l3_selection_decision(candidate)["selected"])
+    adopted = int(_l3_adoption_decision(candidate)["adopted"])
+    coverage = float(visible.get("coverage") or 0.0)
+    accuracy = float(visible.get("accepted_accuracy") or 0.0)
+    return (adopted, selected, accuracy, coverage)
+
+
+def _l3_run_policy(config: L3PromptEvolutionConfig) -> EvolutionRunPolicy:
+    return EvolutionRunPolicy(
+        max_rounds=config.max_rounds,
+        round_timeout_s=config.timeout_s,
+        patience_rounds=0,
+        round_executor=config.mode,
+    )
+
+
+def _l3_run_policy_payload(policy: EvolutionRunPolicy) -> dict[str, Any]:
+    return {
+        "schema_version": "l3-prompt-round-policy-v1",
+        "max_rounds": policy.max_rounds,
+        "round_timeout_s": policy.round_timeout_s,
+        "patience_rounds": policy.patience_rounds,
+        "round_executor": policy.round_executor,
+    }
+
+
+def _l3_round_status(return_code: int, stop_reason: str) -> str:
+    if stop_reason == "workspace_scope_violation":
+        return "scope_violation"
+    if stop_reason == "candidate_prompt_invalid":
+        return "validation_failed"
+    if return_code == 0:
+        return "completed"
+    if return_code == 124:
+        return "timeout"
+    return "failed"
+
+
 def _l3_objective_payload(config: L3PromptEvolutionConfig) -> dict[str, Any]:
+    policy = _l3_run_policy(config)
     return {
         "schema_version": "l3-prompt-objective-v1",
         "primary_objective": "increase safe local SLM would-accepts without wrong accepts",
@@ -643,10 +747,11 @@ def _l3_objective_payload(config: L3PromptEvolutionConfig) -> dict[str, Any]:
             "treating visible replay success as adoption",
         ],
         "agent_session_policy": {
-            "session_closure": "one L4 agent session per prompt-evolve job",
+            "session_closure": "one L4 agent session per prompt-evolution round",
             "internal_loop_control": "agent_decides_prompt_context_guard_eval_bench_stop",
             "adoption_authority": "outer_private_gates_and_outer_replay",
         },
+        "round_policy": _l3_run_policy_payload(policy),
     }
 
 
@@ -660,8 +765,8 @@ def _l3_program_text() -> str:
             "`runs/` is scratch output; it is not promoted.",
             "Do not modify `contexts/`, `tools/`, `program.md`, or `workspace_manifest.json`.",
             "",
-            "This is one autonomous L4 agent session. Decide how many times to inspect",
-            "context, edit prompt/context packing/routing guard files, validate, run",
+            "This round is one autonomous L4 agent session. Decide how many times to",
+            "inspect context, edit prompt/context packing/routing guard files, validate, run",
             "prompt replay or local SLM bench when available, debug, and stop.",
             "Available tools include prompt structure validation, visible prompt eval,",
             "local SLM bench, and latency/cost estimation. Tool outputs belong under",

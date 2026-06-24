@@ -176,6 +176,7 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
             job_dir=tmp_path / "job",
             codex_command=str(fake_codex),
             codex_model=None,
+            max_rounds=2,
             prompt_version="candidate-v1",
         ),
         traces=_beta_traces(10),
@@ -185,9 +186,9 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
     )
 
     workspace = tmp_path / "job" / "workspace" / "l3_prompt"
-    transcript = (tmp_path / "job" / "transcripts" / "agent_session.jsonl").read_text(
-        encoding="utf-8"
-    )
+    transcript = (
+        tmp_path / "job" / "transcripts" / "round_001_agent_session.jsonl"
+    ).read_text(encoding="utf-8")
     commands = [
         json.loads(line)
         for line in (tmp_path / "job" / "commands.jsonl").read_text(encoding="utf-8").splitlines()
@@ -195,9 +196,17 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
     ]
 
     assert summary["mode"] == "agent-session"
-    assert summary["stop_reason"] == "agent_session_completed"
-    assert summary["agent_session"]["agent_sessions_started"] == 1
-    assert summary["agent_session"]["agent_sessions_succeeded"] == 1
+    assert summary["max_rounds"] == 2
+    assert summary["rounds_completed"] == 2
+    assert summary["stop_reason"] == "max_rounds_exhausted"
+    assert summary["round_policy"]["max_rounds"] == 2
+    assert [result["status"] for result in summary["round_results"]] == [
+        "completed",
+        "completed",
+    ]
+    assert "budget_policy" not in summary
+    assert "agent_budget" not in summary
+    assert "evidence_policy" not in summary
     assert summary["selection_decision"]["selected"] is True
     assert summary["adoption_decision"]["adopted"] is True
     assert summary["candidate"]["visible_validation"]["passes_gate"] is True
@@ -214,6 +223,7 @@ def test_l3_prompt_evolution_agent_session_replays_private_gates(
     assert (tmp_path / "job" / "private" / "selection_holdout.jsonl").exists()
     assert (tmp_path / "job" / "private" / "promotion_holdout.jsonl").exists()
     assert '"autonomous": true' in transcript
+    assert len(commands) == 2
     assert Path(commands[0]["command"][commands[0]["command"].index("--cd") + 1]) == (
         workspace.resolve()
     )
@@ -291,10 +301,33 @@ def test_l3_prompt_evolution_agent_session_rejects_protected_context_edits(
     ]
 
     assert summary["stop_reason"] == "workspace_scope_violation"
-    assert summary["agent_session"]["agent_sessions_succeeded"] == 0
+    assert summary["round_results"][0]["status"] == "scope_violation"
     assert summary["selection_decision"]["selected"] is False
     assert commands[-1]["command"] == ["l3-workspace-scope-check"]
     assert "contexts/train.jsonl" in commands[-1]["stderr"]
+
+
+def test_l3_prompt_evolution_zero_rounds_prepares_workspace(
+    tmp_path: Path,
+) -> None:
+    summary = run_l3_prompt_evolution(
+        config=L3PromptEvolutionConfig(
+            job_dir=tmp_path / "job",
+            max_rounds=0,
+            skip_replay=True,
+        ),
+        traces=_beta_traces(10),
+        task_schema=TaskSchema(intent_names=["intent_beta"], slot_names=[]),
+        local_slm_config=LocalSLMConfig(mode="shadow"),
+    )
+    commands_text = (tmp_path / "job" / "commands.jsonl").read_text(encoding="utf-8")
+
+    assert summary["stop_reason"] == "workspace_prepared"
+    assert summary["max_rounds"] == 0
+    assert summary["rounds_completed"] == 0
+    assert summary["round_results"] == []
+    assert summary["round_policy"]["max_rounds"] == 0
+    assert commands_text == ""
 
 
 def _l3_shadow_trace(
@@ -338,4 +371,3 @@ def _beta_traces(count: int) -> list[TraceRecord]:
         )
         for index in range(count)
     ]
-

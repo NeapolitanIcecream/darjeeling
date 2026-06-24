@@ -110,6 +110,7 @@ class Settings(BaseSettings):
         default="disabled",
         validation_alias="L1_AGENT_MODE",
     )
+    l1_agent_max_rounds: int = Field(default=1, ge=1, validation_alias="L1_AGENT_MAX_ROUNDS")
     l1_agent_codex_command: str = Field(default="codex", validation_alias="L1_AGENT_CODEX_COMMAND")
     l1_agent_model: str | None = Field(default=None, validation_alias="L1_AGENT_MODEL")
     l1_agent_timeout_s: float = Field(default=900.0, validation_alias="L1_AGENT_TIMEOUT_S")
