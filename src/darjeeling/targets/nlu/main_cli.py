@@ -14,7 +14,6 @@ import typer
 from rich.console import Console
 
 from darjeeling.artifacts.store import ArtifactManifest, ArtifactStore
-from darjeeling.compiler.evolution_policy import resolve_max_agent_rounds
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.targets import registry as target_registry
 from darjeeling.targets.nlu.adapters.clinc150 import prepare_clinc150_dataset
@@ -985,7 +984,6 @@ def clinc150_l2_autoresearch(
         str,
         typer.Option(help="Target-evolution budget profile."),
     ] = "fixed-inner",
-    max_agent_rounds: Annotated[int | None, typer.Option(min=0)] = None,
     timeout_s: Annotated[float | None, typer.Option(min=0.1)] = None,
     local_search_trials: Annotated[int, typer.Option(min=1)] = 32,
 ) -> None:
@@ -1006,7 +1004,6 @@ def clinc150_l2_autoresearch(
         mode=mode,
         rounds=rounds,
         budget_profile=budget_profile,
-        max_agent_rounds=max_agent_rounds,
         timeout_s=timeout_s,
         local_search_trials=local_search_trials,
         codex_command=settings.l2_target_agent_codex_command,
@@ -1316,16 +1313,10 @@ def l3_prompt_evolve(
         int | None,
         typer.Option(min=1, help="Optional prefix of traces to use for the prompt split."),
     ] = None,
-    max_agent_sessions: Annotated[
+    max_rounds: Annotated[
         int,
-        typer.Option(min=0, help="Maximum live agent sessions; 0 prepares workspace only."),
+        typer.Option(min=0, help="Maximum prompt-evolution rounds; 0 prepares workspace only."),
     ] = 1,
-    budget_profile: Annotated[
-        str,
-        typer.Option(
-            help="Outer budget profile: standard, fixed-inner, or smoke.",
-        ),
-    ] = "standard",
     skip_replay: Annotated[
         bool,
         typer.Option(help="Skip local SLM replay; use only for wiring smoke/no-model runs."),
@@ -1339,10 +1330,8 @@ def l3_prompt_evolve(
         typer.Option(min=0.0, max=1.0, help="Maximum replay wrong accept rate gate."),
     ] = 0.05,
 ) -> None:
-    """Run one L3 prompt-evolution agent session over an isolated workspace."""
+    """Run L3 prompt-evolution rounds over an isolated workspace."""
 
-    if budget_profile not in {"standard", "fixed-inner", "smoke"}:
-        raise typer.BadParameter("budget_profile must be standard, fixed-inner, or smoke")
     settings = _load_cli_settings()
     trace_records = read_traces(traces)
     if max_traces is not None:
@@ -1355,8 +1344,7 @@ def l3_prompt_evolve(
             timeout_s=settings.l3_agent_timeout_s,
             sandbox=settings.l3_agent_sandbox,
             approval_policy=settings.l3_agent_approval_policy,
-            max_agent_sessions=max_agent_sessions,
-            budget_profile=budget_profile,  # type: ignore[arg-type]
+            max_rounds=max_rounds,
             skip_replay=skip_replay,
             min_accepted_accuracy=min_accepted_accuracy,
             max_wrong_accept_rate=max_wrong_accept_rate,
@@ -1697,11 +1685,11 @@ def l2_target_evolve(
             ),
         ),
     ] = None,
-    inner_patience_rounds: Annotated[
+    patience_rounds: Annotated[
         int | None,
         typer.Option(
             min=0,
-            help="Stop after this many non-improving inner-validation rounds; 0 disables.",
+            help="Stop after this many non-improving validation rounds; 0 disables.",
         ),
     ] = None,
     stop_on_selection_gate: Annotated[
@@ -1709,13 +1697,13 @@ def l2_target_evolve(
         typer.Option(
             help=(
                 "Opt in to stopping when the private selection holdout gate passes; "
-                "default keeps spending the requested inner budget."
+                "default keeps spending the requested evolution rounds."
             ),
         ),
     ] = False,
     timeout_s: Annotated[
         float | None,
-        typer.Option(min=0.1, help="Optional per-agent-round timeout override in seconds."),
+        typer.Option(min=0.1, help="Optional per-round timeout override in seconds."),
     ] = None,
     local_search_trials: Annotated[
         int | None,
@@ -1736,17 +1724,6 @@ def l2_target_evolve(
             help=(
                 "Re-rank this many top local-search trials with visible cross-audit. "
                 "Defaults are profile-specific; 0 disables."
-            ),
-        ),
-    ] = None,
-    max_agent_rounds: Annotated[
-        int | None,
-        typer.Option(
-            min=0,
-            help=(
-                "Maximum live agent launches. agent-session defaults to 1; "
-                "codex-cli defaults are profile-specific; 0 prepares/evaluates "
-                "the workspace without launching Codex."
             ),
         ),
     ] = None,
@@ -1773,18 +1750,13 @@ def l2_target_evolve(
     resolved_budget_profile: L2TargetBudgetProfile = budget_profile  # type: ignore[assignment]
     resolved_split_policy: L2TargetSplitPolicy = split_policy  # type: ignore[assignment]
     resolved_target_scope: L2TargetScope = target_scope  # type: ignore[assignment]
-    resolved_rounds, resolved_inner_patience, resolved_local_search_trials = (
+    resolved_rounds, resolved_patience, resolved_local_search_trials = (
         _resolve_l2_target_budget(
             budget_profile=resolved_budget_profile,
             rounds=rounds,
-            inner_patience_rounds=inner_patience_rounds,
+            patience_rounds=patience_rounds,
             local_search_trials=local_search_trials,
         )
-    )
-    resolved_max_agent_rounds = _resolve_l2_target_agent_rounds(
-        mode=evolution_mode,
-        budget_profile=resolved_budget_profile,
-        max_agent_rounds=max_agent_rounds,
     )
     resolved_visible_validation_folds = _resolve_l2_target_visible_validation_folds(
         budget_profile=resolved_budget_profile,
@@ -1825,7 +1797,6 @@ def l2_target_evolve(
             visible_validation_folds=resolved_visible_validation_folds,
             visible_validation_ratio=visible_validation_ratio,
             visible_cross_audit_folds=resolved_visible_cross_audit_folds,
-            max_agent_rounds=resolved_max_agent_rounds,
             sandbox=settings.l2_target_agent_sandbox,
             approval_policy=settings.l2_target_agent_approval_policy,
             ignore_user_config=settings.l2_target_agent_ignore_user_config,
@@ -1833,7 +1804,7 @@ def l2_target_evolve(
             ephemeral=settings.l2_target_agent_ephemeral,
             min_accepted_accuracy=settings.l2_min_guarded_accuracy,
             max_wrong_accept_rate=settings.l2_max_wrong_accept_rate,
-            inner_patience_rounds=resolved_inner_patience,
+            patience_rounds=resolved_patience,
             stop_on_selection_gate=stop_on_selection_gate,
         ),
         traces=traces_to_teacher_view(trace_records),
@@ -1845,46 +1816,29 @@ def _resolve_l2_target_budget(
     *,
     budget_profile: L2TargetBudgetProfile,
     rounds: int | None,
-    inner_patience_rounds: int | None,
+    patience_rounds: int | None,
     local_search_trials: int | None,
 ) -> tuple[int, int, int]:
     if budget_profile == "standard":
         default_rounds = DEFAULT_TARGET_EVOLVE_ROUNDS
-        default_inner_patience = DEFAULT_TARGET_INNER_PATIENCE_ROUNDS
+        default_patience = DEFAULT_TARGET_INNER_PATIENCE_ROUNDS
         default_local_search_trials = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS
     elif budget_profile == "fixed-inner":
         default_rounds = 48
-        default_inner_patience = 0
+        default_patience = 0
         default_local_search_trials = 32
     else:
         default_rounds = 1
-        default_inner_patience = 0
+        default_patience = 0
         default_local_search_trials = 2
     return (
         rounds if rounds is not None else default_rounds,
-        (
-            inner_patience_rounds
-            if inner_patience_rounds is not None
-            else default_inner_patience
-        ),
+        patience_rounds if patience_rounds is not None else default_patience,
         (
             local_search_trials
             if local_search_trials is not None
             else default_local_search_trials
         ),
-    )
-
-
-def _resolve_l2_target_agent_rounds(
-    *,
-    mode: L2TargetEvolutionMode,
-    budget_profile: L2TargetBudgetProfile,
-    max_agent_rounds: int | None,
-) -> int | None:
-    return resolve_max_agent_rounds(
-        mode=mode,
-        budget_profile=budget_profile,
-        max_agent_rounds=max_agent_rounds,
     )
 
 
@@ -2056,15 +2010,13 @@ def _promote_l2_target_run(
             "l2_target_runtime_promoted": True,
             "l2_target_inner_adopted": inner_adopted,
             "l2_target_staged_for_outer_replay": not inner_adopted,
-            "l2_target_requires_outer_replay": True,
             "l2_target_source_run": str(target_run),
             "l2_target_adopted_round": selected_round if inner_adopted else None,
             "l2_target_staged_round": selected_round,
             "l2_target_mode": summary.get("mode"),
             "l2_target_data_split": summary.get("data_split"),
             "l2_target_data_split_policy": summary.get("data_split_policy"),
-            "l2_target_loop_cadence": summary.get("loop_cadence"),
-            "l2_target_agent_budget": summary.get("agent_budget"),
+            "l2_target_round_policy": summary.get("round_policy"),
             "l2_target_code_policy": summary.get("target_code_policy"),
             "l2_target_workspace_scope_policy": summary.get("workspace_scope_policy"),
             "l2_target_private_holdout_evidence": summary.get(

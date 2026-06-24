@@ -10,23 +10,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
-from darjeeling.compiler.evolution_policy import (
-    EvolutionEvidenceRequirements,
-    OuterEvolutionPolicy,
-    resolve_max_agent_rounds,
-)
-from darjeeling.compiler.evolution_policy import (
-    agent_budget_payload as outer_agent_budget_payload,
-)
-from darjeeling.compiler.evolution_policy import (
-    budget_policy_payload as outer_budget_policy_payload,
-)
-from darjeeling.compiler.evolution_policy import (
-    evidence_policy_payload as outer_evidence_policy_payload,
-)
-from darjeeling.compiler.evolution_policy import (
-    profile_guidance_payload as outer_profile_guidance_payload,
-)
 from darjeeling.targets.nlu.layers.l2_student import (
     L2StudentConfig,
     train_l2_student,
@@ -59,23 +42,6 @@ DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K = 4
 MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD = 2
 SLOT_CUE_PROBE_SPECS_FILE = "slot_cue_probes.json"
 
-_L2_TARGET_PROFILE_GUIDANCE: dict[L2TargetBudgetProfile, str] = {
-    "fixed-inner": (
-        "Use this profile for the main L2 target-evolution research loop; "
-        "it is intentionally decoupled from outer replay cadence."
-    ),
-    "smoke": (
-        "Use this profile only to check wiring; do not treat its result as "
-        "evidence about L2 evolve quality."
-    ),
-    "standard": (
-        "The standard profile is cost-capped. For codex-cli it may launch "
-        "only a few live agent rounds, so failure here is not evidence that "
-        "L2 target evolution has been exhausted."
-    ),
-}
-
-
 @dataclass(frozen=True)
 class L2TargetEvolutionConfig:
     source_repo_dir: Path
@@ -96,7 +62,6 @@ class L2TargetEvolutionConfig:
     visible_validation_folds: int = 1
     visible_validation_ratio: float | None = None
     visible_cross_audit_folds: int = 0
-    max_agent_rounds: int | None = None
     initial_target_config: dict[str, Any] | None = None
     target_context: dict[str, Any] | None = None
     sandbox: str = "workspace-write"
@@ -106,7 +71,7 @@ class L2TargetEvolutionConfig:
     ephemeral: bool = True
     min_accepted_accuracy: float = 0.93
     max_wrong_accept_rate: float = 0.05
-    inner_patience_rounds: int = DEFAULT_TARGET_INNER_PATIENCE_ROUNDS
+    patience_rounds: int = DEFAULT_TARGET_INNER_PATIENCE_ROUNDS
     stop_on_selection_gate: bool = False
 
 
@@ -117,8 +82,8 @@ def run_l2_target_evolution(
 ) -> dict[str, Any]:
     if config.rounds < 1:
         raise ValueError("rounds must be at least 1")
-    if config.inner_patience_rounds < 0:
-        raise ValueError("inner_patience_rounds must be non-negative")
+    if config.patience_rounds < 0:
+        raise ValueError("patience_rounds must be non-negative")
     if config.local_search_trials < 1:
         raise ValueError("local_search_trials must be at least 1")
     if config.local_search_cross_audit_top_k < 0:
@@ -131,13 +96,10 @@ def run_l2_target_evolution(
         raise ValueError("visible_validation_ratio must be greater than 0 and less than 0.80")
     if config.visible_cross_audit_folds == 1 or config.visible_cross_audit_folds < 0:
         raise ValueError("visible_cross_audit_folds must be 0 or at least 2")
-    if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
-        raise ValueError("max_agent_rounds must be non-negative")
     if config.mode not in {"dry-run", "local-search", "codex-cli", "agent-session"}:
         raise ValueError("mode must be dry-run, local-search, codex-cli, or agent-session")
     if config.target_scope not in {"teacher_train", "lower_miss"}:
         raise ValueError("target_scope must be teacher_train or lower_miss")
-    max_agent_rounds = _effective_max_agent_rounds(config)
     job_dir = config.job_dir
     workspace_root = job_dir / "workspace" / "l2_target"
     rounds_dir = job_dir / "rounds"
@@ -200,9 +162,7 @@ def run_l2_target_evolution(
     round_results: list[dict[str, Any]] = []
     best_inner = baseline["inner_validation"]
     no_inner_improvement_rounds = 0
-    stop_reason = "round_budget_exhausted"
-    agent_rounds_started = 0
-    agent_rounds_succeeded = 0
+    stop_reason = "max_rounds_exhausted"
     if (
         config.stop_on_selection_gate
         and _passes_visible_selection_inputs(baseline)
@@ -211,7 +171,7 @@ def run_l2_target_evolution(
         stop_reason = "baseline_selection_gate_passed"
 
     for round_index in range(1, config.rounds + 1):
-        if stop_reason != "round_budget_exhausted":
+        if stop_reason != "max_rounds_exhausted":
             break
         _write_target_state_files(
             workspace_root=workspace_root,
@@ -222,8 +182,6 @@ def run_l2_target_evolution(
             baseline=baseline,
             round_results=round_results,
             no_inner_improvement_rounds=no_inner_improvement_rounds,
-            agent_rounds_started=agent_rounds_started,
-            agent_rounds_succeeded=agent_rounds_succeeded,
         )
         protected_snapshot = _protected_workspace_snapshot(workspace_root)
         if config.mode == "dry-run":
@@ -304,15 +262,8 @@ def run_l2_target_evolution(
                 stop_reason = "local_search_failed"
                 break
         elif config.mode == "agent-session":
-            if (
-                max_agent_rounds is not None
-                and agent_rounds_started >= max_agent_rounds
-            ):
-                stop_reason = "agent_session_budget_exhausted"
-                break
-            transcript_path = transcript_dir / "agent_session.jsonl"
-            report_path = rounds_dir / "agent_session_report.md"
-            agent_rounds_started += 1
+            transcript_path = transcript_dir / f"round_{round_index:03d}_agent_session.jsonl"
+            report_path = rounds_dir / f"round_{round_index:03d}_agent_session_report.md"
             command_results.append(
                 _run_agent_session(
                     config=config,
@@ -338,18 +289,10 @@ def run_l2_target_evolution(
                 )
                 stop_reason = "workspace_scope_violation"
                 break
-            agent_rounds_succeeded += 1
             local_search_report = None
         else:
-            if (
-                max_agent_rounds is not None
-                and agent_rounds_started >= max_agent_rounds
-            ):
-                stop_reason = "agent_round_budget_exhausted"
-                break
             transcript_path = transcript_dir / f"round_{round_index:03d}.jsonl"
             report_path = rounds_dir / f"round_{round_index:03d}_agent_report.md"
-            agent_rounds_started += 1
             command_results.append(
                 _run_codex_round(
                     config=config,
@@ -376,7 +319,6 @@ def run_l2_target_evolution(
                 )
                 stop_reason = "workspace_scope_violation"
                 break
-            agent_rounds_succeeded += 1
             local_search_report = None
 
         candidate = _evaluate_target_candidate(
@@ -396,15 +338,20 @@ def run_l2_target_evolution(
             no_inner_improvement_rounds = 0
         else:
             no_inner_improvement_rounds += 1
+        target_snapshot = _snapshot_target_dir(
+            workspace_root=workspace_root,
+            rounds_dir=rounds_dir,
+            job_dir=job_dir,
+            round_index=round_index,
+        )
         round_payload = {
             "round": round_index,
-            "target_snapshot": _snapshot_target_dir(
-                workspace_root=workspace_root,
-                rounds_dir=rounds_dir,
-                job_dir=job_dir,
-                round_index=round_index,
-            ),
+            "round_index": round_index,
+            "status": "completed",
+            "target_snapshot": target_snapshot,
+            "candidate_ref": target_snapshot,
             "inner_improved": inner_improved,
+            "improved": inner_improved,
             "passes_visible_support_gate": visible_support_gate["passes_gate"],
             "visible_support_gate": visible_support_gate,
             "passes_train_audit_safety_gate": train_audit_safety_passed,
@@ -432,6 +379,7 @@ def run_l2_target_evolution(
             ),
             "promotion_holdout": promotion_result,
         }
+        round_payload["adoptable"] = _passes_adoption_gate(round_payload)
         if local_search_report is not None:
             round_payload["local_search"] = _visible_local_search_summary(
                 local_search_report,
@@ -439,7 +387,7 @@ def run_l2_target_evolution(
         if config.mode == "agent-session":
             round_payload["agent_session"] = {
                 "schema_version": "l2-target-agent-session-v1",
-                "session_scope": "single long-running L4 agent session",
+                "session_scope": "one L4 agent session for this evolution round",
                 "internal_loop_control": "agent_decides_edit_evaluate_search_stop",
                 "tool_policy": (
                     "agent may call visible tools/evaluate.py and tools/search_config.py"
@@ -453,9 +401,6 @@ def run_l2_target_evolution(
             encoding="utf-8",
         )
         round_results.append(round_payload)
-        if config.mode == "agent-session":
-            stop_reason = "agent_session_completed"
-            break
         if (
             config.stop_on_selection_gate
             and _passes_visible_selection_inputs(candidate)
@@ -465,10 +410,10 @@ def run_l2_target_evolution(
             break
         if (
             round_index < config.rounds
-            and config.inner_patience_rounds
-            and no_inner_improvement_rounds >= config.inner_patience_rounds
+            and config.patience_rounds
+            and no_inner_improvement_rounds >= config.patience_rounds
         ):
-            stop_reason = "inner_validation_patience_exhausted"
+            stop_reason = "validation_patience_exhausted"
             break
 
     _write_target_state_files(
@@ -480,43 +425,16 @@ def run_l2_target_evolution(
         baseline=baseline,
         round_results=round_results,
         no_inner_improvement_rounds=no_inner_improvement_rounds,
-        agent_rounds_started=agent_rounds_started,
-        agent_rounds_succeeded=agent_rounds_succeeded,
     )
 
     summary = {
         "schema_version": "l2-target-evolution-v1",
         "created_at": datetime.now(UTC).isoformat(),
         "mode": config.mode,
-        "rounds_requested": config.rounds,
+        "max_rounds": config.rounds,
         "rounds_completed": len(round_results),
         "stop_reason": stop_reason,
-        "budget_policy": _target_budget_policy_payload(
-            config,
-            max_agent_rounds=max_agent_rounds,
-        ),
-        "evidence_policy": _target_evidence_policy_payload(
-            config,
-            max_agent_rounds=max_agent_rounds,
-            rounds_completed=len(round_results),
-            stop_reason=stop_reason,
-            teacher_labeled_traces=target_teacher_labeled_trace_count,
-        ),
-        "agent_budget": _agent_budget_payload(
-            config=config,
-            agent_rounds_started=agent_rounds_started,
-            agent_rounds_succeeded=agent_rounds_succeeded,
-        ),
-        "loop_cadence": {
-            "kind": "fixed_trace_snapshot_inner_loop",
-            "outer_replay_cadence_bound": False,
-            "teacher_labeled_traces": teacher_labeled_trace_count,
-            "scoped_teacher_labeled_traces": target_teacher_labeled_trace_count,
-            "note": (
-                "target rounds reuse this fixed split; collecting another stream prefix "
-                "is not part of the inner loop"
-            ),
-        },
+        "round_policy": _target_round_policy_payload(config),
         "workspace": str(workspace_root),
         "target_scope": target_scope_payload,
         "data_split": {key: len(value) for key, value in split.items()},
@@ -527,6 +445,7 @@ def run_l2_target_evolution(
         ),
         "baseline": baseline,
         "rounds": round_results,
+        "round_results": [_round_result_summary(round_result) for round_result in round_results],
         "best_round": _best_round(round_results),
         "best_selection_round": _best_selection_round(round_results),
         "best_adoptable_round": _best_adoptable_round(round_results),
@@ -2658,8 +2577,6 @@ def _write_target_state_files(
     baseline: dict[str, Any],
     round_results: list[dict[str, Any]],
     no_inner_improvement_rounds: int,
-    agent_rounds_started: int,
-    agent_rounds_succeeded: int,
 ) -> None:
     data_dir = workspace_root / "data"
     visible_slot_cue_summary = _visible_slot_cue_summary(workspace_root)
@@ -2672,27 +2589,17 @@ def _write_target_state_files(
         "schema_version": "l2-target-round-state-v1",
         "state_kind": state_kind,
         "next_round": round_index,
-        "rounds_requested": config.rounds,
-        "no_inner_improvement_rounds": no_inner_improvement_rounds,
+        "max_rounds": config.rounds,
+        "no_improvement_rounds": no_inner_improvement_rounds,
         "target_scope": target_scope,
-        "budget_policy": _target_budget_policy_payload(config),
-        "evidence_policy": _target_evidence_policy_payload(
-            config,
-            rounds_completed=len(round_results),
-            teacher_labeled_traces=target_scope["scoped_teacher_labeled_traces"],
-        ),
-        "agent_budget": _agent_budget_payload(
-            config=config,
-            agent_rounds_started=agent_rounds_started,
-            agent_rounds_succeeded=agent_rounds_succeeded,
-        ),
+        "round_policy": _target_round_policy_payload(config),
         "candidate_selection_gate": (
             "visible validation gate, visible support gate, visible train-audit "
             "safety gate, and private selection holdout gate must all pass"
         ),
         "early_stop_policy": (
             "private selection is evaluated for outer candidate selection, but does not stop "
-            "the inner loop unless stop_on_selection_gate is explicitly enabled"
+            "the round loop unless stop_on_selection_gate is explicitly enabled"
         ),
         "baseline_inner_validation": _visible_metric_summary(baseline["inner_validation"]),
         "baseline_train_audit": _visible_metric_summary(_candidate_train_audit(baseline)),
@@ -2743,136 +2650,26 @@ def _write_target_state_files(
     (data_dir / "commands.md").write_text(_target_commands_text(), encoding="utf-8")
 
 
-def _agent_budget_payload(
-    *,
+def _target_round_policy_payload(
     config: L2TargetEvolutionConfig,
-    agent_rounds_started: int,
-    agent_rounds_succeeded: int,
 ) -> dict[str, Any]:
-    max_rounds = _effective_max_agent_rounds(config)
-    return outer_agent_budget_payload(
-        _outer_policy(config),
-        schema_version="l2-target-agent-budget-v1",
-        agent_rounds_started=agent_rounds_started,
-        agent_rounds_succeeded=agent_rounds_succeeded,
-        max_agent_rounds=max_rounds,
-    )
-
-
-def _outer_policy(config: L2TargetEvolutionConfig) -> OuterEvolutionPolicy:
-    return OuterEvolutionPolicy(
-        layer_name="L2",
-        mode=config.mode,
-        rounds_requested=config.rounds,
-        budget_profile=config.budget_profile,
-        timeout_s=config.timeout_s,
-        max_agent_rounds=config.max_agent_rounds,
-        inner_patience_rounds=config.inner_patience_rounds,
-        stop_on_selection_gate=config.stop_on_selection_gate,
-        codex_command=config.codex_command,
-        codex_model=config.codex_model,
-        local_search_consumes_llm=False,
-        prompt_strategy=(
-            "stable short stdin prompt; dynamic target context stays in workspace files"
-        ),
-        cost_policy=(
-            "live agent modes consume GPT budget; local-search/tool calls are cheap "
-            "deterministic/Optuna work and do not count as live agent launches"
-        ),
-    )
-
-
-def _target_budget_policy_payload(
-    config: L2TargetEvolutionConfig,
-    *,
-    max_agent_rounds: int | None = None,
-) -> dict[str, Any]:
-    resolved_max_agent_rounds = (
-        _effective_max_agent_rounds(config)
-        if max_agent_rounds is None
-        else max_agent_rounds
-    )
-    payload = outer_budget_policy_payload(
-        _outer_policy(config),
-        profile_guidance_schema_version="l2-target-budget-profile-intent-v1",
-        max_agent_rounds=resolved_max_agent_rounds,
-        guidance_by_profile=_L2_TARGET_PROFILE_GUIDANCE,
-        profile_guidance_extra={
-            "rounds_are_l2_train_eval_iterations": config.mode != "agent-session",
-        },
-        extra={
-            "local_search_trials": config.local_search_trials,
-            "local_search_timeout_s": config.local_search_timeout_s,
-            "local_search_space": config.local_search_space,
-            "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
-            "visible_validation_folds": config.visible_validation_folds,
-            "visible_validation_ratio": config.visible_validation_ratio,
-            "visible_cross_audit_folds": config.visible_cross_audit_folds,
-        },
-    )
-    payload["profile_intent"] = payload.pop("profile_guidance")
-    return payload
-
-
-def _target_budget_profile_intent_payload(
-    config: L2TargetEvolutionConfig,
-    *,
-    max_agent_rounds: int | None,
-) -> dict[str, Any]:
-    return outer_profile_guidance_payload(
-        _outer_policy(config),
-        schema_version="l2-target-budget-profile-intent-v1",
-        max_agent_rounds=max_agent_rounds,
-        guidance_by_profile=_L2_TARGET_PROFILE_GUIDANCE,
-        extra={"rounds_are_l2_train_eval_iterations": config.mode != "agent-session"},
-    )
-
-
-def _target_evidence_policy_payload(
-    config: L2TargetEvolutionConfig,
-    *,
-    max_agent_rounds: int | None = None,
-    rounds_completed: int | None = None,
-    stop_reason: str | None = None,
-    teacher_labeled_traces: int | None = None,
-) -> dict[str, Any]:
-    resolved_max_agent_rounds = (
-        _effective_max_agent_rounds(config)
-        if max_agent_rounds is None
-        else max_agent_rounds
-    )
-    return outer_evidence_policy_payload(
-        _outer_policy(config),
-        schema_version="l2-target-evidence-policy-v1",
-        requirements=EvolutionEvidenceRequirements(
-            min_rounds_requested=16,
-            min_codex_cli_agent_rounds=8,
-            min_teacher_labeled_traces=500,
-            requires_private_selection_gate=True,
-            requires_private_promotion_gate=True,
-            requires_outer_replay=True,
-        ),
-        rounds_completed=rounds_completed,
-        stop_reason=stop_reason,
-        teacher_labeled_traces=teacher_labeled_traces,
-        max_agent_rounds=resolved_max_agent_rounds,
-        supported_interpretation=(
-            "May be used as L2 target-evolution quality evidence only after private "
-            "selection/promotion gates and outer e2e replay also pass."
-        ),
-        unsupported_interpretation=(
-            "Use this run for wiring, debugging, or bounded probing only; do not "
-            "treat failure as evidence that L2 target evolution is exhausted."
-        ),
-    )
-
-
-def _effective_max_agent_rounds(config: L2TargetEvolutionConfig) -> int | None:
-    return resolve_max_agent_rounds(
-        mode=config.mode,
-        budget_profile=config.budget_profile,
-        max_agent_rounds=config.max_agent_rounds,
-    )
+    return {
+        "schema_version": "l2-target-round-policy-v1",
+        "max_rounds": config.rounds,
+        "round_executor": config.mode,
+        "round_timeout_s": config.timeout_s
+        if config.mode in {"codex-cli", "agent-session"}
+        else None,
+        "patience_rounds": config.patience_rounds,
+        "stop_on_selection_gate": config.stop_on_selection_gate,
+        "local_search_trials": config.local_search_trials,
+        "local_search_timeout_s": config.local_search_timeout_s,
+        "local_search_space": config.local_search_space,
+        "local_search_cross_audit_top_k": config.local_search_cross_audit_top_k,
+        "visible_validation_folds": config.visible_validation_folds,
+        "visible_validation_ratio": config.visible_validation_ratio,
+        "visible_cross_audit_folds": config.visible_cross_audit_folds,
+    }
 
 
 def _target_objective_payload(
@@ -2885,16 +2682,8 @@ def _target_objective_payload(
         "schema_version": "l2-target-objective-v1",
         "primary_objective": "increase safe L2 accepts on unseen target traffic",
         "target_scope": target_scope,
-        "budget_policy": _target_budget_policy_payload(config),
-        "evidence_policy": _target_evidence_policy_payload(
-            config,
-            teacher_labeled_traces=teacher_labeled_traces,
-        ),
-        "agent_budget": _agent_budget_payload(
-            config=config,
-            agent_rounds_started=0,
-            agent_rounds_succeeded=0,
-        ),
+        "teacher_labeled_traces": teacher_labeled_traces,
+        "round_policy": _target_round_policy_payload(config),
         "gates": {
             "min_accepted_accuracy": config.min_accepted_accuracy,
             "max_wrong_accept_rate": config.max_wrong_accept_rate,
@@ -2962,7 +2751,7 @@ def _target_objective_payload(
             ),
         ],
         "agent_session_policy": {
-            "session_closure": "one L4 agent session per target-evolve job",
+            "session_closure": "one L4 agent session per target-evolution round",
             "internal_loop_control": "agent_decides_edit_evaluate_optuna_stop",
             "outer_harness_role": (
                 "prepare workspace, launch agent, check scope, evaluate private gates"
@@ -3216,6 +3005,36 @@ def _visible_round_summary(round_result: dict[str, Any]) -> dict[str, Any]:
         "visible_cross_audit": _optional_visible_metric_summary(
             _candidate_visible_cross_audit(round_result),
         ),
+    }
+
+
+def _round_result_summary(round_result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "round_index": round_result["round_index"],
+        "status": round_result["status"],
+        "candidate_ref": round_result["candidate_ref"],
+        "metrics": {
+            "inner_score": round_result["inner_score"],
+            "passes_visible_validation_gate": bool(
+                round_result["inner_validation"]["passes_gate"],
+            ),
+            "passes_private_selection_gate": bool(
+                round_result["passes_private_selection_gate"],
+            ),
+            "passes_private_promotion_gate": bool(
+                round_result["passes_private_promotion_gate"],
+            ),
+        },
+        "diagnostics": {
+            "visible_support_gate": round_result["visible_support_gate"],
+            "train_audit": _visible_metric_summary(_candidate_train_audit(round_result)),
+            "visible_cross_audit": _optional_visible_metric_summary(
+                _candidate_visible_cross_audit(round_result),
+            ),
+        },
+        "improved": bool(round_result["improved"]),
+        "adoptable": bool(round_result["adoptable"]),
+        "stop_reason": None,
     }
 
 
@@ -3908,8 +3727,8 @@ def _target_program_text() -> str:
             "- `tools/search_config.py` runs visible-data Optuna config search",
             "  when you decide tuning is useful.",
             "",
-            "This is one autonomous L4 agent session. The outer harness does not",
-            "prescribe an edit/evaluate/search script. You decide how many times to",
+            "This round is one autonomous L4 agent session. The outer harness does",
+            "not prescribe an edit/evaluate/search script. You decide how many times to",
             "inspect context, edit `target/`, evaluate visible splits, run Optuna,",
             "debug, and stop. Stop when the visible objective is met, no safe",
             "progress remains, risk is too high, or budget is near exhaustion.",

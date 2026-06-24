@@ -11,19 +11,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from darjeeling.compiler.evolution_policy import (
-    EvolutionBudgetProfile,
-    EvolutionEvidenceRequirements,
-    OuterEvolutionPolicy,
-    resolve_max_agent_rounds,
-)
-from darjeeling.compiler.evolution_policy import (
-    agent_budget_payload as outer_agent_budget_payload,
-)
-from darjeeling.compiler.evolution_policy import (
-    budget_policy_payload as outer_budget_policy_payload,
-)
-from darjeeling.compiler.evolution_policy import (
-    evidence_policy_payload as outer_evidence_policy_payload,
+    EvolutionRoundResult,
+    EvolutionRunPolicy,
+    evolution_run_summary_payload,
 )
 from darjeeling.targets.nlu.compiler.focus_tasks import (
     build_focus_tasks,
@@ -47,15 +37,13 @@ class L1CodingAgentJobConfig:
     mode: L1AgentMode
     source_crate_dir: Path
     job_dir: Path
-    rounds: int = 1
-    budget_profile: EvolutionBudgetProfile = "standard"
-    max_agent_rounds: int | None = None
+    max_rounds: int = 1
     codex_command: str = "codex"
     codex_model: str | None = None
     timeout_s: float = 900.0
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
-    dry_run_patch: Path | None = None
+    dry_run_patches: tuple[Path, ...] = ()
     run_validation: bool = True
 
 
@@ -74,9 +62,9 @@ class L1CodingAgentJobResult:
     return_code: int
     succeeded: bool
     stop_reason: str
-    rounds_requested: int
+    max_rounds: int
     rounds_completed: int
-    agent_budget: dict[str, Any]
+    round_results: list[dict[str, Any]]
     command_results: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -106,15 +94,17 @@ class L4CodingAgentAdapter:
             mode=self.settings.l1_agent_mode,
             source_crate_dir=source_crate_dir,
             job_dir=job_dir,
-            rounds=self.settings.l1_agent_rounds,
-            budget_profile=self.settings.l1_agent_budget_profile,
-            max_agent_rounds=self.settings.l1_agent_max_agent_rounds,
+            max_rounds=self.settings.l1_agent_max_rounds,
             codex_command=self.settings.l1_agent_codex_command,
             codex_model=self.settings.l1_agent_model,
             timeout_s=self.settings.l1_agent_timeout_s,
             sandbox=self.settings.l1_agent_sandbox,
             approval_policy=self.settings.l1_agent_approval_policy,
-            dry_run_patch=dry_run_patch or self.settings.l1_agent_dry_run_patch,
+            dry_run_patches=tuple(
+                path
+                for path in [dry_run_patch or self.settings.l1_agent_dry_run_patch]
+                if path is not None
+            ),
             run_validation=run_validation,
         )
         return run_l1_coding_agent_job(
@@ -134,19 +124,11 @@ def run_l1_coding_agent_job(
     current_metrics: dict[str, Any],
     objective: dict[str, Any],
 ) -> L1CodingAgentJobResult:
-    if config.rounds < 1:
-        raise ValueError("rounds must be at least 1")
-    if config.max_agent_rounds is not None and config.max_agent_rounds < 0:
-        raise ValueError("max_agent_rounds must be non-negative")
-    if config.budget_profile not in {"standard", "fixed-inner", "smoke"}:
-        raise ValueError("budget_profile must be standard, fixed-inner, or smoke")
-    policy = _l1_outer_policy(config)
-    max_agent_rounds = resolve_max_agent_rounds(
-        mode=config.mode,
-        budget_profile=config.budget_profile,
-        max_agent_rounds=config.max_agent_rounds,
-    )
+    if config.max_rounds < 1:
+        raise ValueError("max_rounds must be at least 1")
+    policy = _l1_run_policy(config)
     job_dir = config.job_dir
+    rounds_dir = job_dir / "rounds"
     workspace_root = job_dir / "workspace"
     context_dir = workspace_root / "contexts"
     workspace_crate_dir = workspace_root / "l1_programbank"
@@ -158,135 +140,194 @@ def run_l1_coding_agent_job(
     report_path = job_dir / "agent_report.md"
 
     job_dir.mkdir(parents=True, exist_ok=True)
-    if workspace_root.exists():
-        shutil.rmtree(workspace_root)
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    _copy_crate(config.source_crate_dir, workspace_crate_dir)
-    _write_context_files(
-        context_dir=context_dir,
-        teacher_train=teacher_train,
-        hard_cases=hard_cases,
-        current_metrics=current_metrics,
-        objective=objective,
-    )
-    legacy_context_dir = job_dir / "contexts"
-    if legacy_context_dir.exists():
-        shutil.rmtree(legacy_context_dir)
-    shutil.copytree(context_dir, legacy_context_dir)
-    prompt_path.write_text(
-        _build_l1_agent_prompt(context_dir=context_dir, workspace_crate_dir=workspace_crate_dir),
-        encoding="utf-8",
-    )
-    _write_l1_workspace_manifest(
-        mode=config.mode,
-        policy=policy,
-        workspace_root=workspace_root,
-        workspace_crate_dir=workspace_crate_dir,
-        context_dir=context_dir,
-        program_path=prompt_path,
-    )
+    rounds_dir.mkdir(parents=True, exist_ok=True)
 
     command_results: list[dict[str, Any]] = []
-    stop_reason = "round_budget_exhausted"
-    agent_rounds_started = 0
-    agent_rounds_succeeded = 0
-    scope_violation_report: dict[str, Any] | None = None
-    if config.mode == "dry-run":
-        result_code = _run_dry_run_job(
-            config=config,
-            workspace_crate_dir=workspace_crate_dir,
-            transcript_path=transcript_path,
-            report_path=report_path,
-            command_results=command_results,
+    round_results: list[EvolutionRoundResult] = []
+    current_source_crate_dir = config.source_crate_dir
+    last_workspace_root: Path | None = None
+    last_workspace_crate_dir: Path | None = None
+    last_return_code = 0
+    stop_reason = "max_rounds_exhausted"
+
+    for round_index in range(1, config.max_rounds + 1):
+        round_dir = rounds_dir / f"round_{round_index:03d}"
+        round_workspace_root = round_dir / "workspace"
+        round_context_dir = round_workspace_root / "contexts"
+        round_workspace_crate_dir = round_workspace_root / "l1_programbank"
+        round_prompt_path = round_workspace_root / "program.md"
+        round_transcript_path = round_dir / "transcript.jsonl"
+        round_diff_path = round_dir / "diff.patch"
+        round_commands_path = round_dir / "commands.jsonl"
+        round_report_path = round_dir / "agent_report.md"
+        round_result_path = round_dir / "round_result.json"
+        round_dir.mkdir(parents=True, exist_ok=True)
+        if round_workspace_root.exists():
+            shutil.rmtree(round_workspace_root)
+        round_workspace_root.mkdir(parents=True, exist_ok=True)
+        _copy_crate(current_source_crate_dir, round_workspace_crate_dir)
+        _write_context_files(
+            context_dir=round_context_dir,
+            teacher_train=teacher_train,
+            hard_cases=hard_cases,
+            current_metrics=current_metrics,
+            objective=objective,
         )
-        if result_code != 0:
-            stop_reason = "dry_run_patch_failed"
-    else:
-        if max_agent_rounds is not None and max_agent_rounds <= 0:
-            result_code = 0
-            stop_reason = (
-                "agent_session_budget_exhausted"
-                if config.mode == "agent-session"
-                else "agent_round_budget_exhausted"
+        round_prompt_path.write_text(
+            _build_l1_agent_prompt(
+                context_dir=round_context_dir,
+                workspace_crate_dir=round_workspace_crate_dir,
+            ),
+            encoding="utf-8",
+        )
+        _write_l1_workspace_manifest(
+            mode=config.mode,
+            policy=policy,
+            workspace_root=round_workspace_root,
+            workspace_crate_dir=round_workspace_crate_dir,
+            context_dir=round_context_dir,
+            program_path=round_prompt_path,
+        )
+
+        round_command_results: list[dict[str, Any]] = []
+        round_stop_reason = "round_completed"
+        scope_violation_report: dict[str, Any] | None = None
+        if config.mode == "dry-run":
+            patch_index = round_index - 1
+            dry_run_patch = (
+                config.dry_run_patches[patch_index]
+                if patch_index < len(config.dry_run_patches)
+                else None
             )
-            transcript_path.write_text("", encoding="utf-8")
-            report_path.write_text(
-                "L1 coding-agent launch skipped by outer policy.\n",
-                encoding="utf-8",
-            )
-        else:
-            agent_rounds_started = 1
-            protected_snapshot = _protected_l1_workspace_snapshot(workspace_root)
-            result_code = _run_codex_cli_job(
+            result_code = _run_dry_run_job(
                 config=config,
-                workspace_root=workspace_root,
-                workspace_crate_dir=workspace_crate_dir,
-                prompt_path=prompt_path,
-                transcript_path=transcript_path,
-                report_path=report_path,
-                command_results=command_results,
+                dry_run_patch=dry_run_patch,
+                workspace_crate_dir=round_workspace_crate_dir,
+                transcript_path=round_transcript_path,
+                report_path=round_report_path,
+                command_results=round_command_results,
             )
             if result_code != 0:
-                stop_reason = (
+                round_stop_reason = "dry_run_patch_failed"
+        else:
+            protected_snapshot = _protected_l1_workspace_snapshot(round_workspace_root)
+            result_code = _run_codex_cli_job(
+                config=config,
+                workspace_root=round_workspace_root,
+                workspace_crate_dir=round_workspace_crate_dir,
+                prompt_path=round_prompt_path,
+                transcript_path=round_transcript_path,
+                report_path=round_report_path,
+                command_results=round_command_results,
+            )
+            if result_code != 0:
+                round_stop_reason = (
                     "agent_session_failed"
                     if config.mode == "agent-session"
                     else "agent_command_failed"
                 )
             elif config.mode == "agent-session":
                 scope_violation_report = _l1_workspace_scope_violation_report(
-                    workspace_root=workspace_root,
+                    workspace_root=round_workspace_root,
                     before=protected_snapshot,
                 )
                 if scope_violation_report is not None:
-                    command_results.append(
+                    round_command_results.append(
                         _l1_workspace_scope_violation_command_result(
-                            workspace_root=workspace_root,
+                            workspace_root=round_workspace_root,
                             report=scope_violation_report,
                         ),
                     )
                     result_code = 1
-                    stop_reason = "workspace_scope_violation"
-                else:
-                    agent_rounds_succeeded = 1
-            else:
-                agent_rounds_succeeded = 1
+                    round_stop_reason = "workspace_scope_violation"
 
-    if config.run_validation and result_code == 0:
-        cargo_result = _run_command(
-            ["cargo", "test"],
-            cwd=workspace_crate_dir,
-            timeout_s=config.timeout_s,
+        if config.run_validation and result_code == 0:
+            cargo_result = _run_command(
+                ["cargo", "test"],
+                cwd=round_workspace_crate_dir,
+                timeout_s=config.timeout_s,
+            )
+            round_command_results.append(cargo_result)
+            if cargo_result["return_code"] != 0:
+                result_code = int(cargo_result["return_code"])
+                round_stop_reason = "candidate_validation_failed"
+
+        round_diff_text = _crate_diff(current_source_crate_dir, round_workspace_crate_dir)
+        round_diff_path.write_text(round_diff_text, encoding="utf-8")
+        _write_jsonl(round_commands_path, round_command_results)
+        command_results.extend(round_command_results)
+        last_return_code = result_code
+        last_workspace_root = round_workspace_root
+        last_workspace_crate_dir = round_workspace_crate_dir
+
+        status = _l1_round_status(result_code, round_stop_reason)
+        improved = status == "completed" and bool(round_diff_text.strip())
+        round_result = EvolutionRoundResult(
+            round_index=round_index,
+            status=status,
+            candidate_ref=round_workspace_crate_dir.relative_to(job_dir).as_posix()
+            if status == "completed"
+            else None,
+            metrics={
+                "mode": config.mode,
+                "return_code": result_code,
+                "changed_file_count": _diff_summary(round_diff_text)["changed_file_count"],
+            },
+            diagnostics={
+                "round_dir": round_dir.relative_to(job_dir).as_posix(),
+                "transcript": round_transcript_path.relative_to(job_dir).as_posix(),
+                "diff": round_diff_path.relative_to(job_dir).as_posix(),
+                "commands": round_commands_path.relative_to(job_dir).as_posix(),
+                "report": round_report_path.relative_to(job_dir).as_posix(),
+                "workspace_scope_violation": scope_violation_report,
+            },
+            improved=improved,
+            adoptable=status == "completed" and improved,
+            stop_reason=None if status == "completed" else round_stop_reason,
         )
-        command_results.append(cargo_result)
-        if cargo_result["return_code"] != 0 and result_code == 0:
-            result_code = int(cargo_result["return_code"])
-            stop_reason = "candidate_validation_failed"
+        round_results.append(round_result)
+        round_result_path.write_text(
+            json.dumps(round_result.to_payload(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if status != "completed":
+            stop_reason = round_stop_reason
+            break
+        current_source_crate_dir = round_workspace_crate_dir
 
-    if stop_reason == "round_budget_exhausted" and config.mode == "agent-session":
-        stop_reason = "agent_session_completed"
-    budget_stop_reasons = {"agent_round_budget_exhausted", "agent_session_budget_exhausted"}
-    job_succeeded = result_code == 0 and stop_reason not in budget_stop_reasons
-    rounds_completed = 1 if job_succeeded else 0
-    round_results = [
-        {
-            "round": 1,
-            "mode": config.mode,
-            "return_code": result_code,
-            "succeeded": job_succeeded,
-            "stop_reason": stop_reason,
-            "workspace_scope_violation": scope_violation_report,
-        }
-    ]
-    agent_budget = outer_agent_budget_payload(
-        policy,
-        schema_version="l1-agent-budget-v1",
-        agent_rounds_started=agent_rounds_started,
-        agent_rounds_succeeded=agent_rounds_succeeded,
-        max_agent_rounds=max_agent_rounds,
+    if last_workspace_root is None or last_workspace_crate_dir is None:
+        raise L1CodingAgentError("L1 coding-agent did not create a round workspace")
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root)
+    shutil.copytree(last_workspace_root, workspace_root)
+    legacy_context_dir = job_dir / "contexts"
+    if legacy_context_dir.exists():
+        shutil.rmtree(legacy_context_dir)
+    shutil.copytree(context_dir, legacy_context_dir)
+    _write_jsonl(commands_path, command_results)
+    transcript_path.write_text(
+        "".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(rounds_dir.glob("round_*/transcript.jsonl"))
+            if path.exists()
+        ),
+        encoding="utf-8",
+    )
+    report_path.write_text(
+        "\n".join(
+            path.read_text(encoding="utf-8").rstrip()
+            for path in sorted(rounds_dir.glob("round_*/agent_report.md"))
+            if path.exists()
+        )
+        + "\n",
+        encoding="utf-8",
     )
     diff_text = _crate_diff(config.source_crate_dir, workspace_crate_dir)
     diff_path.write_text(diff_text, encoding="utf-8")
-    _write_jsonl(commands_path, command_results)
+    rounds_completed = sum(1 for result in round_results if result.status == "completed")
+    if rounds_completed < config.max_rounds and stop_reason == "max_rounds_exhausted":
+        stop_reason = round_results[-1].stop_reason or "round_failed"
+    job_succeeded = bool(round_results and round_results[-1].status == "completed")
     _write_l1_agent_provenance(
         provenance_path=provenance_path,
         config=config,
@@ -298,11 +339,10 @@ def run_l1_coding_agent_job(
         diff_path=diff_path,
         commands_path=commands_path,
         report_path=report_path,
-        return_code=result_code,
+        return_code=last_return_code,
         stop_reason=stop_reason,
         rounds_completed=rounds_completed,
         round_results=round_results,
-        agent_budget=agent_budget,
         command_results=command_results,
         diff_text=diff_text,
     )
@@ -318,12 +358,12 @@ def run_l1_coding_agent_job(
         commands_path=commands_path,
         provenance_path=provenance_path,
         report_path=report_path,
-        return_code=result_code,
+        return_code=last_return_code,
         succeeded=job_succeeded,
         stop_reason=stop_reason,
-        rounds_requested=config.rounds,
+        max_rounds=config.max_rounds,
         rounds_completed=rounds_completed,
-        agent_budget=agent_budget,
+        round_results=[result.to_payload() for result in round_results],
         command_results=command_results,
     )
 
@@ -399,7 +439,7 @@ def _build_l1_agent_prompt(*, context_dir: Path, workspace_crate_dir: Path) -> s
 def _write_l1_workspace_manifest(
     *,
     mode: L1AgentMode,
-    policy: OuterEvolutionPolicy,
+    policy: EvolutionRunPolicy,
     workspace_root: Path,
     workspace_crate_dir: Path,
     context_dir: Path,
@@ -424,16 +464,7 @@ def _write_l1_workspace_manifest(
             "replay": "edge-mvp run ...",
         },
         "agent_session_policy": _l1_agent_session_policy(mode),
-        "budget_policy": outer_budget_policy_payload(
-            policy,
-            profile_guidance_schema_version="l1-agent-budget-profile-guidance-v1",
-        ),
-        "agent_budget": outer_agent_budget_payload(
-            policy,
-            schema_version="l1-agent-budget-v1",
-            agent_rounds_started=0,
-            agent_rounds_succeeded=0,
-        ),
+        "round_policy": _l1_run_policy_payload(policy),
     }
     (workspace_root / "runs").mkdir(exist_ok=True)
     (workspace_root / "workspace_manifest.json").write_text(
@@ -559,14 +590,15 @@ def _content_token_counts(utterances: Any) -> Counter[str]:
 def _run_dry_run_job(
     *,
     config: L1CodingAgentJobConfig,
+    dry_run_patch: Path | None,
     workspace_crate_dir: Path,
     transcript_path: Path,
     report_path: Path,
     command_results: list[dict[str, Any]],
 ) -> int:
-    if config.dry_run_patch is not None:
+    if dry_run_patch is not None:
         patch_result = _run_command(
-            ["git", "apply", str(config.dry_run_patch)],
+            ["git", "apply", str(dry_run_patch)],
             cwd=workspace_crate_dir,
             timeout_s=config.timeout_s,
         )
@@ -579,7 +611,7 @@ def _run_dry_run_job(
             {
                 "mode": "dry-run",
                 "event": "completed",
-                "patch": str(config.dry_run_patch) if config.dry_run_patch else None,
+                "patch": str(dry_run_patch) if dry_run_patch else None,
             },
             sort_keys=True,
         )
@@ -697,47 +729,27 @@ def _write_l1_agent_provenance(
     return_code: int,
     stop_reason: str,
     rounds_completed: int,
-    round_results: list[dict[str, Any]],
-    agent_budget: dict[str, Any],
+    round_results: list[EvolutionRoundResult],
     command_results: list[dict[str, Any]],
     diff_text: str,
 ) -> None:
-    policy = _l1_outer_policy(config)
+    policy = _l1_run_policy(config)
+    summary = evolution_run_summary_payload(
+        policy=policy,
+        round_results=round_results,
+        stop_reason=stop_reason,
+    )
     payload = {
         "schema_version": "l1-agent-provenance-v1",
         "created_at": datetime.now(UTC).isoformat(),
         "mode": config.mode,
-        "succeeded": rounds_completed > 0,
+        "succeeded": bool(round_results and round_results[-1].status == "completed"),
         "return_code": return_code,
-        "rounds_requested": config.rounds,
+        "max_rounds": config.max_rounds,
         "rounds_completed": rounds_completed,
         "stop_reason": stop_reason,
-        "budget_policy": outer_budget_policy_payload(
-            policy,
-            profile_guidance_schema_version="l1-agent-budget-profile-guidance-v1",
-        ),
-        "evidence_policy": outer_evidence_policy_payload(
-            policy,
-            schema_version="l1-agent-evidence-policy-v1",
-            requirements=EvolutionEvidenceRequirements(
-                min_rounds_requested=1,
-                min_codex_cli_agent_rounds=1,
-                min_teacher_labeled_traces=None,
-                requires_outer_replay=True,
-            ),
-            rounds_completed=rounds_completed,
-            stop_reason=stop_reason,
-            supported_interpretation=(
-                "May be used as L1 coding-agent evolution evidence only after "
-                "workspace validation and outer replay/promotion also pass."
-            ),
-            unsupported_interpretation=(
-                "Use this run for wiring, debugging, or bounded probing only; do not "
-                "treat failure as evidence that L1 agent evolution is exhausted."
-            ),
-        ),
-        "agent_budget": agent_budget,
-        "rounds": round_results,
+        "round_policy": _l1_run_policy_payload(policy),
+        "round_results": summary["round_results"],
         "codex_command": config.codex_command,
         "codex_model": config.codex_model,
         "sandbox": config.sandbox,
@@ -873,22 +885,35 @@ def _diff_summary(diff_text: str) -> dict[str, Any]:
     }
 
 
-def _l1_outer_policy(config: L1CodingAgentJobConfig) -> OuterEvolutionPolicy:
-    return OuterEvolutionPolicy(
-        layer_name="L1",
-        mode=config.mode,
-        rounds_requested=config.rounds,
-        budget_profile=config.budget_profile,
-        timeout_s=config.timeout_s,
-        max_agent_rounds=config.max_agent_rounds,
-        inner_patience_rounds=0,
-        stop_on_selection_gate=False,
-        codex_command=config.codex_command,
-        codex_model=config.codex_model,
-        local_search_consumes_llm=False,
-        prompt_strategy="stable prompt file for codex-cli; short stdin prompt for agent-session",
-        cost_policy="live agent modes consume GPT budget; dry-run patch mode is fixture evidence",
+def _l1_run_policy(config: L1CodingAgentJobConfig) -> EvolutionRunPolicy:
+    return EvolutionRunPolicy(
+        max_rounds=config.max_rounds,
+        round_timeout_s=config.timeout_s,
+        patience_rounds=0,
+        round_executor=config.mode,
     )
+
+
+def _l1_run_policy_payload(policy: EvolutionRunPolicy) -> dict[str, Any]:
+    return {
+        "schema_version": "l1-round-policy-v1",
+        "max_rounds": policy.max_rounds,
+        "round_timeout_s": policy.round_timeout_s,
+        "patience_rounds": policy.patience_rounds,
+        "round_executor": policy.round_executor,
+    }
+
+
+def _l1_round_status(return_code: int, stop_reason: str) -> str:
+    if return_code == 0:
+        return "completed"
+    if return_code == 124:
+        return "timeout"
+    if stop_reason == "workspace_scope_violation":
+        return "scope_violation"
+    if stop_reason == "candidate_validation_failed":
+        return "validation_failed"
+    return "failed"
 
 
 def _l1_agent_session_policy(mode: L1AgentMode | str) -> dict[str, Any]:
@@ -896,9 +921,9 @@ def _l1_agent_session_policy(mode: L1AgentMode | str) -> dict[str, Any]:
         "schema_version": "l1-agent-session-policy-v1",
         "applies_to_mode": mode == "agent-session",
         "session_scope": (
-            "single long-running L4 agent session"
+            "one L4 agent session per L1 evolution round"
             if mode == "agent-session"
-            else "legacy one-shot codex-cli or dry-run fixture"
+            else "one codex-cli or dry-run execution per L1 evolution round"
         ),
         "internal_loop_control": (
             "agent_decides_edit_compile_test_bench_replay_stop"
@@ -918,7 +943,7 @@ def _l1_workspace_scope_policy() -> dict[str, Any]:
         "scratch_writable_roots": ["runs/"],
         "protected_roots": ["contexts/", "program.md", "workspace_manifest.json"],
         "ignored_generated_files": ["target/", "__pycache__/", ".pytest_cache/", "*.pyc"],
-        "enforcement": "checked_after_agent_session_before_validation",
+        "enforcement": "checked_after_round_execution_before_validation",
     }
 
 

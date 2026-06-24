@@ -57,7 +57,7 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
             mode="dry-run",
             source_crate_dir=DEFAULT_NLU_L1_CRATE_DIR,
             job_dir=tmp_path / "job",
-            dry_run_patch=patch_path,
+            dry_run_patches=(patch_path,),
             run_validation=False,
         ),
         teacher_train=[_teacher_trace()],
@@ -84,14 +84,15 @@ def test_l1_coding_agent_dry_run_packages_workspace_and_context(
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema_version"] == "l1-agent-provenance-v1"
     assert provenance["mode"] == "dry-run"
-    assert provenance["rounds_requested"] == 1
+    assert provenance["max_rounds"] == 1
     assert provenance["rounds_completed"] == 1
-    assert provenance["stop_reason"] == "round_budget_exhausted"
-    assert provenance["budget_policy"]["profile"] == "standard"
-    assert provenance["agent_budget"]["mode"] == "dry-run"
-    assert provenance["agent_budget"]["applies_to_mode"] is False
-    assert provenance["rounds"][0]["mode"] == "dry-run"
+    assert provenance["stop_reason"] == "max_rounds_exhausted"
+    assert provenance["round_policy"]["max_rounds"] == 1
+    assert provenance["round_results"][0]["metrics"]["mode"] == "dry-run"
     assert provenance["diff"]["changed_file_count"] == 1
+    assert "agent_budget" not in provenance
+    assert "budget_policy" not in provenance
+    assert "evidence_policy" not in provenance
 
     context_text = "\n".join(
         path.read_text(encoding="utf-8") for path in result.context_dir.iterdir()
@@ -121,6 +122,67 @@ def test_l1_coding_agent_adapter_respects_disabled_mode(tmp_path: Path) -> None:
             teacher_train=[_teacher_trace()],
             run_validation=False,
         )
+
+
+def test_l1_coding_agent_dry_run_maps_patches_to_rounds(tmp_path: Path) -> None:
+    patch_paths = []
+    for index in range(1, 4):
+        patch_path = tmp_path / f"round_{index}.patch"
+        marker = f"DRY_RUN_MARKER_{index}"
+        patch_path.write_text(
+            "\n".join(
+                [
+                    f"diff --git a/{marker} b/{marker}",
+                    "new file mode 100644",
+                    "--- /dev/null",
+                    f"+++ b/{marker}",
+                    "@@ -0,0 +1 @@",
+                    f"+round {index}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        patch_paths.append(patch_path)
+
+    result = run_l1_coding_agent_job(
+        config=L1CodingAgentJobConfig(
+            mode="dry-run",
+            source_crate_dir=DEFAULT_NLU_L1_CRATE_DIR,
+            job_dir=tmp_path / "job",
+            max_rounds=3,
+            dry_run_patches=tuple(patch_paths),
+            run_validation=False,
+        ),
+        teacher_train=[_teacher_trace()],
+        hard_cases=[],
+        current_metrics={},
+        objective={},
+    )
+
+    provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
+    commands = [
+        json.loads(line)
+        for line in result.commands_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert result.succeeded
+    assert result.max_rounds == 3
+    assert result.rounds_completed == 3
+    assert [item["round_index"] for item in result.round_results] == [1, 2, 3]
+    assert [command["command"][2] for command in commands] == [
+        str(path) for path in patch_paths
+    ]
+    assert all(
+        (tmp_path / "job" / "rounds" / f"round_{index:03d}" / "round_result.json").exists()
+        for index in range(1, 4)
+    )
+    assert (result.workspace_crate_dir / "DRY_RUN_MARKER_3").read_text(
+        encoding="utf-8"
+    ) == "round 3\n"
+    assert provenance["round_policy"]["max_rounds"] == 3
+    assert len(provenance["round_results"]) == 3
 
 
 def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
@@ -163,6 +225,7 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
     )
 
     assert result.succeeded
+    assert result.max_rounds == 1
     assert "fake agent report" in result.report_path.read_text(encoding="utf-8")
     transcript = result.transcript_path.read_text(encoding="utf-8")
     assert '"event": "done"' in transcript
@@ -188,6 +251,65 @@ def test_l1_coding_agent_codex_cli_mode_records_transcript_and_report(
     ]
     assert Path(command[command.index("--cd") + 1]).is_absolute()
     assert Path(command[command.index("-o") + 1]).is_absolute()
+
+
+def test_l1_coding_agent_codex_cli_runs_one_command_per_round(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import json",
+                "import pathlib",
+                "import sys",
+                "cwd = pathlib.Path(sys.argv[sys.argv.index('--cd') + 1])",
+                "out = pathlib.Path(sys.argv[sys.argv.index('-o') + 1])",
+                "counter = cwd / 'ROUND_COUNTER'",
+                "count = int(counter.read_text()) if counter.exists() else 0",
+                "counter.write_text(str(count + 1))",
+                "out.write_text(f'round {count + 1}\\n')",
+                "print(json.dumps({'event': 'done', 'round': count + 1}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+
+    result = run_l1_coding_agent_job(
+        config=L1CodingAgentJobConfig(
+            mode="codex-cli",
+            source_crate_dir=repo_root / DEFAULT_NLU_L1_CRATE_DIR,
+            job_dir=Path("job"),
+            codex_command=str(fake_codex),
+            max_rounds=3,
+            run_validation=False,
+        ),
+        teacher_train=[_teacher_trace()],
+        hard_cases=[],
+        current_metrics={},
+        objective={},
+    )
+
+    commands = [
+        json.loads(line)
+        for line in result.commands_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert result.succeeded
+    assert result.rounds_completed == 3
+    assert len(commands) == 3
+    assert (result.workspace_crate_dir / "ROUND_COUNTER").read_text() == "3"
+    assert [item["status"] for item in result.round_results] == [
+        "completed",
+        "completed",
+        "completed",
+    ]
 
 
 def test_l1_agent_session_uses_workspace_root_and_records_policy(
@@ -237,6 +359,7 @@ def test_l1_agent_session_uses_workspace_root_and_records_policy(
     )
 
     workspace_root = result.job_dir / "workspace"
+    round_workspace_root = result.job_dir / "rounds" / "round_001" / "workspace"
     commands = [
         json.loads(line)
         for line in result.commands_path.read_text(encoding="utf-8").splitlines()
@@ -247,23 +370,22 @@ def test_l1_agent_session_uses_workspace_root_and_records_policy(
     manifest = json.loads((workspace_root / "workspace_manifest.json").read_text(encoding="utf-8"))
 
     assert result.succeeded
-    assert result.stop_reason == "agent_session_completed"
+    assert result.stop_reason == "max_rounds_exhausted"
     assert result.rounds_completed == 1
-    assert Path(command[command.index("--cd") + 1]) == workspace_root.resolve()
+    assert Path(command[command.index("--cd") + 1]) == round_workspace_root.resolve()
     assert (result.workspace_crate_dir / "AGENT_SESSION_MARKER").exists()
     assert (workspace_root / "runs" / "agent_note.txt").exists()
     assert provenance["agent_session"]["applies_to_mode"] is True
     assert provenance["agent_session"]["internal_loop_control"] == (
         "agent_decides_edit_compile_test_bench_replay_stop"
     )
-    assert provenance["agent_budget"]["agent_rounds_started"] == 1
-    assert provenance["agent_budget"]["agent_rounds_succeeded"] == 1
-    assert provenance["evidence_policy"]["mode"] == "agent-session"
+    assert provenance["round_results"][0]["status"] == "completed"
+    assert provenance["round_results"][0]["metrics"]["mode"] == "agent-session"
     assert provenance["workspace_scope_policy"]["candidate_code_writable_roots"] == [
         "l1_programbank/"
     ]
     assert manifest["agent_session_policy"]["applies_to_mode"] is True
-    assert manifest["budget_policy"]["profile"] == "standard"
+    assert manifest["round_policy"]["round_executor"] == "agent-session"
     assert manifest["tools"]["bench"] == (
         "edge-mvp-nlu l1 bench "
         "--crate-dir l1_programbank --out runs/l1_benchmark.json"

@@ -18,7 +18,6 @@ from darjeeling.targets.nlu.compiler.l2_target_evolution import (
     split_l2_target_traces,
 )
 from darjeeling.targets.nlu.main_cli import (
-    _resolve_l2_target_agent_rounds,
     _resolve_l2_target_budget,
     _resolve_l2_target_local_search_cross_audit_top_k,
     _resolve_l2_target_visible_cross_audit_folds,
@@ -128,6 +127,28 @@ def _traces() -> list[TraceRecord]:
     ]
 
 
+def _assert_no_legacy_outer_policy_fields(payload: object) -> None:
+    forbidden = {
+        "agent_budget",
+        "budget_policy",
+        "evidence_policy",
+        "profile_intent",
+        "rounds_are_l2_train_eval_iterations",
+        "quality_claim_supported",
+        "requires_private_selection_gate",
+        "requires_private_promotion_gate",
+        "requires_outer_replay",
+        "fixed_trace_snapshot_inner_loop",
+    }
+    if isinstance(payload, dict):
+        assert forbidden.isdisjoint(payload)
+        for value in payload.values():
+            _assert_no_legacy_outer_policy_fields(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            _assert_no_legacy_outer_policy_fields(item)
+
+
 def _trace_with_lower_result(
     index: int,
     *,
@@ -154,51 +175,33 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
             job_dir=tmp_path / "job",
             rounds=3,
             mode="dry-run",
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
 
     workspace = tmp_path / "job" / "workspace" / "l2_target"
     assert summary["schema_version"] == "l2-target-evolution-v1"
+    assert summary["max_rounds"] == 3
     assert summary["rounds_completed"] == 3
-    assert summary["stop_reason"] == "round_budget_exhausted"
-    assert summary["budget_policy"]["profile"] == "standard"
-    assert summary["budget_policy"]["profile_intent"] == {
-        "schema_version": "l2-target-budget-profile-intent-v1",
-        "profile": "standard",
-        "profile_role": "cost_capped_default",
-        "recommended_quality_profile": "fixed-inner",
-        "guidance": (
-            "The standard profile is cost-capped. For codex-cli it may launch "
-            "only a few live agent rounds, so failure here is not evidence that "
-            "L2 target evolution has been exhausted."
-        ),
-        "fixed_trace_snapshot_inner_loop": True,
-        "outer_replay_cadence_bound": False,
-        "rounds_are_l2_train_eval_iterations": True,
-        "agent_session_controls_internal_loop": False,
-        "local_search_consumes_llm": False,
-        "codex_cli_rounds_consume_llm": False,
-        "live_agent_session_consumes_llm": False,
-        "effective_max_agent_rounds": None,
-        "agent_round_cap_is_cost_control": False,
+    assert summary["stop_reason"] == "max_rounds_exhausted"
+    assert summary["round_policy"] == {
+        "schema_version": "l2-target-round-policy-v1",
+        "max_rounds": 3,
+        "round_executor": "dry-run",
+        "round_timeout_s": None,
+        "patience_rounds": 0,
+        "stop_on_selection_gate": False,
+        "local_search_trials": 96,
+        "local_search_timeout_s": None,
+        "local_search_space": "compact",
+        "local_search_cross_audit_top_k": 0,
+        "visible_validation_folds": 1,
+        "visible_validation_ratio": None,
+        "visible_cross_audit_folds": 0,
     }
-    assert summary["evidence_policy"]["schema_version"] == (
-        "l2-target-evidence-policy-v1"
-    )
-    assert summary["evidence_policy"]["evidence_class"] == "cost_capped_probe"
-    assert summary["evidence_policy"]["quality_claim_supported"] is False
-    assert summary["evidence_policy"]["quality_claim"] == "not_supported_by_this_run"
-    assert summary["evidence_policy"]["fixed_trace_snapshot_inner_loop"] is True
-    assert summary["evidence_policy"]["outer_replay_cadence_bound"] is False
-    assert summary["evidence_policy"]["teacher_labeled_traces"] == 12
-    assert summary["evidence_policy"]["required_for_quality_claim"][
-        "min_teacher_labeled_traces"
-    ] == 500
-    assert "standard profile is cost-capped" in summary["evidence_policy"][
-        "blocking_reasons"
-    ][0]
+    assert [result["round_index"] for result in summary["round_results"]] == [1, 2, 3]
+    assert all(result["status"] == "completed" for result in summary["round_results"])
     assert summary["data_split_policy"] == {
         "schema_version": "l2-target-split-policy-v1",
         "policy": "chronological",
@@ -216,16 +219,6 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         "visible_validation_visibility": "agent_workspace_visible",
         "private_splits": ["selection_holdout", "promotion_holdout"],
         "private_split_visibility": "outer_harness_only",
-    }
-    assert summary["loop_cadence"] == {
-        "kind": "fixed_trace_snapshot_inner_loop",
-        "outer_replay_cadence_bound": False,
-        "teacher_labeled_traces": 12,
-        "scoped_teacher_labeled_traces": 12,
-        "note": (
-            "target rounds reuse this fixed split; collecting another stream prefix "
-            "is not part of the inner loop"
-        ),
     }
     assert summary["target_scope"] == {
         "schema_version": "l2-target-scope-v1",
@@ -330,7 +323,7 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "candidate_selection_gate" in round_state
     assert "visible validation gate" in round_state["candidate_selection_gate"]
     assert "early_stop_policy" in round_state
-    assert "does not stop the inner loop" in round_state["early_stop_policy"]
+    assert "does not stop the round loop" in round_state["early_stop_policy"]
     assert all(
         "passes_candidate_selection_gate" not in entry
         for entry in round_state["round_history"]
@@ -420,9 +413,6 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         summary["baseline"]["inner_validation"]["safety_backlog"]["schema_version"]
         == "l2-target-safety-backlog-v1"
     )
-    assert summary["agent_budget"]["mode"] == "dry-run"
-    assert summary["agent_budget"]["applies_to_mode"] is False
-    assert summary["agent_budget"]["local_search_consumes_llm"] is False
     assert summary["private_holdout_evidence"]["schema_version"] == (
         "l2-target-private-holdout-evidence-v1"
     )
@@ -439,19 +429,13 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert summary["rounds"][0]["train_audit"]["gate_role"] == (
         "diagnostic_only_not_selection_or_adoption_gate"
     )
-    assert round_state["agent_budget"]["mode"] == "dry-run"
     assert round_state["target_scope"]["scope"] == "teacher_train"
-    assert round_state["budget_policy"]["profile_intent"]["profile_role"] == (
-        "cost_capped_default"
-    )
-    assert round_state["evidence_policy"]["evidence_class"] == "cost_capped_probe"
-    assert round_state["evidence_policy"]["quality_claim_supported"] is False
-    assert objective["budget_policy"]["profile_intent"]["profile_role"] == (
-        "cost_capped_default"
-    )
-    assert objective["evidence_policy"]["evidence_class"] == "cost_capped_probe"
-    assert objective["agent_budget"]["local_search_consumes_llm"] is False
+    assert round_state["round_policy"]["max_rounds"] == 3
+    assert objective["round_policy"]["round_executor"] == "dry-run"
     assert "private_holdout_evidence" not in round_state
+    _assert_no_legacy_outer_policy_fields(summary)
+    _assert_no_legacy_outer_policy_fields(round_state)
+    _assert_no_legacy_outer_policy_fields(objective)
     assert "not a" in program_text
     assert "Darjeeling-core dataset-independence violation" in program_text
     inspect_result = subprocess.run(
@@ -1071,7 +1055,7 @@ def test_l2_target_lower_miss_scope_filters_lower_layer_accepts(tmp_path: Path) 
             rounds=1,
             mode="dry-run",
             target_scope="lower_miss",
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=teacher_traces,
     )
@@ -1091,8 +1075,6 @@ def test_l2_target_lower_miss_scope_filters_lower_layer_accepts(tmp_path: Path) 
         "lower_layer_accepted_excluded": 10,
         "selection_basis": "teacher-labeled traces where L0/L1 did not accept",
     }
-    assert summary["loop_cadence"]["teacher_labeled_traces"] == 24
-    assert summary["loop_cadence"]["scoped_teacher_labeled_traces"] == 14
     assert sum(summary["data_split"].values()) == 14
     assert round_state["target_scope"]["scope"] == "lower_miss"
     assert all(int(row["request_id"][1:]) >= 10 for row in train_rows)
@@ -1115,7 +1097,7 @@ def test_l2_target_visible_validation_folds_stay_visible_not_private(
             rounds=1,
             mode="dry-run",
             visible_validation_folds=3,
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(traces),
     )
@@ -1125,7 +1107,7 @@ def test_l2_target_visible_validation_folds_stay_visible_not_private(
     round_state = json.loads((workspace / "data" / "round_state.json").read_text())
     visible_metric = summary["rounds"][0]["inner_validation"]
 
-    assert summary["budget_policy"]["visible_validation_folds"] == 3
+    assert summary["round_policy"]["visible_validation_folds"] == 3
     assert summary["data_split_policy"]["visible_validation_splits"] == [
         "inner_validation",
         "inner_validation_shadow_1",
@@ -1170,7 +1152,7 @@ def test_l2_target_workspace_accepts_initial_config_and_target_context(
                 "schema_version": "target-context-test-v1",
                 "locked_test_examples_in_workspace": False,
             },
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
@@ -1358,14 +1340,14 @@ def test_l2_target_evolution_stops_after_inner_patience(tmp_path: Path) -> None:
             job_dir=tmp_path / "job",
             rounds=5,
             mode="dry-run",
-            inner_patience_rounds=1,
+            patience_rounds=1,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
 
-    assert summary["rounds_requested"] == 5
+    assert summary["max_rounds"] == 5
     assert summary["rounds_completed"] == 1
-    assert summary["stop_reason"] == "inner_validation_patience_exhausted"
+    assert summary["stop_reason"] == "validation_patience_exhausted"
     assert summary["rounds"][0]["inner_improved"] is False
     assert summary["rounds"][0]["passes_private_selection_gate"] is False
     assert summary["rounds"][0]["passes_private_promotion_gate"] is False
@@ -1417,14 +1399,14 @@ def test_l2_target_evolution_does_not_stop_on_selection_gate_by_default(
             job_dir=tmp_path / "job",
             rounds=3,
             mode="dry-run",
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
 
     assert summary["rounds_completed"] == 3
-    assert summary["stop_reason"] == "round_budget_exhausted"
-    assert summary["budget_policy"]["stop_on_selection_gate"] is False
+    assert summary["stop_reason"] == "max_rounds_exhausted"
+    assert summary["round_policy"]["stop_on_selection_gate"] is False
     assert all(
         round_result["passes_candidate_selection_gate"]
         for round_result in summary["rounds"]
@@ -1441,7 +1423,7 @@ def test_l2_target_evolution_local_search_uses_visible_workspace_only(
             rounds=1,
             mode="local-search",
             local_search_trials=2,
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
@@ -1451,10 +1433,7 @@ def test_l2_target_evolution_local_search_uses_visible_workspace_only(
     report = json.loads(report_path.read_text(encoding="utf-8"))
 
     assert summary["mode"] == "local-search"
-    assert summary["agent_budget"]["mode"] == "local-search"
-    assert summary["agent_budget"]["applies_to_mode"] is False
-    assert summary["agent_budget"]["local_search_consumes_llm"] is False
-    assert summary["agent_budget"]["agent_rounds_started"] == 0
+    assert summary["round_policy"]["round_executor"] == "local-search"
     assert summary["rounds_completed"] == 1
     assert summary["rounds"][0]["local_search"]["schema_version"] == (
         "l2-target-local-search-v1"
@@ -1483,7 +1462,7 @@ def test_l2_target_evolution_local_search_can_rerank_with_visible_cross_audit(
             local_search_trials=2,
             local_search_cross_audit_top_k=1,
             visible_cross_audit_folds=2,
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
@@ -1626,42 +1605,66 @@ def test_l2_target_local_search_current_cross_audit_uses_original_config(
     assert cross_audit_thresholds[0] == 0.42
 
 
-def test_l2_target_evolution_respects_zero_agent_round_budget(tmp_path: Path) -> None:
+def test_l2_target_codex_cli_runs_one_command_per_round(tmp_path: Path) -> None:
+    fake_codex = tmp_path / "fake_codex.py"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+workspace = Path(args[args.index("--cd") + 1])
+report = Path(args[args.index("-o") + 1])
+counter = workspace / "target" / "round_counter.txt"
+count = int(counter.read_text()) if counter.exists() else 0
+counter.write_text(str(count + 1), encoding="utf-8")
+report.write_text(f"round {count + 1}\\n", encoding="utf-8")
+print(json.dumps({"round": count + 1}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
     summary = run_l2_target_evolution(
         config=L2TargetEvolutionConfig(
             source_repo_dir=Path.cwd(),
             job_dir=tmp_path / "job",
-            rounds=3,
+            rounds=2,
             mode="codex-cli",
-            max_agent_rounds=0,
-            inner_patience_rounds=0,
+            codex_command=str(fake_codex),
+            codex_model=None,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
 
     commands_path = tmp_path / "job" / "commands.jsonl"
-    round_state = json.loads(
-        (
-            tmp_path / "job" / "workspace" / "l2_target" / "data" / "round_state.json"
-        ).read_text(encoding="utf-8")
-    )
+    workspace = tmp_path / "job" / "workspace" / "l2_target"
+    commands = [
+        json.loads(line)
+        for line in commands_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
     assert summary["mode"] == "codex-cli"
-    assert summary["rounds_requested"] == 3
-    assert summary["rounds_completed"] == 0
-    assert summary["stop_reason"] == "agent_round_budget_exhausted"
-    assert summary["budget_policy"]["max_agent_rounds"] == 0
-    assert summary["agent_budget"]["applies_to_mode"] is True
-    assert summary["agent_budget"]["max_agent_rounds"] == 0
-    assert summary["agent_budget"]["agent_rounds_started"] == 0
-    assert summary["agent_budget"]["agent_rounds_remaining"] == 0
-    assert commands_path.read_text(encoding="utf-8") == ""
-    assert round_state["state_kind"] == "final"
-    assert round_state["agent_budget"]["max_agent_rounds"] == 0
-    assert round_state["agent_budget"]["agent_rounds_remaining"] == 0
+    assert summary["max_rounds"] == 2
+    assert summary["rounds_completed"] == 2
+    assert summary["stop_reason"] == "max_rounds_exhausted"
+    assert summary["round_policy"]["round_executor"] == "codex-cli"
+    assert len(commands) == 2
+    assert (workspace / "target" / "round_counter.txt").read_text(
+        encoding="utf-8"
+    ) == "2"
+    assert [result["status"] for result in summary["round_results"]] == [
+        "completed",
+        "completed",
+    ]
 
 
-def test_l2_target_agent_session_launches_once_and_evaluates_candidate(
+def test_l2_target_agent_session_runs_one_session_per_round(
     tmp_path: Path,
 ) -> None:
     fake_codex = tmp_path / "fake_codex.py"
@@ -1677,10 +1680,9 @@ args = sys.argv[1:]
 workspace = Path(args[args.index("--cd") + 1])
 report = Path(args[args.index("-o") + 1])
 prompt = sys.stdin.read()
-(workspace / "target" / "config.json").write_text(
-    json.dumps({"accept_threshold": 0.98, "min_examples": 4}) + "\\n",
-    encoding="utf-8",
-)
+counter = workspace / "target" / "session_counter.txt"
+count = int(counter.read_text()) if counter.exists() else 0
+counter.write_text(str(count + 1), encoding="utf-8")
 (workspace / "runs").mkdir(exist_ok=True)
 (workspace / "runs" / "agent_note.txt").write_text(
     "fake agent session completed\\n",
@@ -1697,11 +1699,11 @@ print(json.dumps({"prompt": prompt, "workspace": str(workspace)}))
         config=L2TargetEvolutionConfig(
             source_repo_dir=Path.cwd(),
             job_dir=tmp_path / "job",
-            rounds=5,
+            rounds=2,
             mode="agent-session",
             codex_command=str(fake_codex),
             codex_model=None,
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(_traces()),
     )
@@ -1710,25 +1712,18 @@ print(json.dumps({"prompt": prompt, "workspace": str(workspace)}))
     round_state = json.loads(
         (workspace / "data" / "round_state.json").read_text(encoding="utf-8")
     )
-    transcript = (tmp_path / "job" / "transcripts" / "agent_session.jsonl").read_text(
-        encoding="utf-8",
-    )
+    transcript = (
+        tmp_path / "job" / "transcripts" / "round_001_agent_session.jsonl"
+    ).read_text(encoding="utf-8")
 
     assert summary["mode"] == "agent-session"
-    assert summary["rounds_requested"] == 5
-    assert summary["rounds_completed"] == 1
-    assert summary["stop_reason"] == "agent_session_completed"
-    assert summary["agent_budget"]["applies_to_mode"] is True
-    assert summary["agent_budget"]["max_agent_rounds"] == 1
-    assert summary["agent_budget"]["agent_rounds_started"] == 1
-    assert summary["agent_budget"]["agent_rounds_succeeded"] == 1
-    assert summary["agent_budget"]["agent_rounds_remaining"] == 0
-    assert summary["agent_budget"]["agent_session_scope"] == (
-        "single_session_agent_controls_internal_loop"
-    )
+    assert summary["max_rounds"] == 2
+    assert summary["rounds_completed"] == 2
+    assert summary["stop_reason"] == "max_rounds_exhausted"
+    assert summary["round_policy"]["round_executor"] == "agent-session"
     assert summary["rounds"][0]["agent_session"] == {
         "schema_version": "l2-target-agent-session-v1",
-        "session_scope": "single long-running L4 agent session",
+        "session_scope": "one L4 agent session for this evolution round",
         "internal_loop_control": "agent_decides_edit_evaluate_search_stop",
         "tool_policy": "agent may call visible tools/evaluate.py and tools/search_config.py",
         "private_holdout_visibility": (
@@ -1736,15 +1731,17 @@ print(json.dumps({"prompt": prompt, "workspace": str(workspace)}))
         ),
     }
     assert "autonomous L2 target evolution session" in transcript
-    assert (workspace / "target" / "config.json").exists()
+    assert (workspace / "target" / "session_counter.txt").read_text(
+        encoding="utf-8"
+    ) == "2"
     assert (workspace / "runs" / "agent_note.txt").exists()
     assert not (workspace / "data" / "selection_holdout.jsonl").exists()
     assert not (workspace / "data" / "promotion_holdout.jsonl").exists()
     assert round_state["state_kind"] == "final"
-    assert round_state["agent_budget"]["agent_rounds_succeeded"] == 1
+    assert round_state["round_policy"]["max_rounds"] == 2
 
 
-def test_l2_target_agent_session_failure_cannot_support_quality_claim(
+def test_l2_target_agent_session_failure_records_failed_round(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1804,75 +1801,36 @@ def test_l2_target_agent_session_failure_cannot_support_quality_claim(
             budget_profile="fixed-inner",
             codex_command=str(fake_codex),
             codex_model=None,
-            inner_patience_rounds=0,
+            patience_rounds=0,
         ),
         traces=traces_to_teacher_view(traces),
     )
 
     assert summary["stop_reason"] == "agent_session_failed"
     assert summary["rounds_completed"] == 0
-    assert summary["evidence_policy"]["evidence_class"] == "incomplete_agent_session_probe"
-    assert summary["evidence_policy"]["quality_claim_supported"] is False
-    assert any(
-        "did not complete one scoped candidate evaluation" in reason
-        for reason in summary["evidence_policy"]["blocking_reasons"]
-    )
+    assert summary["round_results"] == []
+    _assert_no_legacy_outer_policy_fields(summary)
 
 
-def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> None:
+def test_l2_target_budget_profile_resolves_target_local_defaults() -> None:
     assert _resolve_l2_target_budget(
         budget_profile="standard",
         rounds=None,
-        inner_patience_rounds=None,
+        patience_rounds=None,
         local_search_trials=None,
     ) == (12, 4, 96)
     assert _resolve_l2_target_budget(
         budget_profile="fixed-inner",
         rounds=None,
-        inner_patience_rounds=None,
+        patience_rounds=None,
         local_search_trials=None,
     ) == (48, 0, 32)
     assert _resolve_l2_target_budget(
         budget_profile="fixed-inner",
         rounds=3,
-        inner_patience_rounds=2,
+        patience_rounds=2,
         local_search_trials=5,
     ) == (3, 2, 5)
-    assert _resolve_l2_target_agent_rounds(
-        mode="codex-cli",
-        budget_profile="standard",
-        max_agent_rounds=None,
-    ) == 3
-    assert _resolve_l2_target_agent_rounds(
-        mode="codex-cli",
-        budget_profile="fixed-inner",
-        max_agent_rounds=None,
-    ) == 16
-    assert _resolve_l2_target_agent_rounds(
-        mode="codex-cli",
-        budget_profile="smoke",
-        max_agent_rounds=None,
-    ) == 1
-    assert _resolve_l2_target_agent_rounds(
-        mode="codex-cli",
-        budget_profile="fixed-inner",
-        max_agent_rounds=0,
-    ) == 0
-    assert _resolve_l2_target_agent_rounds(
-        mode="agent-session",
-        budget_profile="fixed-inner",
-        max_agent_rounds=None,
-    ) == 1
-    assert _resolve_l2_target_agent_rounds(
-        mode="agent-session",
-        budget_profile="fixed-inner",
-        max_agent_rounds=0,
-    ) == 0
-    assert _resolve_l2_target_agent_rounds(
-        mode="local-search",
-        budget_profile="fixed-inner",
-        max_agent_rounds=None,
-    ) is None
     assert _resolve_l2_target_visible_validation_folds(
         budget_profile="standard",
         visible_validation_folds=None,
@@ -1921,86 +1879,24 @@ def test_l2_target_fixed_inner_budget_profile_resolves_long_loop_defaults() -> N
         visible_cross_audit_folds=3,
         local_search_cross_audit_top_k=0,
     ) == 0
-    assert l2_target_evolution._effective_max_agent_rounds(  # noqa: SLF001
+    payload = l2_target_evolution._target_round_policy_payload(  # noqa: SLF001
         L2TargetEvolutionConfig(
             source_repo_dir=Path.cwd(),
             job_dir=Path("unused"),
             mode="codex-cli",
-            budget_profile="fixed-inner",
-        )
-    ) == 16
-    standard_codex_intent = l2_target_evolution._target_budget_policy_payload(  # noqa: SLF001
-        L2TargetEvolutionConfig(
-            source_repo_dir=Path.cwd(),
-            job_dir=Path("unused"),
-            mode="codex-cli",
-            budget_profile="standard",
-        )
-    )["profile_intent"]
-    fixed_inner_intent = l2_target_evolution._target_budget_policy_payload(  # noqa: SLF001
-        L2TargetEvolutionConfig(
-            source_repo_dir=Path.cwd(),
-            job_dir=Path("unused"),
-            mode="codex-cli",
-            budget_profile="fixed-inner",
             rounds=48,
-        )
-    )["profile_intent"]
-    standard_evidence = l2_target_evolution._target_evidence_policy_payload(  # noqa: SLF001
-        L2TargetEvolutionConfig(
-            source_repo_dir=Path.cwd(),
-            job_dir=Path("unused"),
-            mode="codex-cli",
-            budget_profile="standard",
+            patience_rounds=0,
+            visible_validation_folds=5,
+            visible_cross_audit_folds=3,
+            local_search_cross_audit_top_k=4,
         )
     )
-    fixed_inner_short_evidence = (  # noqa: SLF001
-        l2_target_evolution._target_evidence_policy_payload(
-            L2TargetEvolutionConfig(
-                source_repo_dir=Path.cwd(),
-                job_dir=Path("unused"),
-                budget_profile="fixed-inner",
-                rounds=2,
-            )
-        )
-    )
-    fixed_inner_small_snapshot_evidence = (  # noqa: SLF001
-        l2_target_evolution._target_evidence_policy_payload(
-            L2TargetEvolutionConfig(
-                source_repo_dir=Path.cwd(),
-                job_dir=Path("unused"),
-                budget_profile="fixed-inner",
-                rounds=48,
-            ),
-            teacher_labeled_traces=120,
-        )
-    )
-    fixed_inner_quality_evidence = (  # noqa: SLF001
-        l2_target_evolution._target_evidence_policy_payload(
-            L2TargetEvolutionConfig(
-                source_repo_dir=Path.cwd(),
-                job_dir=Path("unused"),
-                mode="codex-cli",
-                budget_profile="fixed-inner",
-                rounds=48,
-            ),
-            teacher_labeled_traces=500,
-        )
-    )
-    assert standard_codex_intent["profile_role"] == "cost_capped_default"
-    assert standard_codex_intent["effective_max_agent_rounds"] == 3
-    assert standard_codex_intent["agent_round_cap_is_cost_control"] is True
-    assert fixed_inner_intent["profile_role"] == "fixed_snapshot_research"
-    assert standard_evidence["evidence_class"] == "cost_capped_probe"
-    assert standard_evidence["quality_claim_supported"] is False
-    assert fixed_inner_short_evidence["evidence_class"] == "short_fixed_snapshot_probe"
-    assert fixed_inner_short_evidence["quality_claim_supported"] is False
-    assert fixed_inner_small_snapshot_evidence["evidence_class"] == "small_snapshot_probe"
-    assert fixed_inner_small_snapshot_evidence["quality_claim_supported"] is False
-    assert fixed_inner_quality_evidence["evidence_class"] == "fixed_snapshot_research"
-    assert fixed_inner_quality_evidence["quality_claim_supported"] is True
-    assert fixed_inner_intent["effective_max_agent_rounds"] == 16
-    assert fixed_inner_intent["outer_replay_cadence_bound"] is False
+    assert payload["max_rounds"] == 48
+    assert payload["round_executor"] == "codex-cli"
+    assert payload["patience_rounds"] == 0
+    assert payload["visible_validation_folds"] == 5
+    assert payload["visible_cross_audit_folds"] == 3
+    assert payload["local_search_cross_audit_top_k"] == 4
 
 
 def test_l2_target_accept_hook_can_veto_guard_accepts(tmp_path: Path) -> None:
@@ -2333,23 +2229,23 @@ def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
     assert summary["rounds_completed"] == 2
-    assert summary["budget_policy"]["profile"] == "fixed-inner"
-    assert summary["budget_policy"]["inner_patience_rounds"] == 0
-    assert summary["budget_policy"]["local_search_trials"] == 32
-    assert summary["budget_policy"]["local_search_cross_audit_top_k"] == 4
-    assert summary["budget_policy"]["visible_validation_folds"] == 5
-    assert summary["budget_policy"]["visible_validation_ratio"] == 0.4
-    assert summary["budget_policy"]["visible_cross_audit_folds"] == 3
+    assert summary["max_rounds"] == 2
+    assert summary["round_policy"]["max_rounds"] == 2
+    assert summary["round_policy"]["round_executor"] == "dry-run"
+    assert summary["round_policy"]["patience_rounds"] == 0
+    assert summary["round_policy"]["local_search_trials"] == 32
+    assert summary["round_policy"]["local_search_cross_audit_top_k"] == 4
+    assert summary["round_policy"]["visible_validation_folds"] == 5
+    assert summary["round_policy"]["visible_validation_ratio"] == 0.4
+    assert summary["round_policy"]["visible_cross_audit_folds"] == 3
     assert summary["data_split_policy"]["visible_validation_folds"] == 5
     assert summary["data_split_policy"]["visible_validation_ratio_requested"] == 0.4
-    assert summary["budget_policy"]["stop_on_selection_gate"] is False
-    assert summary["budget_policy"]["max_agent_rounds"] is None
-    assert summary["evidence_policy"]["evidence_class"] == "short_fixed_snapshot_probe"
-    assert summary["evidence_policy"]["quality_claim_supported"] is False
+    assert summary["round_policy"]["stop_on_selection_gate"] is False
     assert summary["baseline"]["visible_cross_audit"]["gate_role"] == (
         "diagnostic_only_not_selection_or_adoption_gate"
     )
     assert summary["data_split"]["train"] > 0
+    _assert_no_legacy_outer_policy_fields(summary)
 
 
 def test_l2_target_evolve_cli_accepts_lower_miss_target_scope(tmp_path: Path) -> None:
@@ -2396,7 +2292,7 @@ def test_l2_target_evolve_cli_accepts_lower_miss_target_scope(tmp_path: Path) ->
     assert summary["target_scope"]["lower_layer_accepted_excluded"] == 6
 
 
-def test_l2_target_evolve_cli_allows_zero_agent_round_budget(tmp_path: Path) -> None:
+def test_l2_target_evolve_cli_rejects_removed_agent_round_option(tmp_path: Path) -> None:
     traces_path = tmp_path / "traces.jsonl"
     traces_path.write_text(
         "".join(trace.model_dump_json() + "\n" for trace in _traces()),
@@ -2421,47 +2317,9 @@ def test_l2_target_evolve_cli_allows_zero_agent_round_budget(tmp_path: Path) -> 
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
-    assert summary["stop_reason"] == "agent_round_budget_exhausted"
-    assert summary["rounds_completed"] == 0
-    assert summary["agent_budget"]["max_agent_rounds"] == 0
-    assert summary["agent_budget"]["agent_rounds_started"] == 0
-
-
-def test_l2_target_evolve_cli_accepts_agent_session_no_launch(tmp_path: Path) -> None:
-    traces_path = tmp_path / "traces.jsonl"
-    traces_path.write_text(
-        "".join(trace.model_dump_json() + "\n" for trace in _traces()),
-        encoding="utf-8",
-    )
-
-    result = CliRunner().invoke(
-        app,
-        [
-            "l2",
-            "target-evolve",
-            "--traces",
-            str(traces_path),
-            "--out-dir",
-            str(tmp_path / "target-run"),
-            "--mode",
-            "agent-session",
-            "--rounds",
-            "2",
-            "--max-agent-rounds",
-            "0",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
-    assert summary["mode"] == "agent-session"
-    assert summary["stop_reason"] == "agent_session_budget_exhausted"
-    assert summary["rounds_completed"] == 0
-    assert summary["agent_budget"]["applies_to_mode"] is True
-    assert summary["agent_budget"]["max_agent_rounds"] == 0
-    assert summary["agent_budget"]["agent_rounds_started"] == 0
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+    assert not (tmp_path / "target-run" / "summary.json").exists()
 
 
 def test_l2_target_evolve_cli_accepts_intent_stratified_split_policy(
@@ -2523,8 +2381,10 @@ def test_l2_target_evolve_cli_accepts_local_search_mode(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     summary = json.loads((tmp_path / "target-run" / "summary.json").read_text())
     assert summary["mode"] == "local-search"
-    assert summary["budget_policy"]["local_search_trials"] == 2
-    assert summary["budget_policy"]["local_search_cross_audit_top_k"] == 0
+    assert summary["round_policy"]["round_executor"] == "local-search"
+    assert summary["round_policy"]["local_search_trials"] == 2
+    assert summary["round_policy"]["local_search_cross_audit_top_k"] == 0
+    _assert_no_legacy_outer_policy_fields(summary)
 
 
 def test_l2_promote_target_cli_writes_runtime_artifacts(tmp_path: Path) -> None:
@@ -2582,9 +2442,10 @@ SELECTED_SNAPSHOT_MARKER = True
                 },
                 "selection_decision": {"selected": True, "round": 1},
                 "adoption_decision": {"adopted": True, "round": 1},
-                "loop_cadence": {
-                    "kind": "fixed_trace_snapshot_inner_loop",
-                    "outer_replay_cadence_bound": False,
+                "round_policy": {
+                    "schema_version": "l2-target-round-policy-v1",
+                    "max_rounds": 1,
+                    "round_executor": "dry-run",
                 },
                 "target_code_policy": {
                     "core_must_remain_dataset_independent": True,
@@ -2655,10 +2516,12 @@ SELECTED_SNAPSHOT_MARKER = True
     assert manifest["candidate_metrics"]["l2_target_runtime_promoted"] is True
     assert manifest["candidate_metrics"]["l2_target_inner_adopted"] is True
     assert manifest["candidate_metrics"]["l2_target_staged_for_outer_replay"] is False
-    assert manifest["candidate_metrics"]["l2_target_loop_cadence"] == {
-        "kind": "fixed_trace_snapshot_inner_loop",
-        "outer_replay_cadence_bound": False,
+    assert manifest["candidate_metrics"]["l2_target_round_policy"] == {
+        "schema_version": "l2-target-round-policy-v1",
+        "max_rounds": 1,
+        "round_executor": "dry-run",
     }
+    assert "l2_target_loop_cadence" not in manifest["candidate_metrics"]
     assert manifest["candidate_metrics"]["l2_target_code_policy"] == {
         "core_must_remain_dataset_independent": True,
         "target_dependent_code_allowed_in": "target/",
