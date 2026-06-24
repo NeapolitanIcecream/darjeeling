@@ -12,6 +12,7 @@ from typing import Any
 from darjeeling.runtime.cost import replay_cost_model_from_settings
 from darjeeling.targets.nlu.adapters.clinc150 import CLINC150_OOS_INTENT
 from darjeeling.targets.nlu.data import DataRecord
+from darjeeling.targets.nlu.layers.l1_rust_programbank import RustL1Response
 from darjeeling.targets.nlu.layers.l2_student import (
     L2StudentBundle,
     L2StudentConfig,
@@ -87,6 +88,15 @@ class Clinc150L2TrainArtifact:
 class Clinc150L2EvalArtifact:
     summary_path: Path
     details_jsonl_path: Path | None
+    cost_latency_path: Path
+    summary: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Clinc150L1EvalArtifact:
+    summary_path: Path
+    details_jsonl_path: Path | None
+    accepted_errors_path: Path
     cost_latency_path: Path
     summary: dict[str, Any]
 
@@ -1020,6 +1030,547 @@ def _cascade_row(
     }
 
 
+class Clinc150L4ReplayOracle:
+    """Target-local replay accounting for paid CLINC150 L4 detail rows."""
+
+    def __init__(self, rows: list[dict[str, Any]], *, source_path: Path | None = None) -> None:
+        self.rows = rows
+        self.source_path = source_path
+        self.rows_by_request_id: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            request_id = str(row["request_id"])
+            if request_id in self.rows_by_request_id:
+                raise ValueError(f"duplicate CLINC150 replay-oracle row: {request_id}")
+            self.rows_by_request_id[request_id] = row
+
+    @classmethod
+    def from_path(cls, path: Path) -> Clinc150L4ReplayOracle:
+        return cls(load_teacher_rows(path), source_path=path)
+
+    def validate_coverage(self, records: list[DataRecord]) -> None:
+        missing = [
+            record.request_id
+            for record in records
+            if record.request_id not in self.rows_by_request_id
+        ]
+        if missing:
+            sample = ", ".join(missing[:5])
+            suffix = "" if len(missing) <= 5 else f", ... ({len(missing)} missing)"
+            raise ValueError(f"CLINC150 L4 replay oracle is missing request ids: {sample}{suffix}")
+
+    def row_for(self, request_id: str) -> dict[str, Any] | None:
+        return self.rows_by_request_id.get(request_id)
+
+    def frame_for(self, request_id: str) -> dict[str, Any] | None:
+        row = self.row_for(request_id)
+        if row is None or row.get("parse_failure"):
+            return None
+        frame = row.get("teacher_frame")
+        return frame if isinstance(frame, dict) else None
+
+    def stats_for(self, request_id: str) -> dict[str, Any]:
+        row = self.row_for(request_id)
+        if row is None:
+            return {
+                "model": None,
+                "tokens": 0.0,
+                "cost_usd": 0.0,
+                "final_response_cost_usd": 0.0,
+                "latency_ms": 0.0,
+            "attempt_count": 0,
+            "empty_response_attempts": 0,
+            "final_empty_response_failure": False,
+            "parse_failure": True,
+            "retry_recovered": False,
+            "unknown_usage_attempts": 0,
+            }
+        return {
+            "model": row.get("model"),
+            "tokens": float(row.get("tokens", 0.0)),
+            "cost_usd": float(row.get("cost_usd", 0.0)),
+            "final_response_cost_usd": float(
+                row.get("final_response_cost_usd", row.get("cost_usd", 0.0))
+            ),
+            "latency_ms": float(row.get("latency_ms", 0.0)),
+            "attempt_count": int(row.get("attempt_count", 1)),
+            "empty_response_attempts": int(row.get("empty_response_attempts", 0)),
+            "final_empty_response_failure": bool(row.get("final_empty_response_failure")),
+            "parse_failure": bool(row.get("parse_failure")),
+            "retry_recovered": bool(row.get("retry_recovered")),
+            "unknown_usage_attempts": int(row.get("unknown_usage_attempts", 0)),
+        }
+
+    def all_l4_baseline_metrics(self, records: list[DataRecord]) -> dict[str, Any]:
+        prediction_rows = [
+            {
+                "request_id": record.request_id,
+                "gold_frame": record.gold_frame.model_dump(mode="json"),
+            }
+            for record in records
+        ]
+        return _all_l4_baseline_metrics(
+            prediction_rows,
+            teacher_by_request_id=self.rows_by_request_id,
+        ) or {}
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "schema_version": "clinc150-l4-replay-oracle-v1",
+            "source_path": str(self.source_path) if self.source_path is not None else None,
+            "rows": len(self.rows),
+            "unique_request_ids": len(self.rows_by_request_id),
+            "accounting": (
+                "fallback rows count as L4 calls using recorded live L4 "
+                "cost, token, latency, parse, retry, and model fields"
+            ),
+            "teacher_cache_semantics": "not TeacherCache; replay-oracle calls keep recorded cost",
+        }
+
+
+def evaluate_clinc150_l1(
+    *,
+    worker: Any,
+    records: list[DataRecord],
+    replay_oracle: Clinc150L4ReplayOracle | None = None,
+    include_prediction_rows: bool = False,
+) -> dict[str, Any]:
+    if replay_oracle is not None:
+        replay_oracle.validate_coverage(records)
+    started_at = perf_counter()
+    prediction_rows = [
+        _l1_prediction_row(worker=worker, record=record)
+        for record in records
+    ]
+    elapsed_s = perf_counter() - started_at
+    all_l4_baseline = (
+        replay_oracle.all_l4_baseline_metrics(records)
+        if replay_oracle is not None
+        else None
+    )
+    l1_metrics = _l1_only_metrics(prediction_rows, elapsed_s=elapsed_s)
+    cascade_metrics = _l1_l4_cascade_metrics(
+        prediction_rows,
+        replay_oracle=replay_oracle,
+        all_l4_baseline=all_l4_baseline,
+    )
+    result: dict[str, Any] = {
+        "schema_version": "clinc150-l1-eval-v1",
+        "requests": len(prediction_rows),
+        "primary_layers": ["L1", "L4_REPLAY_ORACLE"],
+        "l0_enabled": False,
+        "l2_enabled": False,
+        "l3_enabled": False,
+        "l1_only": l1_metrics,
+        "all_l4_baseline": all_l4_baseline,
+        "l1_l4_cascade": cascade_metrics,
+        "replay_oracle": replay_oracle.metadata() if replay_oracle is not None else None,
+        "accepted_error_count": sum(
+            1 for row in prediction_rows if row["l1_accepted"] and not row["l1_correct"]
+        ),
+        "accepted_error_examples": _accepted_error_examples(prediction_rows),
+        "cost_latency_table": _l1_cost_latency_table(l1_metrics, cascade_metrics),
+    }
+    if include_prediction_rows:
+        result["prediction_rows"] = prediction_rows
+    return result
+
+
+def select_clinc150_l1_candidate(
+    candidates: list[dict[str, Any]],
+    *,
+    selection_split: str,
+    min_precision: float = 0.99,
+    max_oos_false_accept_rate: float = 0.02,
+    min_accuracy_delta_vs_all_l4: float = -0.005,
+    min_coverage: float = 0.10,
+) -> dict[str, Any] | None:
+    if selection_split in {"test", "locked_test", "locked-test"}:
+        raise ValueError("locked test split cannot be used for CLINC150 L1 candidate selection")
+    eligible: list[dict[str, Any]] = []
+    for candidate in candidates:
+        l1_metrics = candidate.get("l1_only", {})
+        cascade_metrics = candidate.get("l1_l4_cascade", {})
+        precision = l1_metrics.get("accepted_precision")
+        coverage = l1_metrics.get("accepted_coverage")
+        delta = cascade_metrics.get("accuracy_delta_vs_all_l4")
+        if precision is None or coverage is None:
+            continue
+        if precision < min_precision or coverage < min_coverage:
+            continue
+        if l1_metrics.get("lower_layer_oos_false_accept_rate", 0.0) > max_oos_false_accept_rate:
+            continue
+        if delta is not None and delta < min_accuracy_delta_vs_all_l4:
+            continue
+        eligible.append(candidate)
+    if not eligible:
+        return None
+    return max(
+        eligible,
+        key=lambda candidate: (
+            candidate["l1_only"]["accepted_coverage"],
+            candidate["l1_only"]["accepted_precision"],
+        ),
+    )
+
+
+def write_clinc150_l1_eval_artifacts(
+    *,
+    result: dict[str, Any],
+    out_dir: Path,
+) -> Clinc150L1EvalArtifact:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prediction_rows = result.get("prediction_rows")
+    summary = {
+        key: value
+        for key, value in result.items()
+        if key != "prediction_rows"
+    }
+    summary_path = out_dir / "clinc150_l1_eval_summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    details_path = None
+    if isinstance(prediction_rows, list):
+        details_path = out_dir / "clinc150_l1_predictions.jsonl"
+        details_path.write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in prediction_rows),
+            encoding="utf-8",
+        )
+    accepted_errors_path = out_dir / "clinc150_l1_accepted_errors.jsonl"
+    accepted_errors = [
+        row
+        for row in prediction_rows or []
+        if row.get("l1_accepted") and not row.get("l1_correct")
+    ]
+    accepted_errors_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in accepted_errors),
+        encoding="utf-8",
+    )
+    cost_latency_path = out_dir / "clinc150_l1_cost_latency_table.json"
+    cost_latency_path.write_text(
+        json.dumps(summary.get("cost_latency_table", []), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return Clinc150L1EvalArtifact(
+        summary_path=summary_path,
+        details_jsonl_path=details_path,
+        accepted_errors_path=accepted_errors_path,
+        cost_latency_path=cost_latency_path,
+        summary=summary,
+    )
+
+
+def _l1_prediction_row(*, worker: Any, record: DataRecord) -> dict[str, Any]:
+    started = perf_counter()
+    response = worker.answer(record.utterance, request_id=record.request_id)
+    latency_ms = (perf_counter() - started) * 1000.0
+    if not isinstance(response, RustL1Response):
+        response = RustL1Response.model_validate(response)
+    frame = _frame_from_l1_response(response)
+    accepted = response.accepted and frame is not None
+    gold_frame = record.gold_frame.model_dump(mode="json")
+    gold_intent = record.gold_frame.intent
+    l1_intent = frame.get("intent") if isinstance(frame, dict) else None
+    correct = accepted and frame == gold_frame
+    return {
+        "request_id": record.request_id,
+        "utterance": record.utterance,
+        "gold_frame": gold_frame,
+        "gold_intent": gold_intent,
+        "gold_oos": gold_intent == CLINC150_OOS_INTENT,
+        "l1_accepted": accepted,
+        "l1_frame": frame,
+        "l1_intent": l1_intent,
+        "l1_oos": l1_intent == CLINC150_OOS_INTENT,
+        "l1_correct": correct,
+        "l1_outcome": _l1_outcome(
+            accepted=accepted,
+            correct=correct,
+            gold_intent=gold_intent,
+            l1_intent=l1_intent,
+        ),
+        "program_path": response.program_path,
+        "native_latency_us": response.native_latency_us,
+        "integration_latency_ms": latency_ms,
+        "reason": response.reason,
+    }
+
+
+def _frame_from_l1_response(response: RustL1Response) -> dict[str, Any] | None:
+    if response.frame is not None:
+        return response.frame.model_dump(mode="json")
+    if response.patch is None or response.patch.accepted_intent is None:
+        return None
+    intent = response.patch.accepted_intent
+    return Frame(
+        intent=intent,
+        slots=dict(response.patch.accepted_slots),
+        is_abstain=intent == CLINC150_OOS_INTENT,
+    ).model_dump(mode="json")
+
+
+def _l1_outcome(
+    *,
+    accepted: bool,
+    correct: bool,
+    gold_intent: str,
+    l1_intent: str | None,
+) -> str:
+    if not accepted:
+        return "abstain"
+    if correct:
+        return "correct_accept"
+    if gold_intent == CLINC150_OOS_INTENT and l1_intent != CLINC150_OOS_INTENT:
+        return "oos_false_accept"
+    return "wrong_accept"
+
+
+def _l1_only_metrics(prediction_rows: list[dict[str, Any]], *, elapsed_s: float) -> dict[str, Any]:
+    requests = len(prediction_rows)
+    accepted_rows = [row for row in prediction_rows if row["l1_accepted"]]
+    correct_accepted = [row for row in accepted_rows if row["l1_correct"]]
+    wrong_accepted = [row for row in accepted_rows if not row["l1_correct"]]
+    oos_total = sum(1 for row in prediction_rows if row["gold_oos"])
+    lower_oos_false_accepts = sum(
+        1 for row in accepted_rows if row["gold_oos"] and not row["l1_oos"]
+    )
+    native_latencies = [float(row["native_latency_us"]) for row in prediction_rows]
+    integration_latencies = [float(row["integration_latency_ms"]) for row in prediction_rows]
+    program_path_counts: dict[str, int] = defaultdict(int)
+    outcome_counts: dict[str, int] = defaultdict(int)
+    for row in prediction_rows:
+        program_path_counts[str(row["program_path"])] += 1
+        outcome_counts[str(row["l1_outcome"])] += 1
+    return {
+        "requests": requests,
+        "accepted": len(accepted_rows),
+        "abstained": requests - len(accepted_rows),
+        "correct_accepts": len(correct_accepted),
+        "wrong_accepts": len(wrong_accepted),
+        "accepted_coverage": _rate(len(accepted_rows), requests),
+        "accepted_precision": _rate(len(correct_accepted), len(accepted_rows)),
+        "lower_layer_oos_false_accepts": lower_oos_false_accepts,
+        "lower_layer_oos_false_accept_rate": _rate(lower_oos_false_accepts, oos_total) or 0.0,
+        "native_p50_us": _percentile(native_latencies, 50),
+        "native_p95_us": _percentile(native_latencies, 95),
+        "native_max_us": max(native_latencies) if native_latencies else 0.0,
+        "integration_p50_ms": _percentile(integration_latencies, 50),
+        "integration_p95_ms": _percentile(integration_latencies, 95),
+        "throughput_qps": requests / elapsed_s if elapsed_s > 0.0 else 0.0,
+        "program_path_counts": dict(sorted(program_path_counts.items())),
+        "outcome_counts": dict(sorted(outcome_counts.items())),
+    }
+
+
+def _l1_l4_cascade_metrics(
+    prediction_rows: list[dict[str, Any]],
+    *,
+    replay_oracle: Clinc150L4ReplayOracle | None,
+    all_l4_baseline: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if replay_oracle is None:
+        return None
+    final_rows = [
+        _l1_l4_cascade_row(row, replay_oracle=replay_oracle)
+        for row in prediction_rows
+    ]
+    requests = len(final_rows)
+    final_correct = sum(1 for row in final_rows if row["final_correct"])
+    all_l4_accuracy = all_l4_baseline.get("accuracy") if all_l4_baseline else None
+    l4_calls = sum(1 for row in final_rows if row["l4_called"])
+    l4_tokens = sum(float(row["l4_tokens"]) for row in final_rows)
+    l4_cost = sum(float(row["l4_cost_usd"]) for row in final_rows)
+    oracle_stats = [
+        replay_oracle.stats_for(row["request_id"])
+        for row in prediction_rows
+    ]
+    all_l4_tokens = sum(
+        float(stats["tokens"])
+        for stats in oracle_stats
+    )
+    all_l4_cost = sum(
+        float(stats["cost_usd"])
+        for stats in oracle_stats
+    )
+    all_l4_latencies = [
+        float(stats["latency_ms"])
+        for stats in oracle_stats
+    ]
+    model_counts: dict[str, int] = defaultdict(int)
+    for stats in oracle_stats:
+        model_counts[str(stats["model"] or "unknown")] += 1
+    latencies = [float(row["latency_ms"]) for row in final_rows]
+    final_accuracy = _rate(final_correct, requests)
+    parse_schema_failures = sum(1 for stats in oracle_stats if stats["parse_failure"])
+    return {
+        "requests": requests,
+        "accuracy": final_accuracy,
+        "accuracy_delta_vs_all_l4": (
+            final_accuracy - all_l4_accuracy
+            if final_accuracy is not None and all_l4_accuracy is not None
+            else None
+        ),
+        "all_l4_accuracy": all_l4_accuracy,
+        "l4_calls": l4_calls,
+        "l4_calls_per_100_requests": (l4_calls / requests * 100.0) if requests else 0.0,
+        "l4_call_reduction_rate": (
+            1.0 - (l4_calls / requests)
+            if requests
+            else None
+        ),
+        "all_l4_calls_per_100_requests": 100.0 if requests else 0.0,
+        "all_l4_tokens_per_request": all_l4_tokens / requests if requests else 0.0,
+        "l4_tokens_per_request": l4_tokens / requests if requests else 0.0,
+        "l4_tokens_reduction_rate": (
+            1.0 - (l4_tokens / all_l4_tokens)
+            if all_l4_tokens > 0.0
+            else None
+        ),
+        "all_l4_cost_usd_per_request": all_l4_cost / requests if requests else 0.0,
+        "l4_cost_usd_per_request": l4_cost / requests if requests else 0.0,
+        "l4_cost_reduction_rate": (
+            1.0 - (l4_cost / all_l4_cost)
+            if all_l4_cost > 0.0
+            else None
+        ),
+        "all_l4_latency_p50_ms": _percentile(all_l4_latencies, 50),
+        "all_l4_latency_p95_ms": _percentile(all_l4_latencies, 95),
+        "latency_p50_ms": _percentile(latencies, 50),
+        "latency_p95_ms": _percentile(latencies, 95),
+        "latency_p50_reduction_rate": _reduction_rate(
+            _percentile(latencies, 50),
+            _percentile(all_l4_latencies, 50),
+        ),
+        "latency_p95_reduction_rate": _reduction_rate(
+            _percentile(latencies, 95),
+            _percentile(all_l4_latencies, 95),
+        ),
+        "parse_schema_failures": parse_schema_failures,
+        "parse_schema_failure_rate": (
+            _rate(parse_schema_failures, len(oracle_stats))
+            if oracle_stats
+            else None
+        ),
+        "retry_recovered_rows": sum(
+            1 for stats in oracle_stats if stats["retry_recovered"]
+        ),
+        "attempt_count": sum(int(stats["attempt_count"]) for stats in oracle_stats),
+        "empty_response_attempts": sum(
+            int(stats["empty_response_attempts"])
+            for stats in oracle_stats
+        ),
+        "final_empty_response_failures": sum(
+            1 for stats in oracle_stats if stats["final_empty_response_failure"]
+        ),
+        "unknown_usage_attempts": sum(
+            int(stats["unknown_usage_attempts"])
+            for stats in oracle_stats
+        ),
+        "model_counts": dict(sorted(model_counts.items())),
+    }
+
+
+def _l1_l4_cascade_row(
+    prediction_row: dict[str, Any],
+    *,
+    replay_oracle: Clinc150L4ReplayOracle,
+) -> dict[str, Any]:
+    if prediction_row["l1_accepted"]:
+        final_frame = prediction_row["l1_frame"]
+        l4_called = False
+        l4_tokens = 0.0
+        l4_cost_usd = 0.0
+        l4_latency_ms = 0.0
+    else:
+        final_frame = replay_oracle.frame_for(prediction_row["request_id"])
+        stats = replay_oracle.stats_for(prediction_row["request_id"])
+        l4_called = True
+        l4_tokens = float(stats["tokens"])
+        l4_cost_usd = float(stats["cost_usd"])
+        l4_latency_ms = float(stats["latency_ms"])
+    return {
+        "request_id": prediction_row["request_id"],
+        "final_frame": final_frame,
+        "final_correct": final_frame == prediction_row["gold_frame"],
+        "l4_called": l4_called,
+        "l4_tokens": l4_tokens,
+        "l4_cost_usd": l4_cost_usd,
+        "latency_ms": float(prediction_row["integration_latency_ms"]) + l4_latency_ms,
+    }
+
+
+def _accepted_error_examples(
+    prediction_rows: list[dict[str, Any]],
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    examples = [
+        {
+            "request_id": row["request_id"],
+            "utterance": row["utterance"],
+            "gold_intent": row["gold_intent"],
+            "l1_intent": row["l1_intent"],
+            "program_path": row["program_path"],
+            "reason": row["reason"],
+            "l1_outcome": row["l1_outcome"],
+        }
+        for row in prediction_rows
+        if row["l1_accepted"] and not row["l1_correct"]
+    ]
+    return examples[:limit]
+
+
+def _l1_cost_latency_table(
+    l1_metrics: dict[str, Any],
+    cascade_metrics: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    row = {
+        "accepted_coverage": l1_metrics.get("accepted_coverage"),
+        "accepted_precision": l1_metrics.get("accepted_precision"),
+        "lower_layer_oos_false_accept_rate": l1_metrics.get(
+            "lower_layer_oos_false_accept_rate"
+        ),
+        "native_p50_us": l1_metrics.get("native_p50_us"),
+        "native_p95_us": l1_metrics.get("native_p95_us"),
+    }
+    if cascade_metrics is not None:
+        row.update(
+            {
+                "final_cascade_accuracy": cascade_metrics.get("accuracy"),
+                "accuracy_delta_vs_all_l4": cascade_metrics.get("accuracy_delta_vs_all_l4"),
+                "all_l4_calls_per_100_requests": cascade_metrics.get(
+                    "all_l4_calls_per_100_requests"
+                ),
+                "l4_calls_per_100_requests": cascade_metrics.get("l4_calls_per_100_requests"),
+                "l4_call_reduction_rate": cascade_metrics.get("l4_call_reduction_rate"),
+                "all_l4_tokens_per_request": cascade_metrics.get(
+                    "all_l4_tokens_per_request"
+                ),
+                "l4_tokens_per_request": cascade_metrics.get("l4_tokens_per_request"),
+                "l4_tokens_reduction_rate": cascade_metrics.get(
+                    "l4_tokens_reduction_rate"
+                ),
+                "all_l4_cost_usd_per_request": cascade_metrics.get(
+                    "all_l4_cost_usd_per_request"
+                ),
+                "l4_cost_usd_per_request": cascade_metrics.get("l4_cost_usd_per_request"),
+                "l4_cost_reduction_rate": cascade_metrics.get("l4_cost_reduction_rate"),
+                "all_l4_latency_p50_ms": cascade_metrics.get("all_l4_latency_p50_ms"),
+                "latency_p50_ms": cascade_metrics.get("latency_p50_ms"),
+                "latency_p50_reduction_rate": cascade_metrics.get(
+                    "latency_p50_reduction_rate"
+                ),
+                "all_l4_latency_p95_ms": cascade_metrics.get("all_l4_latency_p95_ms"),
+                "latency_p95_ms": cascade_metrics.get("latency_p95_ms"),
+                "latency_p95_reduction_rate": cascade_metrics.get(
+                    "latency_p95_reduction_rate"
+                ),
+            }
+        )
+    return [row]
+
+
 def load_teacher_rows(path: Path) -> list[dict[str, Any]]:
     return [
         json.loads(line)
@@ -1072,6 +1623,10 @@ def _all_l4_baseline_metrics(
     tokens = sum(float(row.get("tokens", 0.0)) for row in paired_rows)
     cost = sum(float(row.get("cost_usd", 0.0)) for row in paired_rows)
     latencies = [float(row.get("latency_ms", 0.0)) for row in paired_rows]
+    model_counts: dict[str, int] = defaultdict(int)
+    for row in paired_rows:
+        model = str(row.get("model") or "unknown")
+        model_counts[model] += 1
     return {
         "requests": requests,
         "paired_teacher_rows": len(paired_rows),
@@ -1084,10 +1639,19 @@ def _all_l4_baseline_metrics(
         "latency_p50_ms": _percentile(latencies, 50),
         "latency_p95_ms": _percentile(latencies, 95),
         "retry_recovered_rows": sum(1 for row in paired_rows if row.get("retry_recovered")),
+        "attempt_count": sum(int(row.get("attempt_count", 1)) for row in paired_rows),
+        "empty_response_attempts": sum(
+            int(row.get("empty_response_attempts", 0))
+            for row in paired_rows
+        ),
+        "final_empty_response_failures": sum(
+            1 for row in paired_rows if row.get("final_empty_response_failure")
+        ),
         "unknown_usage_attempts": sum(
             int(row.get("unknown_usage_attempts", 0))
             for row in paired_rows
         ),
+        "model_counts": dict(sorted(model_counts.items())),
     }
 
 

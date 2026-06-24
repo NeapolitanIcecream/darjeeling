@@ -21,10 +21,12 @@ from darjeeling.targets.nlu.adapters.massive import prepare_massive_dataset
 from darjeeling.targets.nlu.clinc150_phase1 import (
     DEFAULT_CLINC150_PROMPTS,
     DEFAULT_CLINC150_THRESHOLDS,
+    Clinc150L4ReplayOracle,
     build_clinc150_gate_records,
     build_clinc150_label_cards,
     clinc150_metrics_from_teacher_rows,
     compare_repeated_teacher_rows,
+    evaluate_clinc150_l1,
     evaluate_clinc150_l2,
     load_teacher_rows,
     run_clinc150_teacher_live_eval,
@@ -32,6 +34,7 @@ from darjeeling.targets.nlu.clinc150_phase1 import (
     train_clinc150_l2,
     training_examples_from_gold_records,
     training_examples_from_teacher_rows,
+    write_clinc150_l1_eval_artifacts,
     write_clinc150_l2_eval_artifacts,
     write_clinc150_l2_train_artifacts,
     write_clinc150_teacher_cost_ledger,
@@ -72,6 +75,7 @@ from darjeeling.targets.nlu.experiments import (
 )
 from darjeeling.targets.nlu.layers.l1_rust_programbank import (
     DEFAULT_BENCHMARK_UTTERANCES,
+    RustL1Worker,
     benchmark_worker,
     binary_path_for,
     build_l1_binary,
@@ -753,6 +757,72 @@ def clinc150_l2_eval(
     artifact = write_clinc150_l2_eval_artifacts(result=result, out_dir=out_dir)
     console.print(f"wrote {artifact.summary_path}")
     console.print(f"wrote {artifact.cost_latency_path}")
+    if artifact.details_jsonl_path is not None:
+        console.print(f"wrote {artifact.details_jsonl_path}")
+    console.print_json(data=artifact.summary)
+
+
+@clinc150_app.command("l1-eval")
+def clinc150_l1_eval(
+    crate_dir: Annotated[
+        Path,
+        typer.Option(help="Rust L1 ProgramBank crate directory."),
+    ],
+    out_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for CLINC150 L1 eval artifacts."),
+    ],
+    data_dir: Annotated[
+        Path,
+        typer.Option(help="Processed CLINC150 data directory."),
+    ] = Path("data/processed/clinc150_data_full"),
+    split: Annotated[str, typer.Option(help="Processed split to evaluate.")] = "validation",
+    stream: Annotated[
+        str,
+        typer.Option(
+            help="Eval stream: sequential, stratified, uniform, zipf-mild, or zipf-heavy.",
+        ),
+    ] = "sequential",
+    max_requests: Annotated[int | None, typer.Option(min=1)] = None,
+    teacher_details: Annotated[
+        Path | None,
+        typer.Option(help="Paired CLINC150 teacher details JSONL for replay-oracle fallback."),
+    ] = None,
+    release: Annotated[bool, typer.Option(help="Build and use the release profile.")] = False,
+    timeout_s: Annotated[
+        float,
+        typer.Option(min=0.1, help="Per-request L1 worker timeout in seconds."),
+    ] = 2.0,
+    write_details: Annotated[
+        bool,
+        typer.Option("--write-details/--no-write-details"),
+    ] = False,
+) -> None:
+    """Evaluate a Rust L1 ProgramBank over CLINC150 with L0/L2/L3 disabled."""
+
+    records = load_processed_records(data_dir, split=split)
+    sample_records = sample_clinc150_records(
+        records,
+        stream=stream,
+        max_requests=max_requests,
+    )
+    replay_oracle = (
+        Clinc150L4ReplayOracle.from_path(teacher_details)
+        if teacher_details is not None
+        else None
+    )
+    binary_path = build_l1_binary(crate_dir, release=release)
+    with RustL1Worker(binary_path, timeout_s=timeout_s) as worker:
+        result = evaluate_clinc150_l1(
+            worker=worker,
+            records=sample_records,
+            replay_oracle=replay_oracle,
+            include_prediction_rows=write_details,
+        )
+    artifact = write_clinc150_l1_eval_artifacts(result=result, out_dir=out_dir)
+    console.print(f"wrote {artifact.summary_path}")
+    console.print(f"wrote {artifact.cost_latency_path}")
+    console.print(f"wrote {artifact.accepted_errors_path}")
     if artifact.details_jsonl_path is not None:
         console.print(f"wrote {artifact.details_jsonl_path}")
     console.print_json(data=artifact.summary)
