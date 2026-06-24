@@ -51,7 +51,17 @@ Qwen/Qwen2.5-0.5B-Instruct
 - `edge-mvp report` 会读取已有 `reports/l3_benchmark.json` 并展示在 summary、metrics 和 curves；report 不会自动加载模型。
 - `edge-mvp-nlu experiment preflight` 不加载本地模型，只读取 settings 和可选 `reports/l3_benchmark.json`。`LOCAL_SLM_MODE=disabled` 是 non-blocking pass；`shadow` 缺少成功 benchmark 是 warn；`guarded` 缺少成功 benchmark 是 fail，因为 guarded L3 会进入主路由且模型加载失败会 fail fast。
 - offline promotion replay 使用 trace 中 recorded L3 accepted result 计入 L3 correctness、latency 和 wrong accept；compiler 不在 replay 阶段重新加载本地模型。
-- `edge-mvp-nlu l3 prompt-evolve` 已实现 agent-session prompt evolution：创建隔离 `workspace/l3_prompt/`，暴露 editable `prompt/l3_prompt.json`、`prompt/context_packing.json`、`prompt/routing_guard.md`，把 train/visible validation、task schema、objective 和 local SLM config 写入 protected `contexts/`，并提供 protected `tools/validate_prompt.py`、`tools/evaluate_prompt.py`、`tools/bench_prompt.py`、`tools/latency_cost_eval.py`。Agent 可在同一个 session 内自行做 prompt eval、本地 SLM bench 和 latency/cost eval；session 结束后 outer harness scope check、snapshot candidate prompt，并可用本地 SLM replay 跑 visible/private selection/promotion gates。`--skip-replay` 只用于无模型 smoke，不支持质量结论。
+- `edge-mvp-nlu l3 prompt-evolve` 已实现 agent-session prompt evolution：每个
+  `max_rounds` round 创建隔离 `workspace/l3_prompt/`，暴露 editable
+  `prompt/l3_prompt.json`、`prompt/context_packing.json`、
+  `prompt/routing_guard.md`，把 train/visible validation、task schema、objective
+  和 local SLM config 写入 protected `contexts/`，并提供 protected
+  `tools/validate_prompt.py`、`tools/evaluate_prompt.py`、
+  `tools/bench_prompt.py`、`tools/latency_cost_eval.py`。Agent 可在 round session
+  内自行做 prompt eval、本地 SLM bench 和 latency/cost eval；session 结束后
+  outer harness scope check、snapshot candidate prompt，并可用本地 SLM replay 跑
+  visible/private selection/promotion gates。`--skip-replay` 只用于无模型 smoke，
+  不支持质量结论。
 - `L4_PROPOSAL_MODE=live` 时，compiler 可以生成 `l3_prompt_candidate` artifact。Few-shot examples 只从 teacher-visible trace IDs 展开，不读取 gold labels。
 - `edge-mvp-nlu l3 replay-prompt --prompt <candidate> --traces <trace.jsonl> --out <replay.json>` 已实现显式重新生成式 replay。该命令强制以 `shadow` 语义运行本地 SLM，输出 `l3-prompt-replay-v1`，记录 prompt hash、would-accept、accepted accuracy、wrong accept、parse/repair、latency 和 backend status。
 - `edge-mvp-nlu l3 promote-prompt --run-dir <run> --prompt <prompt.json> --replay <replay.json>` 已实现 gated runtime promotion。只有 replay artifact 与 prompt hash 匹配，并通过 accepted accuracy、wrong accept rate 和非空 coverage gate 后，才写入新的 artifact generation，并把 prompt 作为 `artifact_paths["l3_prompt"]`。
@@ -109,12 +119,12 @@ no parser hard failure
 
 ## L4 参与方式
 
-L3 evolve 使用与 L1/L2 同构的 L4 agent-session harness：outer job 准备隔离
-workspace，写入 prompt/context packing/routing guard prompt 的 editable
-surface、teacher-visible train/validation、prompt eval、本地 SLM bench 和
-latency/cost eval 工具；一个 long-running L4 agent session 在 workspace 内
-自主修改 prompt artifact、few-shot/context packing 和 guard prompt，并自行决定
-eval/bench/stop 的次数。Outer harness 只负责 scope check、private
+L3 evolve 使用与 L1/L2 同构的 L4 agent-session harness：outer job 按统一
+round policy 准备隔离 workspace，写入 prompt/context packing/routing guard
+prompt 的 editable surface、teacher-visible train/validation、prompt eval、
+本地 SLM bench 和 latency/cost eval 工具；每个 round 的 L4 agent session 在
+workspace 内自主修改 prompt artifact、few-shot/context packing 和 guard prompt，
+并自行决定 eval/bench/stop 的次数。Outer harness 只负责 scope check、private
 selection/promotion gate 和 outer replay adoption。
 
 Few-shot labels 必须来自 teacher-visible traces；agent 只能选择或重排

@@ -155,11 +155,15 @@ Semantic cache 是有价值的，但第一阶段不强制启用。先让 exact c
 - Semantic cache 作为第二阶段 artifact。
 - Report 中区分 exact cache 贡献和 semantic cache 贡献。
 
-## 决策 11：L2 evolve 使用 single-session Target-dependent inner loop，不能改 Darjeeling core
+## 决策 11：L2 evolve 使用 target-dependent round loop，不能改 Darjeeling core
 
 **状态：用户决策。**
 
-L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution job。Darjeeling core 保持 dataset-independent；具体 target/dataset 的 L2 runtime code 放在隔离 target workspace。真实 evolve 主路径是在一个 long-running L4 agent session 内自主多轮修改、训练、评估和调用 Optuna/search 工具。
+L2 evolve 分为 Outer Darjeeling loop 和 target-local L2 target-evolution job。
+Darjeeling core 保持 dataset-independent；具体 target/dataset 的 L2 runtime code
+放在隔离 target workspace。真实 evolve 主路径按统一 `max_rounds` 运行
+target-evolution rounds；`agent-session` round 在一个 L4 agent session 内自主修改、
+训练、评估和调用 Optuna/search 工具。
 
 设计含义：
 
@@ -177,7 +181,10 @@ L2 evolve 分为 Outer Darjeeling loop 和 Inner L2 target-evolution job。Darje
 - Target-specific lexical rules、state machines、feature code 或 model code 可以存在于 `target/`，只由 visible validation、target holdout/promotion 指标和 outer replay 决定是否采用；不能仅因为它是 target-dependent 就拒绝。Darjeeling core 仍必须保持 dataset-independent。
 - Inner job 必须先评估 baseline，再启动 agent session；agent 只看到 visible validation/history/diagnostics，不包含 selection/promotion holdout rows 或 private aggregate feedback。
 - Agent-visible state 不能写入由 private selection/promotion gate 推导出的 pass/fail 字段；这些只属于 outer summary、promotion metadata 和最终人工/自动 adoption 判断。
-- L4 agent budget 由 outer harness 控制：限制 wall time、LLM token、工具调用、Optuna trials 和 evaluation cost，但不规定 agent 内部的 edit/evaluate/search 步骤。`rounds` 在 `agent-session` 主路径中是给 agent 的内部迭代预算提示，不代表外层多次 Codex launch；旧 `codex-cli` multi-launch round loop 只保留为兼容/诊断路径。
+- Outer harness 控制 `max_rounds`、per-round timeout、patience 和 executor；
+  target-local tools 可以继续限制 Optuna trials 和 evaluation/search cost。Harness
+  不规定 agent 内部的 edit/evaluate/search 步骤，也不把 LLM spend、quality
+  evidence 或 private gate 语义抽象进 core。
 - Candidate selection gate 要求 visible validation gate、visible support gate、visible train-audit accepted-wrong safety gate 和 private selection holdout gate 同时通过。Visible support gate 要求 candidate 在每个 visible validation fold 至少保留 2 个 correct accepts，防止 near-zero coverage target 靠 abstain 通过 safety gate；private selection 不能掩盖 visible validation、visible support 或 visible train-audit safety regression。
 - Visible validation improvement 不能直接触发采用；通过 candidate selection gate 的 target round 只表示可被选中，只有同时通过 private promotion holdout gate 才能进入 `adoption_decision.adopted=true`。
 - 原先的 L2 host-repo patch harness 已删除；L2 evolve 只通过 target workspace 产出 target-dependent runtime artifact。

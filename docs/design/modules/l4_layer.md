@@ -22,9 +22,10 @@ L4ProposalAdapter
 
 L4CodingAgentAdapter
   Codex CLI coding-agent harness
-  scoped multi-turn session
+  scoped round/session executor
   evolves L1 Rust source tree
-  evolves L2 Python patch candidates
+  evolves L2 target code/search space
+  evolves L3 prompt artifacts
 ```
 
 ## L4TeacherAdapter
@@ -137,7 +138,7 @@ Agent 权限：
 - 已实现 `darjeeling.targets.nlu.compiler.l1_program_compiler.L4CodingAgentAdapter`。
 - adapter 会创建隔离 candidate workspace，写入 teacher-visible context files、prompt、raw transcript、diff、commands、agent report 和 `provenance.json`。
 - `provenance.json` 汇总 Codex JSONL event types、外层命令摘要和 diff stats；raw transcript 仍单独保存，供后续更细解析。
-- `agent-session` 模式会在隔离 `l1_programbank/` workspace 中启动一个 long-running Codex session；agent 自己决定 edit/test/bench/replay 的顺序和次数。
+- `agent-session` 模式会在每个 L1 round 的隔离 `l1_programbank/` workspace 中启动一个 Codex session；agent 自己决定 edit/test/bench/replay 的顺序和次数。
 - `dry-run` 模式可应用 fixture patch，不调用真实 Codex CLI，用于测试。
 - `codex-cli` 模式是 legacy one-shot path，模型、sandbox、approval policy、timeout 和命令名由 settings 控制。
 - 真实 L1 evolution 实验必须使用 `agent-session` 模式；`dry-run` 结果不能作为 demo 指标。
@@ -158,7 +159,11 @@ Agent 权限：
 Outer/Inner loop 分工：
 
 - Outer Darjeeling loop 负责 replay、teacher-visible split、workspace creation、provenance、promotion holdout、artifact registry 和 core invariants。
-- Inner L2 target-evolution job 在固定 target workspace 内启动一个 long-running L4 coding agent session：agent 自主决定 edit、evaluate、调用 Optuna/search 和停止的次数；本地 evaluator 训练/验证 L2，outer harness 在 session 结束后做 scope check 和 private gates。
+- Inner L2 target-evolution job 在固定 target workspace 内按 `max_rounds` 运行
+  target-evolution rounds。`agent-session` round 会启动一个 L4 coding agent session；
+  agent 自主决定 edit、evaluate、调用 Optuna/search 和停止的次数；本地 evaluator
+  训练/验证 L2，outer harness 在每轮结束后做 scope check、candidate evaluation
+  和 private gates。
 - Inner loop 不等待新的 stream prefix，也不把 target-specific code 回写到 Darjeeling core。
 - `data/train.jsonl`、`data/inner_validation.jsonl` 和可选的 `data/inner_validation_shadow_*.jsonl` 可以给 agent 使用；selection/promotion holdout 不进入 agent workspace，只保存在 outer job 私有目录并由 outer harness 使用。
 - Workspace scope 是硬 gate：agent session 结束后、candidate evaluation 前检查 protected files。候选代码只能改 `target/`；`runs/` 是 scratch output；`data/`、`tools/`、`system/darjeeling/` 和 `program.md` 不能被 agent 修改。越界修改以 `workspace_scope_violation` 停止 job，不进入 private selection/promotion。
@@ -166,7 +171,10 @@ Outer/Inner loop 分工：
 - Outer summary 可以记录 `private_holdout_evidence`，用于人类和 outer harness 判断 private gate 失败是 zero-accept sparsity、wrong accepts 还是 promotion gate failure；该 evidence 不进入 agent workspace，不能成为下一轮 L4 agent 的可见反馈。
 - Target split 默认 `chronological`；`intent-stratified` 是显式诊断选项，用来降低小样本 private selection/promotion 对窄 target family 的 zero-accept 稀疏性。它仍然只在 outer harness 内生成 split，不把 private rows 或 aggregate feedback 写回 agent workspace。
 - `fixed-inner` 默认使用 5 个 visible validation folds；`standard`/`smoke` 默认 1 个。多个 folds 只切分 capped 30% visible validation pool，不继续压缩 train。
-- `agent-session` 默认只启动一个 live GPT-5.5/Codex session；`rounds` 是 agent-visible 内部迭代预算提示，不是 harness 固定步骤。Optuna/search 是 workspace tool，由 agent 自己调用。Harness budget 限制 wall time、LLM spend、tool/eval/search cost，但不规定 agent 内部顺序。`--max-agent-rounds 0` 是 no-launch budget check，用于准备 workspace、baseline 和 context 而不调用 Codex；未启动、agent 命令失败或 workspace scope violation 的 run 不能支持质量结论。
+- `agent-session` round 默认启动一个 live GPT-5.5/Codex session；`rounds`
+  是外层真实轮数。Optuna/search 是 workspace tool，由 agent 自己调用。Harness
+  控制 maximum rounds、per-round timeout、patience 和 executor；target-local tools
+  可继续限制 evaluation/search cost，但这些不是 core policy fields。
 - Visible validation improvement 只驱动继续探索；visible validation gate、visible support gate 和 visible train-audit safety gate 都是 selection 的必要条件，但不是充分条件。Adoption 必须看 `adoption_decision`，它只在某个 target round 同时通过 visible validation/support/train-audit、private selection 和 private promotion gates 时接受。
 
 职责：
@@ -234,9 +242,9 @@ Agent 权限：
 
 - 已实现 `darjeeling.targets.nlu.compiler.l2_target_evolution` 和
   `edge-mvp-nlu l2 target-evolve --mode agent-session`，用于 target-dependent
-  single-session inner job。该路径当前支持 baseline-first evaluation、one-session
-  Codex launch、fixed split evaluator、target workspace scope gate、
-  private selection/promotion gates 和 target snapshot promotion。
+  multi-round target evolution。该路径当前支持 baseline-first evaluation、
+  agent-session round executor、fixed split evaluator、target workspace scope gate、
+  private selection/promotion gates、round summaries 和 target snapshot promotion。
 - Codex CLI 配置由 `L2_TARGET_AGENT_*` settings 控制，包括命令、模型、timeout、sandbox、approval policy、config/rules/session persistence 隔离选项。
 - 普通 replay/tuning 不会产生 live LLM cost；真实 target evolution 必须显式运行 `edge-mvp-nlu l2 target-evolve --mode agent-session`。
 - `tools/search_config.py` 不消耗 LLM tokens；它只优化可见 train/validation folds，并把 best visible config 写入 `target/config.json`。L4 coding agent 可在同一个 session 内调用它，但 search 结果不能自证 adoption。若 visible support 已经达标，agent 不应仅为了提高 raw accepts 降低 `accept_threshold`；这种 config 覆盖扩张容易绕过 target-local veto 的安全意图，必须由 visible train-audit、cross-audit 和 cue probes 共同证明必要且安全。
@@ -252,9 +260,9 @@ session。Retry/repair 也是显式 stateless request，包含原始 context has
 invalid output 和 validator errors。
 
 真实 artifact evolve 不再以 direct proposal 为主路径：L1、L2、L3 使用隔离
-workspace + one long-running L4 agent session + outer private gate。当前 direct
-L2/L3/guard proposal 代码是兼容和轻量 bounded proposal path，不能替代
-agent-session evolve，也不能自证 adoption。
+workspace + outer round policy + L4 agent-session executor + outer private gate。
+当前 direct L2/L3/guard proposal 代码是兼容和轻量 bounded proposal path，不能
+替代 agent-session evolve，也不能自证 adoption。
 
 ## OpenAI client
 

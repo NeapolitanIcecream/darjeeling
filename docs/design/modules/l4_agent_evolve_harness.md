@@ -7,37 +7,45 @@ coding-agent style iteration. L1, L2, and L3 should use the same outer shape:
 
 ```text
 layer-evolve job
-  prepare isolated workspace
-  write program.md, objective, visible data, and tools
-  launch one long-running L4 agent session
-  agent autonomously edits/evaluates/searches until it stops
-  outer harness checks workspace scope
-  outer harness evaluates private selection/promotion gates
+  resolve EvolutionRunPolicy(max_rounds, timeout, patience, executor)
+  for each round:
+    prepare isolated workspace
+    write program.md, objective, visible data, and tools
+    run the configured round executor, usually an L4 agent session
+    agent autonomously edits/evaluates/searches until it stops
+    outer harness checks workspace scope
+    outer harness evaluates target-owned visible/private gates
+    record EvolutionRoundResult
   outer replay decides artifact promotion
 ```
 
 The harness does not prescribe an internal script such as
 `edit -> evaluate -> optuna -> evaluate`. The agent is the planner,
-implementer, and local experiment driver inside one session.
+implementer, and local experiment driver inside a round.
 
-## Agent Session Boundary
+## Round Boundary
 
-- One L4 agent session closes inside one layer-evolve job.
+- A layer-evolve job has one `max_rounds` value. Each round either launches an
+  agent session or runs an explicitly selected non-agent executor such as
+  `dry-run` or `local-search`.
+- Agent sessions are round-local. A multi-round job may launch more than one
+  session, and later rounds may start from the latest successful candidate.
 - The agent can decide how many times to inspect context, edit files, run
   evaluate tools, run Optuna/search tools, debug, and stop.
 - The prompt must stay short and stable. Dynamic state belongs in workspace
   files so the session keeps reasoning continuity while prompts remain cacheable.
 - Agent stop reasons are agent-owned: visible target reached, no safe progress,
   risk too high, or budget near exhaustion.
-- Harness budgets constrain wall time, LLM spend, tool calls, Optuna trials, and
-  evaluation cost, but do not define a fixed step order.
+- Harness controls constrain maximum rounds, per-round timeout, patience and
+  executor. Target-local tools may also constrain trials or evaluation cost, but
+  those are not core policy fields.
 
 ## Visibility
 
 - Agent-visible data may include train rows, visible validation folds, visible
   diagnostics, and visible cross-audit diagnostics.
 - Private selection and promotion rows are never copied into the workspace.
-- Private gate aggregates are not fed back into the same agent session.
+- Private gate aggregates are not fed back into the same round workspace.
 - Agent-visible state must not include booleans or summaries derived from
   private gate outcomes; those belong only in the outer summary and promotion
   metadata.
@@ -56,23 +64,26 @@ The architecture is homologous; the artifact surfaces are not identical.
 
 ## Current Implementation Status
 
-- L1 now has an explicit `agent-session` mode. It launches one Codex session
-  over an isolated workspace root with editable `l1_programbank/`, protected
-  `program.md`/`contexts/`, `runs/` scratch output, scope checking, and
-  provenance for the session policy.
+- Core exposes only `EvolutionRunPolicy`, `EvolutionRoundResult` and
+  `EvolutionRunSummary`. It does not carry target quality claims, private-gate
+  requirements, profile guidance, evidence policy, cost policy or replay
+  cadence.
+- L1 now runs real `max_rounds`. Each round has its own workspace,
+  transcript, report, diff, command result, validation result and round result.
+  Later rounds start from the latest successful candidate crate.
 - L2 has the first concrete `agent-session` entry point. It launches one Codex
-  session over `workspace/l2_target/`, then evaluates the resulting `target/`
-  candidate with the existing visible/private gates.
+  session for a target-evolution round over `workspace/l2_target/`, then
+  evaluates the resulting `target/` candidate with the existing target-owned
+  visible/private gates. L2 keeps its train/evaluate and selection/adoption
+  logic in the NLU target.
 - L2 agent-visible `round_state.json` reports visible validation readiness, not
-  private selection/promotion pass/fail. Failed launches, no-launch budget
-  checks, and workspace scope violations are evidence-policy probes rather than
-  quality evidence.
+  private selection/promotion pass/fail.
 - L2 `tools/search_config.py` remains available as an agent-invoked Optuna tool.
   The old `local-search` mode is retained for deterministic tests and protocol
   probes, not as the preferred L2 evolve methodology.
 - L2 `dry-run` remains a fixture path for tests and controlled patch replay.
-- L3 now has an explicit `prompt-evolve` agent-session path. It launches one
-  Codex session over `workspace/l3_prompt/`, exposes editable `prompt/`,
+- L3 now uses `max_rounds` instead of `max_agent_sessions`. Each round launches
+  a prompt evolution session over `workspace/l3_prompt/`, exposes editable `prompt/`,
   protects `contexts/` and tools, provides prompt validation, visible prompt
   eval, local SLM bench, and latency/cost eval as workspace tools, snapshots the
   candidate prompt, and can run visible/private replay gates through the

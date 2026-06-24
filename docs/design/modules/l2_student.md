@@ -174,7 +174,10 @@ artifact.runtime_enabled and guard_probability >= artifact.accept_threshold
 
 Inner L2 target-evolution path：
 
-- `edge-mvp-nlu l2 target-evolve --mode agent-session` 是真实 L2 target evolve 主入口。它准备固定 target snapshot 和隔离 workspace，然后启动一个 long-running L4 agent session；agent 在 session 内自主决定 edit、evaluate、Optuna/search、debug 和 stop 的次数。
+- `edge-mvp-nlu l2 target-evolve --mode agent-session` 是真实 L2 target evolve
+  主入口。它准备固定 target snapshot 和隔离 workspace，然后按 `max_rounds`
+  启动 round-local L4 agent session；agent 在 session 内自主决定
+  edit、evaluate、Optuna/search、debug 和 stop 的次数。
 - Outer Darjeeling loop 负责 teacher-visible data split、workspace/provenance、outer promotion gate 和 core artifact 管理；不承载 target-specific L2 代码。
 - Inner target workspace 使用 `program.md + target/ + system/darjeeling/ + data/ + tools/`：
   - `target/` 是唯一可写 target-dependent L2 runtime code。
@@ -193,7 +196,11 @@ Inner L2 target-evolution path：
   - `tools/evaluate.py` 在固定 split 上训练 core L2 bundle，加载 `target/target_l2.py`，然后评估 `visible_validation` 或单个 visible fold；outer harness 使用同一 evaluator 加载私有 selection/promotion holdout 做 gate。
   - `tools/search_config.py` 在可见 train/validation folds 上运行本地 Optuna config search，只写 `target/config.json`，不读取 private holdout。它是 agent 可调用工具，不是真实方法论里的外层阶段。
 - `agent-session` 模式在 session 退出后、candidate evaluation 前执行 workspace scope check。候选代码只能改 `target/`，`runs/` 只作为 scratch output；`data/`、`tools/`、`system/darjeeling/` 和 `program.md` 是 protected surface。越界修改会以 `workspace_scope_violation` 停止 job，不能进入 selection/adoption。
-- Inner job 可以在同一批 target data 上让 agent 自主连续迭代，不再受 `compile_every` 或 replay stream 速度限制；`rounds` 在 `agent-session` 主路径中是给 agent 的内部迭代预算提示，不表示 harness 会启动多次 Codex。Summary 必须写入 `loop_cadence.kind=fixed_trace_snapshot_inner_loop` 和 `outer_replay_cadence_bound=false`，让后续 report/agent 明确这不是“收一批样本 evolve 一次”的 outer cadence。
+- Target-evolution job 使用外层 `max_rounds` 控制真实轮数，不再区分
+  `max_rounds` 和 agent-call budget。每轮可以运行 `agent-session`、`local-search`
+  或 `dry-run` 等 executor；每轮结束后都必须评估 candidate、记录 round result，
+  并 snapshot `target/`。Core 只理解 round/run 结构，不声明 L2 target quality、
+  private gate 或 replay cadence。
 - Target split 默认 `chronological`，用于保持与 stream prefix 相近的时序；`--split-policy intent-stratified` 可用于小样本或窄 target patch 诊断，让 visible validation、selection 和 promotion 都覆盖更多 teacher intent family。该选项只改变 fixed target split 的采样方式，不让 private selection/promotion 进入 agent workspace，也不放宽 adoption gate。
 - `--target-scope teacher_train|lower_miss` 决定进入 fixed target split 的 teacher-visible traces。默认 `teacher_train` 保留完整 teacher-labeled snapshot；`lower_miss` 会过滤掉 trace 中已被 L0/L1 接收的请求，只保留真实会落到 L2 或更高层的残差分布。该 scope 用于验证 L2 质量瓶颈是否来自 inner training/validation 分布与 runtime residual 分布不对齐。Summary、`round_state.json` 和 `objective.json` 必须写 `target_scope`，包括 input count、scoped count 和 lower-layer excluded count。Scope 不改变 private holdout 的隔离规则，也不能把 final eval 或 future stream 泄露给 agent。
 - `--visible-validation-folds N` 控制 agent-visible validation 强度。未显式传入时，`standard`/`smoke` 默认 1 fold，`fixed-inner` 默认 5 folds。`N=1` 保持旧的 60/20/10/10 split 和单个 `inner_validation.jsonl`；`N>1` 默认使用 50/30/10/10 split，并把这 30% 可见 validation pool 切成 `inner_validation` + `inner_validation_shadow_*`。继续增加 fold 数只切分同一个默认 capped visible pool，不能继续压缩 train；如果需要更大的 validation pool，必须显式传 `--visible-validation-ratio`，并在 summary、`round_state.json` 和 `objective.json` 中记录 requested/effective ratio。这避免把 fold count 变成隐式 train-starvation 参数。Candidate 的 visible gate 使用所有 visible folds 的 aggregate metric，目的是降低对单一 inner split 的过拟合；private selection/promotion 仍不进入 workspace。
@@ -211,8 +218,15 @@ Inner L2 target-evolution path：
 - `latest_visible_cross_audit_safety_backlog` 是第三层、但更接近 selection 的诊断队列。它把 visible train + visible validation rows 按 teacher intent 分成若干 held-out folds，每折重新训练 L2 bundle 并在 held-out visible fold 上评估 target code。`fixed-inner` profile 默认启用 3 折；`standard`/`smoke` 默认关闭。该指标用于发现单一 visible validation split 清空后仍可能隐藏的 wrong accepts，不参与 private candidate selection 或 adoption。
 - L4 coding agent session 应优先用于 `target/` 中的结构性改动：新特征、模型 family、校准方法、postprocess、abstain 机制和 search-space 设计。超参搜索本身交给 `tools/search_config.py`，由 agent 在同一 session 内按需调用，避免把 GPT-5.5 token 用在手工猜参数上。
 - 每个 job 先评估 unmodified baseline，再启动 agent session 并评估最终 target candidate。Visible validation improvement 的排序把 wrong accepts 放在 coverage 之前：提高 raw coverage 但引入 frame exactness regression 不算进步。
-- 默认 `standard` 预算策略仍是 cost-capped probe；真实固定 snapshot 探索应显式用 `--budget-profile fixed-inner`。`agent-session` 默认只启动一个 live agent session，agent 在该 session 内自行反复 edit/evaluate/search；`--max-agent-rounds 0` 只准备 workspace/baseline/context，不启动 Codex。旧 `codex-cli` 多 round 模式、`local-search` mode 和 `dry-run` mode 保留用于兼容、smoke 和回归测试，不是新的首选实验路径。
-- Summary、`data/round_state.json` 和 `data/objective.json` 必须写入 `budget_policy.profile_intent` 和 `evidence_policy`。`profile_intent` 说明本次 profile 的设计意图；`evidence_policy` 说明本次产物是否有资格支撑质量结论。`standard` 会标为 `cost_capped_probe`，`smoke` 会标为 `connectivity_smoke`，失败都不能被解释为 L2 evolve 方向已耗尽。只有足够预算、teacher-labeled snapshot size 足够、且 `agent-session` 至少完成一次 scoped candidate evaluation 的 `fixed-inner` run 才能标为 `fixed_snapshot_research`；如果 agent 未启动、命令失败、workspace scope violation 或 0 个 candidate 被评估，只能作为 incomplete/no-launch probe。显式把 `--rounds` 或 `--max-agent-rounds` 压得过低时，即使用了 `fixed-inner` profile，也只能作为 short/budget-capped probe。若 teacher-labeled traces 少于 500，则只能作为 small-snapshot probe，用于调试和方向探索，不能作为正式质量证据。`fixed_snapshot_research` 仍不是 adoption，本身还需要 private selection/promotion gates 和 outer e2e replay 证明。
+- `--budget-profile` 在 L2 CLI 中只是 target-local preset，用来展开默认
+  `rounds`、patience、visible validation folds、visible cross-audit folds 和
+  local-search trials。它不是 core policy，也不进入通用 run summary。
+- Summary、`data/round_state.json` 和 `data/objective.json` 必须写清
+  `round_policy`、target scope、visible/private 数据边界、candidate selection gate
+  和 adoption gate。不要重新引入 `budget_policy.profile_intent`、
+  `evidence_policy`、`agent_budget`、`requires_private_*` 或
+  `requires_outer_replay` 这类已经删除的共享伪抽象。质量结论由 target-owned
+  metrics、private selection/promotion gate 和 outer replay 共同支撑。
 - Candidate selection gate 要求 visible validation gate、visible support gate、visible train-audit accepted-wrong safety gate 和 private selection holdout gate 同时通过。Visible support gate 要求每个 visible validation fold 至少保留 2 个 correct accepts，用来挡住只靠大幅 abstain 取得 0 wrong 的 near-zero coverage candidate；raw private selection 通过但 visible validation、visible support 或 train-audit safety 失败时只能作为诊断信号，不能成为 selected candidate。小 holdout 上的 zero-accept 或 single-accept 结果只适合作为 inner-loop model-selection signal，不能替代外层 e2e replay。
 - Summary 同时记录 diagnostic `best_round`、`best_selection_round`、`selection_decision` 和 adoption-oriented `best_adoptable_round` / `adoption_decision`。即使某轮 visible validation 变好，只要 candidate selection/promotion holdout 不过 gate，就不能被视为可采用 target candidate。
 - Summary 还记录 `private_holdout_evidence`，用于区分 gate 失败原因：例如 `visible_support_gate_failed` 表示 visible validation 过关但 support 太薄，`selection_zero_accepts_for_inner_passing_rounds` 表示 private selection split 没观察到 candidate accepts，而不是观察到了错误。该字段只写 outer summary/promoted manifest，不写入 agent-visible `round_state.json` 或 `target_diagnostics.json`，避免把 private holdout aggregate feedback 泄露给 L4 agent。
@@ -243,7 +257,11 @@ artifact set is still accepted or rejected by outer replay/promotion gates.
 - `edge-mvp-nlu l2 replay-target` 是 target artifact 的正式 outer replay gate：candidate 默认取 current manifest，baseline 默认取 parent manifest，在同一批 teacher-labeled traces 上输出 `l2-target-outer-replay-v1`。默认 `accuracy_epsilon=0`，并包含 settings L1 Rust worker，确保 target candidate 不能用 frame exactness regression 换 L4 share。无论 inner 是否 adopted，最终是否采用仍以 3k/10k e2e replay 的 frame exactness、wrong accept 和 L4 share 为准。
 - `promote-target` 不改 Darjeeling core：它写入新的 `l2_student.joblib` 和 `l2_target` module artifact；runtime replay 与 compiler offline replay 加载同一 target wrapper，保持评估/运行语义一致。若普通 compiler generation 重新训练 core L2 bundle，则必须丢弃继承来的 `l2_target`，除非该 generation 明确做了 target-aware adoption；否则会把 target code 和不兼容 bundle 混用。
 - target-dependent lexical/code patches 允许存在于 `target/`，但必须从可见 train/validation-fold 数据推导，不能依赖 hidden dataset knowledge 或外部 dataset 知识。单条 visible row 的 exact utterance exception 或 request-id 记忆化不允许作为泛化机制；agent 应优先写有多个 visible 支持或清晰 schema 语义的 pattern-level lexical/slot-support 规则。是否采用由 holdout/promotion 指标和 outer replay 决定，而不是由 dataset-independent core 规则决定。Summary 和 promoted manifest 必须记录 `target_code_policy`，其中明确 `core_must_remain_dataset_independent=true`、`target_specific_code_is_not_rejected_for_dataset_dependence=true` 和 single-row memorization 禁止规则。
-- 当前实现状态：已支持 baseline-first `agent-session` single-launch 主路径、target workspace evaluator、可见多 fold validation、private holdout gate、visible `tools/search_config.py`、local-search trial report 和机器可读 `evidence_policy`。下一轮真实 L2 实验应优先使用 `agent-session`，让 agent 在一个 session 内自行调用 evaluate/search。
+- 当前实现状态：已支持 baseline-first target-evolution rounds、`agent-session`
+  round executor、target workspace evaluator、可见多 fold validation、private
+  holdout gate、visible `tools/search_config.py`、local-search trial report、
+  round result summaries 和 target snapshot adoption。下一轮真实 L2 实验应优先使用
+  `agent-session` rounds，并让 agent 在 round 内自行调用 evaluate/search。
 
 Optuna tuning path：
 

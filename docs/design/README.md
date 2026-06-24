@@ -15,7 +15,7 @@
 4. **L2 evolve 拆成 coding-agent 结构改造和本地调参工具。**
    L4 coding agent 负责真正需要 generalized intelligence 的 L2 代码/特征/验证协议改造；Optuna 等本地工具负责在 agent 设计的搜索空间内做超参搜索。旧的 direct L2 bounded config proposal 只保留为轻量 proposal path，不代表最终 L2 evolve 主路径。
 5. **L1/L2/L3 evolve 应采用同构的 L4 coding-agent 架构。**
-   三层都使用隔离 workspace、一个 long-running L4 agent session、agent
+   三层都使用隔离 workspace、round-local L4 agent session、agent
    自主 edit/evaluate/search、outer private gate 和 outer replay promotion。
    不同层的 editable surface 和工具不同：L1 是 Rust/native program，L2
    是 target student code/Optuna/evaluate，L3 是 prompt/context/bench。
@@ -24,6 +24,32 @@
    分层、路由、trace、训练/进化 harness、replay、promotion、artifact 和
    质量 gate 等目标无关机制；`Frame(intent, slots)`、NLU teacher prompt、
    intent/slot diagnostics 和 MASSIVE loader 都属于 NLU target 或其 adapter。
+7. **L1/L2/L3 共享外层 round policy，但 target 质量判断留在 target 层。**
+   Core 只暴露 `max_rounds`、per-round timeout、patience、round executor、
+   round result 和 run summary。Core 不再承载 agent budget/profile/evidence
+   这类未执行或只服务历史 artifact 的伪抽象，也不声明 private gate、
+   target quality 或 replay cadence 语义。L1/L2/L3 可以用不同 workspace 和
+   evaluator，但对外汇报同一种 round/run 结构。
+
+## 当前状态，2026-06-24
+
+- 当前 Phase 1 benchmark 是 CLINC150 `data_full`。MASSIVE 仍保留为历史
+  NLU adapter 和对照材料，但不再是当前机制验证主 benchmark。
+- CLINC150 L4 teacher gate 已通过：`clinc150-intent-v2-label-cards` 在
+  500-row validation gate 上达到 97.4% overall、98.4% in-scope、0.0%
+  parse/schema failure。
+- L2 已证明方向有吸收潜力，但还未达到 adoption gate：teacher-distilled
+  L2 在 validation 上可达到 99.10% accepted precision / 50.32% coverage，
+  locked test 在同一阈值下为 98.77% accepted precision；后续 guard 和
+  AutoResearch repair 仍未产生可锁测采用的候选。
+- L1 Rust ProgramBank 路线仍保留，但最新 CLINC150 dry-run patch 实验显示
+  validation-only phrase rules 不能泛化：validation 为 100.00% accepted
+  precision / 60.35% coverage，locked test 降到 92.73% accepted precision。
+  下一步应使用真实 `agent-session` evolution 和 train-derived calibration/dev
+  pressure，而不是继续 patch-mode 结果。
+- Outer evolution policy refactor 已合入。Core 的共享面收敛到普通 round
+  policy/summary；target 层继续拥有各自 workspace、diagnostics、private
+  gate 和 adoption 逻辑。
 
 ## 文档结构
 
@@ -49,6 +75,7 @@
 - [modules/artifacts.md](modules/artifacts.md)
 - [modules/eval_reports.md](modules/eval_reports.md)
 - [modules/testing.md](modules/testing.md)
+- [../experiments/README.md](../experiments/README.md)
 
 ## 命名
 
