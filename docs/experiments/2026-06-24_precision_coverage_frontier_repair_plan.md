@@ -23,16 +23,16 @@ source commit: 122f6c15ff4032052e1acfbf80371f43ea7af60c
 source worktree: /Users/chenmohan/gits/darjeeling-precision-coverage-visuals
 ```
 
-Create a new branch/worktree for the repair:
+Continue in the existing visualization branch/worktree:
 
 ```text
-branch: codex/precision-coverage-frontier-repair
-worktree: ../darjeeling-precision-coverage-frontier-repair
+branch: codex/precision-coverage-visuals
+worktree: /Users/chenmohan/gits/darjeeling-precision-coverage-visuals
 ```
 
-If the source branch/worktree already has uncommitted changes, stop and inspect
-before continuing. Otherwise branch from `codex/precision-coverage-visuals` so
-the useful data and plotting infrastructure are preserved.
+Do not create another worktree for this repair unless the existing visualization
+worktree is missing or unusable. If it has uncommitted changes, inspect them
+first and continue carefully without discarding user or agent work.
 
 ## Design Decision
 
@@ -322,7 +322,8 @@ record the exact command in the report.
 
 ## Done Criteria
 
-- Dedicated branch/worktree was used.
+- Existing visualization branch/worktree was used, unless it was missing or
+  unusable and a replacement was clearly documented.
 - Work starts from `codex/precision-coverage-visuals` and preserves useful data
   extraction/reporting infrastructure.
 - Standard frontier figures are replaced by single-knob operating curves.
