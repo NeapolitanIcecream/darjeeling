@@ -126,4 +126,3 @@ Final pre-commit verification is recorded in the commit session output.
 2. Re-run fixed-inner L2 AutoResearch with the new cross-audit gate active in the harness process.
 3. Add compact precision/coverage panels for L2 visible cross-audit points next to inner/private selection points.
 4. Treat any candidate with nonzero visible cross-audit wrong accepts as non-selectable unless a future experiment proves the gate is too conservative.
-

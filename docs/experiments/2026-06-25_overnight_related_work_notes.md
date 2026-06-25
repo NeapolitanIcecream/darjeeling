@@ -39,4 +39,3 @@ The selective-classification framing maps cleanly onto Darjeeling without adding
 2. Promote count-based accepted-error gates alongside precision ratios. A small precision drop can still correspond to many locked wrong accepts.
 3. Keep scratch search outputs separate from active target configs. Search should produce auditable candidates first, then apply them only through an explicit writeback path.
 4. Keep the changes target-local. The CLINC150/NLU fields and diagnostics stay in `darjeeling.targets.nlu`; core remains target independent.
-
