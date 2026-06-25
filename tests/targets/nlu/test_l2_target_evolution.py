@@ -272,6 +272,9 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
         / summary["rounds"][0]["target_snapshot"]
         / "target_l2.py"
     ).exists()
+    assert "Do not ignore high-guard wrong-intent near misses" in (
+        workspace / "program.md"
+    ).read_text(encoding="utf-8")
 
     manifest = json.loads((workspace / "workspace_manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "l2-target-workspace-v1"
@@ -296,6 +299,9 @@ def test_l2_target_evolution_runs_multiple_inner_rounds(tmp_path: Path) -> None:
     assert "uv run --project system/darjeeling" in manifest["commands"][
         "evaluate_visible_validation"
     ]
+    assert 'UV_PROJECT_ENVIRONMENT="$PWD/runs/.uv-project-env"' in manifest[
+        "commands"
+    ]["evaluate_visible_validation"]
     assert (workspace / "data" / "objective.json").exists()
     assert (workspace / "data" / "target_diagnostics.json").exists()
     round_state = json.loads((workspace / "data" / "round_state.json").read_text())
@@ -1167,6 +1173,47 @@ def test_l2_target_workspace_accepts_initial_config_and_target_context(
     assert target_context["locked_test_examples_in_workspace"] is False
     assert manifest["target_context_file"] == "target_context.json"
     assert manifest["initial_target_config"]["accept_threshold"] == 0.98
+
+
+def test_l2_target_workspace_commands_use_configured_search_budget(
+    tmp_path: Path,
+) -> None:
+    run_l2_target_evolution(
+        config=L2TargetEvolutionConfig(
+            source_repo_dir=Path.cwd(),
+            job_dir=tmp_path / "job",
+            rounds=1,
+            mode="dry-run",
+            local_search_trials=7,
+            local_search_timeout_s=12.5,
+            visible_cross_audit_folds=2,
+            local_search_cross_audit_top_k=1,
+            patience_rounds=0,
+        ),
+        traces=traces_to_teacher_view(_traces()),
+    )
+
+    workspace = tmp_path / "job" / "workspace" / "l2_target"
+    manifest = json.loads((workspace / "workspace_manifest.json").read_text())
+    commands_md = (workspace / "data" / "commands.md").read_text(encoding="utf-8")
+
+    assert "--trials 7" in manifest["commands"]["search_config"]
+    assert 'UV_PROJECT_ENVIRONMENT="$PWD/runs/.uv-project-env"' in manifest[
+        "commands"
+    ]["search_config"]
+    assert "--timeout-s 12.5" in manifest["commands"]["search_config"]
+    assert "--wall-clock-timeout-s 17.5" in manifest["commands"]["search_config"]
+    assert "--cross-audit-folds 2" in manifest["commands"]["search_config"]
+    assert "--cross-audit-top-k 1" in manifest["commands"]["search_config"]
+    assert "--apply-best" not in manifest["commands"]["search_config"]
+    assert "--apply-best" in manifest["commands"]["apply_search_config"]
+    assert "  --trials 7 \\" in commands_md
+    assert 'UV_PROJECT_ENVIRONMENT="$PWD/runs/.uv-project-env"' in commands_md
+    assert "  --timeout-s 12.5 \\" in commands_md
+    assert "  --wall-clock-timeout-s 17.5 \\" in commands_md
+    assert "  --cross-audit-folds 2 \\" in commands_md
+    assert "  --cross-audit-top-k 1 \\" in commands_md
+    assert "--trials 96" not in commands_md
 
 
 def test_l2_target_extra_visible_folds_do_not_keep_shrinking_train_split() -> None:
@@ -2402,6 +2449,44 @@ def test_l2_target_run_command_timeout_result_is_json_serializable(
     assert isinstance(result["stdout"], str)
     assert isinstance(result["stderr"], str)
     json.dumps(result)
+
+
+def test_l2_target_local_search_cli_writes_wall_clock_timeout_payload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fake_run_local_target_search(**_kwargs) -> dict[str, object]:
+        raise l2_target_evolution._LocalSearchWallClockTimeout(0.01)  # noqa: SLF001
+
+    monkeypatch.setattr(
+        l2_target_evolution,
+        "run_local_target_search",
+        fake_run_local_target_search,
+    )
+    out_path = tmp_path / "local_search.json"
+
+    return_code = l2_target_evolution.local_search_target_workspace_cli(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--trials",
+            "3",
+            "--timeout-s",
+            "1",
+            "--wall-clock-timeout-s",
+            "0.01",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert return_code == 124
+    assert payload["status"] == "wall_clock_timeout"
+    assert payload["trials_requested"] == 3
+    assert payload["wall_clock_timeout_s"] == 0.01
+    assert payload["active_config_updated"] is False
+    assert payload["trials"] == []
 
 
 def test_l2_target_evolve_cli_writes_summary(tmp_path: Path) -> None:

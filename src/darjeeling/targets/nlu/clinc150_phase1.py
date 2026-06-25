@@ -1987,8 +1987,10 @@ def run_clinc150_l2_autoresearch(
     mode: str = "agent-session",
     rounds: int = 16,
     budget_profile: str = "fixed-inner",
+    max_train_traces: int | None = None,
     timeout_s: float | None = None,
     local_search_trials: int = 32,
+    local_search_timeout_s: float | None = None,
     visible_validation_folds: int = 5,
     visible_validation_ratio: float | None = 0.30,
     visible_cross_audit_folds: int = 3,
@@ -2004,6 +2006,8 @@ def run_clinc150_l2_autoresearch(
     out_dir.mkdir(parents=True, exist_ok=True)
     train_rows = load_teacher_rows(train_teacher_details)
     train_traces = clinc150_autoresearch_traces_from_teacher_rows(train_rows)
+    if max_train_traces is not None:
+        train_traces = train_traces[:max_train_traces]
     traces_path = out_dir / "clinc150_autoresearch_teacher_train_traces.jsonl"
     traces_path.write_text(
         "".join(trace.model_dump_json() + "\n" for trace in train_traces),
@@ -2029,6 +2033,7 @@ def run_clinc150_l2_autoresearch(
             visible_validation_ratio=visible_validation_ratio,
             visible_cross_audit_folds=visible_cross_audit_folds,
             local_search_trials=local_search_trials,
+            local_search_timeout_s=local_search_timeout_s,
             local_search_cross_audit_top_k=local_search_cross_audit_top_k,
             timeout_s=timeout_s if timeout_s is not None else 7200.0,
             codex_command=codex_command,
@@ -2352,13 +2357,7 @@ def write_clinc150_l1_visible_feedback(
         encoding="utf-8",
     )
     errors_path = out_dir / "clinc150_previous_visible_accepted_errors.jsonl"
-    previous = feedback.get("previous_round") or {}
-    error_views = previous.get("visible_accepted_errors") or {}
-    error_rows = [
-        {"view": view_name, **row}
-        for view_name, rows in error_views.items()
-        for row in rows
-    ]
+    error_rows = _clinc150_l1_previous_visible_error_rows(feedback)
     errors_path.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in error_rows),
         encoding="utf-8",
@@ -2368,6 +2367,16 @@ def write_clinc150_l1_visible_feedback(
         "phrase_support": str(support_path),
         "previous_visible_accepted_errors": str(errors_path),
     }
+
+
+def _clinc150_l1_previous_visible_error_rows(feedback: dict[str, Any]) -> list[dict[str, Any]]:
+    previous = feedback.get("previous_round") or {}
+    error_views = previous.get("visible_accepted_errors") or {}
+    return [
+        {"view": view_name, **row}
+        for view_name, rows in error_views.items()
+        for row in rows
+    ]
 
 
 def _evaluate_clinc150_l1_crate_views(
@@ -2802,6 +2811,9 @@ def _clinc150_l1_context_payloads(
     return {
         "clinc150_visible_feedback.json": feedback,
         "clinc150_phrase_support.json": feedback["phrase_support_summary"],
+        "clinc150_previous_visible_accepted_errors.jsonl": (
+            _clinc150_l1_previous_visible_error_rows(feedback)
+        ),
         "clinc150_commands.md": _clinc150_l1_context_commands_text(
             source_repo_dir=source_repo_dir,
             data_dir=data_dir,
@@ -2827,6 +2839,13 @@ def _clinc150_l1_context_commands_text(
             "# CLINC150 visible commands",
             "",
             "Run these from the workspace root unless noted.",
+            "",
+            "Before editing after the first round, inspect",
+            "`contexts/clinc150_previous_visible_accepted_errors.jsonl`.",
+            "Any listed `(program_path, candidate_intent, reference_intent)` pair",
+            "is a blocking accepted-error family until your candidate abstains or",
+            "adds a narrower guard for it. Prefer pruning broad accepts before",
+            "adding coverage when the previous failure was train-dev accepted errors.",
             "",
             "Build/test the candidate:",
             "",

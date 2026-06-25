@@ -43,6 +43,12 @@ DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K = 4
 MIN_VISIBLE_CORRECT_ACCEPTS_PER_VALIDATION_FOLD = 2
 DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_MAX_WRONG_ACCEPTS = 0
 SLOT_CUE_PROBE_SPECS_FILE = "slot_cue_probes.json"
+LOCAL_SEARCH_WALL_CLOCK_TIMEOUT_BUFFER_S = 5.0
+LOCAL_SEARCH_WALL_CLOCK_TIMEOUT_BUFFER_FRACTION = 0.25
+WORKSPACE_UV_ENV_PREFIX = (
+    'UV_PROJECT_ENVIRONMENT="$PWD/runs/.uv-project-env" '
+    'UV_CACHE_DIR="$PWD/runs/.uv-cache"'
+)
 
 @dataclass(frozen=True)
 class L2TargetEvolutionConfig:
@@ -147,6 +153,10 @@ def run_l2_target_evolution(
         split=split,
         initial_target_config=config.initial_target_config,
         target_context=config.target_context,
+        local_search_trials=config.local_search_trials,
+        local_search_timeout_s=config.local_search_timeout_s,
+        visible_cross_audit_folds=config.visible_cross_audit_folds,
+        local_search_cross_audit_top_k=config.local_search_cross_audit_top_k,
     )
 
     baseline = _evaluate_target_candidate(
@@ -759,6 +769,10 @@ def prepare_l2_target_workspace(
     slot_cue_probe_specs: list[dict[str, Any]] | None = None,
     initial_target_config: dict[str, Any] | None = None,
     target_context: dict[str, Any] | None = None,
+    local_search_trials: int = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
+    local_search_timeout_s: float | None = None,
+    visible_cross_audit_folds: int = DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS,
+    local_search_cross_audit_top_k: int = DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K,
 ) -> None:
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
@@ -841,26 +855,37 @@ def prepare_l2_target_workspace(
         "commands": {
             "inspect_context": "python3 tools/inspect_context.py",
             "evaluate_visible_validation": (
+                f"{WORKSPACE_UV_ENV_PREFIX} "
                 "uv run --project system/darjeeling python tools/evaluate.py "
                 "--split visible_validation --out runs/visible_validation.json"
             ),
             "evaluate_train_audit": (
+                f"{WORKSPACE_UV_ENV_PREFIX} "
                 "uv run --project system/darjeeling python tools/evaluate.py "
                 "--split train_audit --out runs/train_audit.json"
             ),
             "evaluate_slot_cue_probes": (
+                f"{WORKSPACE_UV_ENV_PREFIX} "
                 "uv run --project system/darjeeling python tools/evaluate.py "
                 "--split slot_cue_probes --out runs/slot_cue_probes.json"
             ),
             "search_config": (
-                "uv run --project system/darjeeling python tools/search_config.py "
-                f"--trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} "
-                "--out runs/local_search.json"
+                _search_config_command_text(
+                    local_search_trials=local_search_trials,
+                    local_search_timeout_s=local_search_timeout_s,
+                    visible_cross_audit_folds=visible_cross_audit_folds,
+                    local_search_cross_audit_top_k=local_search_cross_audit_top_k,
+                    apply_best=False,
+                )
             ),
             "apply_search_config": (
-                "uv run --project system/darjeeling python tools/search_config.py "
-                f"--trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} "
-                "--apply-best --out runs/local_search.json"
+                _search_config_command_text(
+                    local_search_trials=local_search_trials,
+                    local_search_timeout_s=local_search_timeout_s,
+                    visible_cross_audit_folds=visible_cross_audit_folds,
+                    local_search_cross_audit_top_k=local_search_cross_audit_top_k,
+                    apply_best=True,
+                )
             ),
         },
     }
@@ -2663,7 +2688,15 @@ def _write_target_state_files(
         + "\n",
         encoding="utf-8",
     )
-    (data_dir / "commands.md").write_text(_target_commands_text(), encoding="utf-8")
+    (data_dir / "commands.md").write_text(
+        _target_commands_text(
+            local_search_trials=config.local_search_trials,
+            local_search_timeout_s=config.local_search_timeout_s,
+            visible_cross_audit_folds=config.visible_cross_audit_folds,
+            local_search_cross_audit_top_k=config.local_search_cross_audit_top_k,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _target_round_policy_payload(
@@ -2893,7 +2926,55 @@ def _workspace_scope_violation_command_result(
     }
 
 
-def _target_commands_text() -> str:
+def _target_commands_text(
+    *,
+    local_search_trials: int = DEFAULT_TARGET_LOCAL_SEARCH_TRIALS,
+    local_search_timeout_s: float | None = None,
+    visible_cross_audit_folds: int = DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS,
+    local_search_cross_audit_top_k: int = DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K,
+) -> str:
+    wall_clock_timeout_s = _local_search_effective_wall_clock_timeout_s(
+        timeout_s=local_search_timeout_s,
+        wall_clock_timeout_s=None,
+    )
+    timeout_line = (
+        f"  --timeout-s {local_search_timeout_s:g} \\"
+        if local_search_timeout_s is not None
+        else None
+    )
+    wall_clock_timeout_line = (
+        f"  --wall-clock-timeout-s {wall_clock_timeout_s:g} \\"
+        if wall_clock_timeout_s is not None
+        else None
+    )
+    search_lines = [
+        (
+            f"{WORKSPACE_UV_ENV_PREFIX} "
+            "uv run --project system/darjeeling python tools/search_config.py \\"
+        ),
+        f"  --trials {local_search_trials} \\",
+    ]
+    if timeout_line is not None:
+        search_lines.append(timeout_line)
+    if wall_clock_timeout_line is not None:
+        search_lines.append(wall_clock_timeout_line)
+    search_lines.extend(
+        [
+            f"  --cross-audit-folds {visible_cross_audit_folds} \\",
+            f"  --cross-audit-top-k {local_search_cross_audit_top_k} \\",
+            "  --out runs/local_search.json",
+        ]
+    )
+    fallback_parts = [
+        f"--trials {local_search_trials}",
+        f"--cross-audit-folds {visible_cross_audit_folds}",
+        f"--cross-audit-top-k {local_search_cross_audit_top_k}",
+    ]
+    if local_search_timeout_s is not None:
+        fallback_parts.append(f"--timeout-s {local_search_timeout_s:g}")
+    if wall_clock_timeout_s is not None:
+        fallback_parts.append(f"--wall-clock-timeout-s {wall_clock_timeout_s:g}")
+    fallback_parts.append("--out runs/local_search.json")
     return "\n".join(
         [
             "# Commands",
@@ -2901,7 +2982,10 @@ def _target_commands_text() -> str:
             "Evaluate all visible validation folds:",
             "",
             "```bash",
-            "uv run --project system/darjeeling python tools/evaluate.py \\",
+            (
+                f"{WORKSPACE_UV_ENV_PREFIX} "
+                "uv run --project system/darjeeling python tools/evaluate.py \\"
+            ),
             "  --split visible_validation \\",
             "  --out runs/visible_validation.json",
             "```",
@@ -2909,7 +2993,10 @@ def _target_commands_text() -> str:
             "Evaluate visible train audit diagnostics only:",
             "",
             "```bash",
-            "uv run --project system/darjeeling python tools/evaluate.py \\",
+            (
+                f"{WORKSPACE_UV_ENV_PREFIX} "
+                "uv run --project system/darjeeling python tools/evaluate.py \\"
+            ),
             "  --split train_audit \\",
             "  --out runs/train_audit.json",
             "```",
@@ -2931,7 +3018,10 @@ def _target_commands_text() -> str:
             ),
             "",
             "```bash",
-            "uv run --project system/darjeeling python tools/evaluate.py \\",
+            (
+                f"{WORKSPACE_UV_ENV_PREFIX} "
+                "uv run --project system/darjeeling python tools/evaluate.py \\"
+            ),
             "  --split slot_cue_probes \\",
             "  --out runs/slot_cue_probes.json",
             "```",
@@ -2939,26 +3029,19 @@ def _target_commands_text() -> str:
             "Evaluate visible cross-audit diagnostics when enabled:",
             "",
             "```bash",
-            "uv run --project system/darjeeling python tools/evaluate.py \\",
+            (
+                f"{WORKSPACE_UV_ENV_PREFIX} "
+                "uv run --project system/darjeeling python tools/evaluate.py \\"
+            ),
             "  --split visible_cross_audit \\",
-            f"  --visible-cross-audit-folds {DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS} \\",
+            f"  --visible-cross-audit-folds {visible_cross_audit_folds} \\",
             "  --out runs/visible_cross_audit.json",
             "```",
             "",
             "Run local Optuna config search on visible train/validation folds only:",
             "",
             "```bash",
-            "uv run --project system/darjeeling python tools/search_config.py \\",
-            f"  --trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} \\",
-            (
-                "  --cross-audit-folds "
-                f"{DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS} \\"
-            ),
-            (
-                "  --cross-audit-top-k "
-                f"{DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K} \\"
-            ),
-            "  --out runs/local_search.json",
+            *search_lines,
             "```",
             "",
             "By default this writes the best config as a scratch candidate under",
@@ -2970,13 +3053,7 @@ def _target_commands_text() -> str:
             "",
             "```bash",
             "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=system/darjeeling/src \\",
-            (
-                "  python tools/search_config.py "
-                f"--trials {DEFAULT_TARGET_LOCAL_SEARCH_TRIALS} "
-                f"--cross-audit-folds {DEFAULT_TARGET_VISIBLE_CROSS_AUDIT_FOLDS} "
-                f"--cross-audit-top-k {DEFAULT_TARGET_LOCAL_SEARCH_CROSS_AUDIT_TOP_K} "
-                "--out runs/local_search.json"
-            ),
+            f"  python tools/search_config.py {' '.join(fallback_parts)}",
             "```",
             "",
             "Inspect visible workspace context:",
@@ -3006,6 +3083,62 @@ def _target_commands_text() -> str:
             "Only edit candidate code under `target/`. `runs/` is scratch output.",
             "Do not modify `data/`, `tools/`, `system/darjeeling/`, or `program.md`.",
         ]
+    )
+
+
+def _search_config_command_text(
+    *,
+    local_search_trials: int,
+    local_search_timeout_s: float | None,
+    visible_cross_audit_folds: int,
+    local_search_cross_audit_top_k: int,
+    apply_best: bool,
+) -> str:
+    wall_clock_timeout_s = _local_search_effective_wall_clock_timeout_s(
+        timeout_s=local_search_timeout_s,
+        wall_clock_timeout_s=None,
+    )
+    parts = [
+        (
+            f"{WORKSPACE_UV_ENV_PREFIX} "
+            "uv run --project system/darjeeling python tools/search_config.py"
+        ),
+        f"--trials {local_search_trials}",
+    ]
+    if local_search_timeout_s is not None:
+        parts.append(f"--timeout-s {local_search_timeout_s:g}")
+    if wall_clock_timeout_s is not None:
+        parts.append(f"--wall-clock-timeout-s {wall_clock_timeout_s:g}")
+    parts.extend(
+        [
+            f"--cross-audit-folds {visible_cross_audit_folds}",
+            f"--cross-audit-top-k {local_search_cross_audit_top_k}",
+        ]
+    )
+    if apply_best:
+        parts.append("--apply-best")
+    parts.append("--out runs/local_search.json")
+    return " ".join(parts)
+
+
+class _LocalSearchWallClockTimeout(BaseException):
+    def __init__(self, timeout_s: float) -> None:
+        super().__init__(f"local search exceeded wall-clock timeout {timeout_s:g}s")
+        self.timeout_s = timeout_s
+
+
+def _local_search_effective_wall_clock_timeout_s(
+    *,
+    timeout_s: float | None,
+    wall_clock_timeout_s: float | None,
+) -> float | None:
+    if wall_clock_timeout_s is not None:
+        return wall_clock_timeout_s
+    if timeout_s is None:
+        return None
+    return timeout_s + max(
+        LOCAL_SEARCH_WALL_CLOCK_TIMEOUT_BUFFER_S,
+        timeout_s * LOCAL_SEARCH_WALL_CLOCK_TIMEOUT_BUFFER_FRACTION,
     )
 
 
@@ -3413,7 +3546,7 @@ def run_local_target_search(
             ),
             "trials": reports,
         }
-    except Exception:
+    except BaseException:
         _restore_target_config_json(config_path, original_config_text)
         raise
 
@@ -3426,6 +3559,7 @@ def local_search_target_workspace_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--trials", type=int, default=48)
     parser.add_argument("--search-space", choices=["compact", "wide"], default="compact")
     parser.add_argument("--timeout-s", type=float, default=None)
+    parser.add_argument("--wall-clock-timeout-s", type=float, default=None)
     parser.add_argument("--cross-audit-folds", type=int, default=0)
     parser.add_argument("--cross-audit-top-k", type=int, default=0)
     parser.add_argument("--out", type=Path, required=True)
@@ -3434,22 +3568,63 @@ def local_search_target_workspace_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply-best", action="store_true")
     parser.add_argument("--candidate-dir", type=Path, default=None)
     args = parser.parse_args(argv)
-    payload = run_local_target_search(
-        workspace_root=args.workspace,
-        trials=args.trials,
-        search_space=args.search_space,
+    wall_clock_timeout_s = _local_search_effective_wall_clock_timeout_s(
         timeout_s=args.timeout_s,
-        cross_audit_folds=args.cross_audit_folds,
-        cross_audit_top_k=args.cross_audit_top_k,
-        min_accepted_accuracy=args.min_accepted_accuracy,
-        max_wrong_accept_rate=args.max_wrong_accept_rate,
-        apply_best=args.apply_best,
-        candidate_dir=args.candidate_dir,
+        wall_clock_timeout_s=args.wall_clock_timeout_s,
     )
+    if wall_clock_timeout_s is not None and wall_clock_timeout_s <= 0:
+        parser.error("--wall-clock-timeout-s must be greater than 0")
+    previous_alarm_handler = None
+    if wall_clock_timeout_s is not None:
+        previous_alarm_handler = signal.getsignal(signal.SIGALRM)
+
+        def _raise_wall_clock_timeout(_signum: int, _frame: Any) -> None:
+            raise _LocalSearchWallClockTimeout(wall_clock_timeout_s)
+
+        signal.signal(signal.SIGALRM, _raise_wall_clock_timeout)
+        signal.setitimer(signal.ITIMER_REAL, wall_clock_timeout_s)
+    return_code = 0
+    try:
+        payload = run_local_target_search(
+            workspace_root=args.workspace,
+            trials=args.trials,
+            search_space=args.search_space,
+            timeout_s=args.timeout_s,
+            cross_audit_folds=args.cross_audit_folds,
+            cross_audit_top_k=args.cross_audit_top_k,
+            min_accepted_accuracy=args.min_accepted_accuracy,
+            max_wrong_accept_rate=args.max_wrong_accept_rate,
+            apply_best=args.apply_best,
+            candidate_dir=args.candidate_dir,
+        )
+        payload["wall_clock_timeout_s"] = wall_clock_timeout_s
+    except _LocalSearchWallClockTimeout as exc:
+        payload = {
+            "schema_version": "l2-target-local-search-v1",
+            "status": "wall_clock_timeout",
+            "timeout_s": args.timeout_s,
+            "wall_clock_timeout_s": exc.timeout_s,
+            "trials_requested": args.trials,
+            "cross_audit_folds": args.cross_audit_folds,
+            "cross_audit_top_k": args.cross_audit_top_k,
+            "apply_best_requested": args.apply_best,
+            "active_config_updated": False,
+            "applied": False,
+            "applied_reason": "local search exceeded wall-clock timeout",
+            "private_holdout_visibility": (
+                "local search used only agent-visible train and validation-fold data"
+            ),
+            "trials": [],
+        }
+        return_code = 124
+    finally:
+        if wall_clock_timeout_s is not None:
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, previous_alarm_handler)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(payload, sort_keys=True))
-    return 0
+    return return_code
 
 
 def _sample_local_search_config(
@@ -3786,6 +3961,11 @@ def _target_program_text() -> str:
             "  Then review `latest_intent_confusion_backlog` and related",
             "  train/cross-audit intent-confusion queues for high-guard teacher",
             "  intent / predicted intent mismatches.",
+            "  Do not ignore high-guard wrong-intent near misses just because",
+            "  `accepted_wrong` is zero; they are safety risks for future",
+            "  coverage expansion. Prefer preserving or adding explicit",
+            "  target-local vetoes for repeated listed intent pairs before",
+            "  expanding coverage.",
             "  `visible_slot_cue_summary` summarizes visible teacher slot keys",
             "  and values across train/validation rows; use it to generalize",
             "  clear slot cues without reading private rows.",
@@ -3842,6 +4022,11 @@ def _target_program_text() -> str:
             "rules based on the listed slot-key deltas over broad threshold changes.",
             "After slot-risk review, inspect intent-confusion backlogs for repeated",
             "high-guard wrong-intent pairs.",
+            "Do not ignore intent-confusion backlog rows just because their",
+            "`accepted_wrong` count is currently zero: high-guard wrong-intent",
+            "near misses are safety risks for future coverage expansion. Prefer",
+            "preserving or adding explicit target-local vetoes for repeated",
+            "listed predicted/teacher intent pairs before expanding coverage.",
             "Use `visible_slot_cue_summary` when a risk appears to need a slot",
             "cue that may be supported by other visible intents.",
             "Do not treat a slotless accepted frame as safe until you have checked",
@@ -3849,7 +4034,8 @@ def _target_program_text() -> str:
             "prefer a veto over accepting a high-guard frame with an obvious",
             "missing visible slot cue.",
             "If target-supplied cue probes are present, use",
-            "`uv run --project system/darjeeling python tools/evaluate.py",
+            f"`{WORKSPACE_UV_ENV_PREFIX} uv run --project system/darjeeling "
+            "python tools/evaluate.py",
             "--split slot_cue_probes --out runs/slot_cue_probes.json` or the",
             "documented fallback to verify those checks locally.",
             "When `latest_train_audit_safety_backlog.items` is non-empty, prefer",

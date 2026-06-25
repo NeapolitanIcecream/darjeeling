@@ -501,6 +501,33 @@ def test_clinc150_l1_visible_feedback_sanitizes_accepted_error_fields(tmp_path) 
     assert errors[0]["reference_intent"] == "beta"
     assert errors[0]["candidate_intent"] == "alpha"
 
+    feedback_paths = clinc150_phase1.write_clinc150_l1_visible_feedback(
+        feedback=feedback,
+        out_dir=tmp_path / "feedback",
+    )
+    error_rows = [
+        json.loads(line)
+        for line in (
+            tmp_path / "feedback" / "clinc150_previous_visible_accepted_errors.jsonl"
+        )
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert feedback_paths["previous_visible_accepted_errors"].endswith(
+        "clinc150_previous_visible_accepted_errors.jsonl"
+    )
+    assert error_rows == [{"view": "visible_validation", **errors[0]}]
+
+    payloads = clinc150_phase1._clinc150_l1_context_payloads(
+        feedback=feedback,
+        source_repo_dir=tmp_path,
+        data_dir=tmp_path / "data",
+        train_teacher_details=tmp_path / "train.jsonl",
+        validation_teacher_details=tmp_path / "validation.jsonl",
+    )
+    assert payloads["clinc150_previous_visible_accepted_errors.jsonl"] == error_rows
+    assert "blocking accepted-error family" in payloads["clinc150_commands.md"]
+
 
 def test_clinc150_calibration_splits_are_deterministic_and_train_derived() -> None:
     rows = [
@@ -745,6 +772,75 @@ def test_clinc150_l4_replay_oracle_validates_coverage_and_exposes_stats() -> Non
         is_abstain=False,
     ).model_dump(mode="json")
     assert oracle.stats_for("r1")["cost_usd"] == pytest.approx(0.01)
+
+
+def test_clinc150_l2_autoresearch_forwards_visible_search_controls(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_run_l2_target_evolution(*, config, traces):
+        captured["config"] = config
+        captured["traces"] = traces
+        return {
+            "mode": "agent-session",
+            "max_rounds": config.rounds,
+            "rounds_completed": 0,
+            "stop_reason": "test",
+            "selection_decision": {"selected": False},
+            "adoption_decision": {"adopted": False},
+            "best_round": None,
+            "best_selection_round": None,
+            "best_adoptable_round": None,
+        }
+
+    monkeypatch.setattr(
+        clinc150_phase1,
+        "load_teacher_rows",
+        lambda _path: [
+            _teacher_row("r1", "alpha", "alpha"),
+            _teacher_row("r2", "beta", "beta"),
+        ],
+    )
+    monkeypatch.setattr(
+        "darjeeling.targets.nlu.compiler.l2_target_evolution.run_l2_target_evolution",
+        fake_run_l2_target_evolution,
+    )
+
+    result = clinc150_phase1.run_clinc150_l2_autoresearch(
+        data_dir=tmp_path / "data",
+        out_dir=tmp_path / "run",
+        source_repo_dir=tmp_path / "repo",
+        train_teacher_details=tmp_path / "train.jsonl",
+        validation_teacher_details=tmp_path / "validation.jsonl",
+        test_teacher_details=tmp_path / "test.jsonl",
+        rounds=3,
+        max_train_traces=1,
+        timeout_s=120.0,
+        local_search_trials=7,
+        local_search_timeout_s=30.0,
+        visible_validation_folds=4,
+        visible_validation_ratio=0.40,
+        visible_cross_audit_folds=5,
+        local_search_cross_audit_top_k=2,
+        codex_command="codex-test",
+        codex_model="model-test",
+    )
+
+    config = captured["config"]
+    assert result["locked_test_exposures"] == 0
+    assert len(captured["traces"]) == 1
+    assert config.rounds == 3
+    assert config.timeout_s == 120.0
+    assert config.local_search_trials == 7
+    assert config.local_search_timeout_s == 30.0
+    assert config.visible_validation_folds == 4
+    assert config.visible_validation_ratio == pytest.approx(0.40)
+    assert config.visible_cross_audit_folds == 5
+    assert config.local_search_cross_audit_top_k == 2
+    assert config.codex_command == "codex-test"
+    assert config.codex_model == "model-test"
 
 
 def test_clinc150_l1_selection_refuses_locked_test_split() -> None:
