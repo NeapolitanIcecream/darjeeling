@@ -172,11 +172,12 @@ def clinc150_l1_round_metric_rows(summary_path: Path) -> list[dict[str, Any]]:
 def clinc150_l1_operating_point_rows(summary_path: Path) -> list[dict[str, Any]]:
     summary = _load_json(summary_path)
     source_repo_dir = _source_repo_dir(summary)
-    selected_round = int((summary.get("selected_round") or {}).get("round") or 1)
+    selected_round = _l1_operating_curve_round(summary)
     candidate_id = _round_candidate_id(selected_round)
     selected_payload = _round_payload(summary, selected_round)
     if selected_payload is None:
         return []
+    selected_for_locked_test = bool((summary.get("selected_round") or {}).get("round"))
 
     train_dev_evaluation = (selected_payload.get("evaluations") or {}).get("train_dev")
     if not train_dev_evaluation:
@@ -265,6 +266,15 @@ def clinc150_l1_operating_point_rows(summary_path: Path) -> list[dict[str, Any]]
                         "overlay_semantics": (
                             "target_adapter_posthoc_filter_over_recorded_l1_accepts"
                         ),
+                        "candidate_eligible": bool(
+                            selected_payload.get("candidate_eligible")
+                        ),
+                        "selected_for_locked_test": selected_for_locked_test,
+                        "selection_basis": (
+                            "selected_round"
+                            if selected_for_locked_test
+                            else "best_visible_validation_coverage_diagnostic"
+                        ),
                         "support_split": "train_dev",
                         "support_artifact": str(support_path),
                         "risk_tolerance_rule": policy["rule_description"],
@@ -272,6 +282,37 @@ def clinc150_l1_operating_point_rows(summary_path: Path) -> list[dict[str, Any]]
                 )
             )
     return rows
+
+
+def _l1_operating_curve_round(summary: dict[str, Any]) -> int:
+    selected_round = (summary.get("selected_round") or {}).get("round")
+    if selected_round is not None:
+        return int(selected_round)
+
+    candidates: list[tuple[float, float, int, int]] = []
+    for index, round_payload in enumerate(summary.get("rounds", []), start=1):
+        round_number = int(round_payload.get("round") or index)
+        evaluations = round_payload.get("evaluations") or {}
+        if "train_dev" not in evaluations:
+            continue
+        visible_metrics = (
+            ((evaluations.get("visible_validation") or {}).get("summary") or {}).get(
+                "l1_only"
+            )
+            or {}
+        )
+        train_metrics = (
+            ((evaluations.get("train_dev") or {}).get("summary") or {}).get("l1_only")
+            or {}
+        )
+        metrics = visible_metrics or train_metrics
+        coverage = _metric_float(metrics, "coverage", "accepted_coverage") or 0.0
+        precision = _metric_float(metrics, "accepted_precision") or 0.0
+        wrong_accepts = _metric_int(metrics, "wrong_accepts", "accepted_wrong") or 0
+        candidates.append((coverage, precision, -wrong_accepts, round_number))
+    if not candidates:
+        return 1
+    return max(candidates)[3]
 
 
 def clinc150_l2_round_metric_rows(l2_cascade_root: Path) -> list[dict[str, Any]]:
@@ -559,52 +600,50 @@ def _write_standard_figures(
         )
     )
 
+    l1_candidate_id = _l1_operating_candidate_id(operating_rows)
     l1_train_dev_curve = _standard_curve_rows(
         operating_rows,
         layer="L1",
-        candidate_id="round-001",
+        candidate_id=l1_candidate_id,
         split="train_dev",
         knob_name="risk_tolerance",
     )
-    figure_paths.append(
-        plot_single_operating_curve(
-            l1_train_dev_curve,
-            figures_dir / "clinc150_l1_train_dev_operating_curve.png",
-            title="CLINC150 L1 Train-Dev Operating Curve",
-            subtitle="target-adapter risk_tolerance overlay",
-        )
+    _append_single_operating_curve_figure(
+        figure_paths=figure_paths,
+        rows=l1_train_dev_curve,
+        output_path=figures_dir / "clinc150_l1_train_dev_operating_curve.png",
+        title="CLINC150 L1 Train-Dev Operating Curve",
+        subtitle="target-adapter risk_tolerance overlay",
     )
 
     l1_validation_curve = _standard_curve_rows(
         operating_rows,
         layer="L1",
-        candidate_id="round-001",
+        candidate_id=l1_candidate_id,
         split="visible_validation",
         knob_name="risk_tolerance",
     )
-    figure_paths.append(
-        plot_single_operating_curve(
-            l1_validation_curve,
-            figures_dir / "clinc150_l1_validation_operating_curve.png",
-            title="CLINC150 L1 Visible-Validation Operating Curve",
-            subtitle="target-adapter risk_tolerance overlay",
-        )
+    _append_single_operating_curve_figure(
+        figure_paths=figure_paths,
+        rows=l1_validation_curve,
+        output_path=figures_dir / "clinc150_l1_validation_operating_curve.png",
+        title="CLINC150 L1 Visible-Validation Operating Curve",
+        subtitle="target-adapter risk_tolerance overlay",
     )
 
     l1_locked_curve = _standard_curve_rows(
         operating_rows,
         layer="L1",
-        candidate_id="round-001",
+        candidate_id=l1_candidate_id,
         split="locked_test",
         knob_name="risk_tolerance",
     )
-    figure_paths.append(
-        plot_single_operating_curve(
-            l1_locked_curve,
-            figures_dir / "clinc150_l1_locked_test_diagnostic_curve.png",
-            title="CLINC150 L1 Locked-Test Diagnostic Curve",
-            subtitle="same visible risk_tolerance overlay, diagnostic only",
-        )
+    _append_single_operating_curve_figure(
+        figure_paths=figure_paths,
+        rows=l1_locked_curve,
+        output_path=figures_dir / "clinc150_l1_locked_test_diagnostic_curve.png",
+        title="CLINC150 L1 Locked-Test Diagnostic Curve",
+        subtitle="same visible risk_tolerance overlay, diagnostic only",
     )
 
     l2_validation_curve = _standard_curve_rows(
@@ -614,13 +653,12 @@ def _write_standard_figures(
         split="validation",
         knob_name="guard_threshold",
     )
-    figure_paths.append(
-        plot_single_operating_curve(
-            l2_validation_curve,
-            figures_dir / "clinc150_l2_validation_threshold_curve.png",
-            title="CLINC150 L2 Validation Threshold Curve",
-            subtitle="guard_threshold sweep",
-        )
+    _append_single_operating_curve_figure(
+        figure_paths=figure_paths,
+        rows=l2_validation_curve,
+        output_path=figures_dir / "clinc150_l2_validation_threshold_curve.png",
+        title="CLINC150 L2 Validation Threshold Curve",
+        subtitle="guard_threshold sweep",
     )
 
     l2_locked_curve = _standard_curve_rows(
@@ -630,13 +668,12 @@ def _write_standard_figures(
         split="locked_test",
         knob_name="guard_threshold",
     )
-    figure_paths.append(
-        plot_single_operating_curve(
-            l2_locked_curve,
-            figures_dir / "clinc150_l2_locked_test_diagnostic_curve.png",
-            title="CLINC150 L2 Locked-Test Diagnostic Curve",
-            subtitle="same guard_threshold sweep, diagnostic only",
-        )
+    _append_single_operating_curve_figure(
+        figure_paths=figure_paths,
+        rows=l2_locked_curve,
+        output_path=figures_dir / "clinc150_l2_locked_test_diagnostic_curve.png",
+        title="CLINC150 L2 Locked-Test Diagnostic Curve",
+        subtitle="same guard_threshold sweep, diagnostic only",
     )
 
     visible_comparison_rows = [*l1_validation_curve, *l2_validation_curve]
@@ -667,6 +704,34 @@ def _write_standard_figures(
     return figure_paths
 
 
+def _append_single_operating_curve_figure(
+    *,
+    figure_paths: list[Path],
+    rows: list[dict[str, Any]],
+    output_path: Path,
+    title: str,
+    subtitle: str,
+) -> None:
+    if not _has_plottable_precision_coverage_rows(rows):
+        output_path.unlink(missing_ok=True)
+        return
+    figure_paths.append(
+        plot_single_operating_curve(
+            rows,
+            output_path,
+            title=title,
+            subtitle=subtitle,
+        )
+    )
+
+
+def _has_plottable_precision_coverage_rows(rows: list[dict[str, Any]]) -> bool:
+    return any(
+        row.get("accepted_precision") is not None and row.get("coverage") is not None
+        for row in rows
+    )
+
+
 def _standard_curve_rows(
     operating_rows: list[dict[str, Any]],
     *,
@@ -683,6 +748,18 @@ def _standard_curve_rows(
         and row["split"] == split
         and row.get("knob_name") == knob_name
     ]
+
+
+def _l1_operating_candidate_id(operating_rows: list[dict[str, Any]]) -> str:
+    for row in operating_rows:
+        if (
+            row["experiment_id"] == CLINC150_L1_AGENT_SESSION_EXPERIMENT_ID
+            and row["layer"] == "L1"
+            and row["split"] == "visible_validation"
+            and row.get("knob_name") == "risk_tolerance"
+        ):
+            return str(row["candidate_id"])
+    return "round-001"
 
 
 def _metric_row(

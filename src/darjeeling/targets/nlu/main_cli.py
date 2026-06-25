@@ -1077,8 +1077,50 @@ def clinc150_l2_autoresearch(
         str,
         typer.Option(help="Target-evolution preset selected with --budget-profile."),
     ] = "fixed-inner",
+    max_train_traces: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Optional prefix limit for teacher-visible train traces in this run.",
+        ),
+    ] = None,
     timeout_s: Annotated[float | None, typer.Option(min=0.1)] = None,
     local_search_trials: Annotated[int, typer.Option(min=1)] = 32,
+    local_search_timeout_s: Annotated[
+        float | None,
+        typer.Option(
+            min=0.1,
+            help="Optional timeout for each agent-invoked local search in seconds.",
+        ),
+    ] = None,
+    visible_validation_folds: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="Agent-visible validation folds for the CLINC150 target split.",
+        ),
+    ] = 5,
+    visible_validation_ratio: Annotated[
+        float | None,
+        typer.Option(
+            min=0.01,
+            help="Agent-visible validation pool ratio for the CLINC150 target split.",
+        ),
+    ] = 0.30,
+    visible_cross_audit_folds: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Visible cross-audit folds; 0 disables and values above 1 enable.",
+        ),
+    ] = 3,
+    local_search_cross_audit_top_k: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Re-rank this many top local-search trials with visible cross-audit.",
+        ),
+    ] = 4,
 ) -> None:
     """Run CLINC150 target-local L2 AutoResearch over reused replay-oracle rows."""
 
@@ -1097,8 +1139,14 @@ def clinc150_l2_autoresearch(
         mode=mode,
         rounds=rounds,
         budget_profile=budget_profile,
+        max_train_traces=max_train_traces,
         timeout_s=timeout_s,
         local_search_trials=local_search_trials,
+        local_search_timeout_s=local_search_timeout_s,
+        visible_validation_folds=visible_validation_folds,
+        visible_validation_ratio=visible_validation_ratio,
+        visible_cross_audit_folds=visible_cross_audit_folds,
+        local_search_cross_audit_top_k=local_search_cross_audit_top_k,
         codex_command=settings.l2_target_agent_codex_command,
         codex_model=settings.l2_target_agent_model,
     )

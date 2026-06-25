@@ -13,6 +13,8 @@ from darjeeling.eval.plots import (
     write_normalized_jsonl,
 )
 from darjeeling.targets.nlu.precision_coverage import (
+    _append_single_operating_curve_figure,
+    _l1_operating_candidate_id,
     clinc150_l1_operating_point_rows,
     clinc150_l2_operating_point_rows,
 )
@@ -143,6 +145,91 @@ def test_l1_overlay_filters_recorded_accepts_by_visible_rule_support(tmp_path: P
     )
 
 
+def test_l1_operating_curve_uses_best_diagnostic_round_when_unselected(
+    tmp_path: Path,
+) -> None:
+    round1_train = tmp_path / "round1_train.jsonl"
+    round1_visible = tmp_path / "round1_visible.jsonl"
+    round2_train = tmp_path / "round2_train.jsonl"
+    round2_visible = tmp_path / "round2_visible.jsonl"
+    _write_jsonl(round1_train, [_l1_row("r1", "alpha phrase", accepted=True, correct=True)])
+    _write_jsonl(round1_visible, [_l1_row("v1", "alpha phrase", accepted=True, correct=True)])
+    _write_jsonl(
+        round2_train,
+        [
+            _l1_row("r2", "alpha phrase", accepted=True, correct=True),
+            _l1_row("r3", "alpha phrase", accepted=True, correct=True),
+            _l1_row("r4", "beta phrase", accepted=True, correct=False),
+        ],
+    )
+    _write_jsonl(
+        round2_visible,
+        [
+            _l1_row("v2", "alpha phrase", accepted=True, correct=True),
+            _l1_row("v3", "alpha phrase", accepted=True, correct=True),
+            _l1_row("v4", "alpha phrase", accepted=True, correct=True),
+        ],
+    )
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "rounds": [
+                    {
+                        "round": 1,
+                        "candidate_eligible": False,
+                        "evaluations": {
+                            "train_dev": _l1_eval(round1_train, coverage=0.10),
+                            "visible_validation": _l1_eval(round1_visible, coverage=0.10),
+                        },
+                    },
+                    {
+                        "round": 2,
+                        "candidate_eligible": False,
+                        "evaluations": {
+                            "train_dev": _l1_eval(round2_train, coverage=0.30),
+                            "visible_validation": _l1_eval(round2_visible, coverage=0.40),
+                        },
+                    },
+                ],
+                "selected_round": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = clinc150_l1_operating_point_rows(summary_path)
+
+    assert {row["candidate_id"] for row in rows} == {"round-002"}
+    raw = _find_policy(rows, split="train_dev", policy_label="raw: all recorded accepts")
+    assert raw["accepted"] == 3
+    assert raw["wrong_accepts"] == 1
+    assert raw["metadata"]["selection_basis"] == (
+        "best_visible_validation_coverage_diagnostic"
+    )
+    assert raw["metadata"]["selected_for_locked_test"] is False
+
+
+def test_l1_figure_candidate_id_follows_operating_rows() -> None:
+    row = _point(
+        "raw",
+        coverage=0.33,
+        precision=1.0,
+        curve_id="l1-round-002",
+    )
+    row.update(
+        {
+            "experiment_id": "clinc150-l1-agent-session-effect",
+            "layer": "L1",
+            "candidate_id": "round-002",
+            "split": "visible_validation",
+            "knob_name": "risk_tolerance",
+        }
+    )
+
+    assert _l1_operating_candidate_id([row]) == "round-002"
+
+
 def test_l2_threshold_sweep_uses_prediction_guard_probability(tmp_path: Path) -> None:
     prediction_dir = tmp_path / "distilled-l2" / "train-full" / "validation-cascade"
     prediction_path = prediction_dir / "clinc150_l2_predictions.jsonl"
@@ -223,6 +310,23 @@ def test_plot_smoke_writes_non_empty_pngs(tmp_path: Path) -> None:
     assert evolution_path.stat().st_size > 0
     assert curve_path.stat().st_size > 0
     assert comparison_path.stat().st_size > 0
+
+
+def test_optional_standard_curve_figure_skips_missing_rows(tmp_path: Path) -> None:
+    figure_paths: list[Path] = []
+    output_path = tmp_path / "missing.png"
+    output_path.write_bytes(b"stale")
+
+    _append_single_operating_curve_figure(
+        figure_paths=figure_paths,
+        rows=[],
+        output_path=output_path,
+        title="Missing Optional Curve",
+        subtitle="diagnostic only",
+    )
+
+    assert figure_paths == []
+    assert not output_path.exists()
 
 
 def _point(
@@ -313,6 +417,19 @@ def _l2_row(
         "margin": 0.1,
         "entropy": 1.0,
         "latency_ms": 1.0,
+    }
+
+
+def _l1_eval(details_path: Path, *, coverage: float) -> dict:
+    return {
+        "details_jsonl_path": str(details_path),
+        "summary": {
+            "l1_only": {
+                "accepted_coverage": coverage,
+                "accepted_precision": 1.0,
+                "wrong_accepts": 0,
+            }
+        },
     }
 
 
