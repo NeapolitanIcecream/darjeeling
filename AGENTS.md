@@ -26,3 +26,11 @@
 - Escalate to the user only when a decision changes the product goal, budget, risk tolerance, or scope boundary. Do not ask the user to choose among routine implementation tactics, prompt variants, test designs, or debugging steps that can be evaluated with local evidence.
 - Treat failures and negative results as inputs to the next iteration. Record what failed, why it likely failed, what was changed, and what evidence would falsify the next attempt.
 - For L4 teacher calls, avoid tight `max_completion_tokens` caps, especially with reasoning models where reasoning tokens share the completion budget with visible JSON. Prefer a generous configured cap, then verify actual usage, parse failures, `finish_reason`, and cost from artifacts instead of starving simple responses.
+
+## Long-Running Autonomous Research
+
+- For long-running autonomous research plans, use a scorecard and a time boundary rather than a narrow checklist. State start time, soft-stop checkpoint, hard stop, and timezone. The agent should keep working until the time boundary unless the budget or a scope/risk decision blocks further work.
+- Structure long research work as repeated hypothesis, experiment, result, and strategic-review loops. Require the agent to periodically ask whether the active direction should continue, narrow, pause, or be retired; do not let it spend the whole run proving the first direction right.
+- Prefer flexible research backlogs over rigid hour-by-hour topic assignments. If one direction finishes early or fails, the agent should move to the next highest-value hypothesis instead of stopping.
+- Maintain inspectable research artifacts for long runs: a research log, a current strategy/state summary, a usage or cost ledger when paid resources are involved, and a concise final report.
+- Paid experiment cost must include every API/model call launched as part of the experiment, including Darjeeling-launched L4 AutoResearch/evolve agent sessions. Do not record the Codex session executing the plan itself as experiment cost; distinguish replay/local compute from paid experiment API usage instead.
