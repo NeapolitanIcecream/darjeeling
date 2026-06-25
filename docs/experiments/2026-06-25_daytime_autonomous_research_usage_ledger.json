@@ -1,5 +1,5 @@
 {
-  "schema_version": "daytime-autonomous-research-usage-ledger-v1",
+  "schema_version": "daytime-autonomous-research-usage-ledger-v2",
   "created_at": "2026-06-25T09:58:08+08:00",
   "execution_window": {
     "start": "2026-06-25T09:54:52+08:00",
@@ -9,23 +9,36 @@
   },
   "api_spend_usd": {
     "budget_cap": 100.0,
-    "observed_spend": 0.0,
+    "observed_spend": 66.529614,
+    "pricing_note": "Total L4 API spend includes live teacher/benchmark serving calls plus Darjeeling-launched L4 agent sessions. GPT-5.5 estimate uses $5/M uncached input, $0.50/M cached input, and $30/M output. Reasoning output tokens are treated as already included in output_tokens.",
     "entries": [
       {
         "timestamp": "2026-06-25T11:05:00+08:00",
-        "kind": "replay_only",
+        "kind": "live_teacher_or_benchmark_serving",
         "description": "r1-r5 CLINC150 L2 AutoResearch used copied processed data and existing teacher replay details; no new paid teacher/API serving calls were made.",
         "spend_usd": 0.0
       },
       {
         "timestamp": "2026-06-25T16:23:00+08:00",
-        "kind": "replay_only_all_day",
-        "description": "Completed L1/L2 daytime experiments through r11 using copied processed CLINC150 data and existing teacher replay details. No new paid teacher/API serving calls were made; L4 agent-session usage is tracked separately.",
+        "kind": "live_teacher_or_benchmark_serving",
+        "description": "Completed L1/L2 daytime experiments through r11 using copied processed CLINC150 data and existing teacher replay details. No new paid teacher/API serving calls were made.",
         "spend_usd": 0.0
+      },
+      {
+        "timestamp": "2026-06-25T16:23:00+08:00",
+        "kind": "l4_agent_session_estimated",
+        "description": "Estimated cost of completed Darjeeling-launched L4 agent sessions recorded below, counted against the same $100 experiment L4 API budget.",
+        "spend_usd": 66.529614
       }
     ]
   },
   "l4_agent_session_usage": {
+    "estimated_cost_usd": 66.529614,
+    "pricing_usd_per_million_tokens": {
+      "uncached_input": 5.0,
+      "cached_input": 0.5,
+      "output": 30.0
+    },
     "totals_observed_from_completed_transcripts": {
       "input_tokens": 67438236,
       "cached_input_tokens": 62720768,
@@ -349,13 +362,6 @@
           "reasoning_output_tokens": 4365
         }
       }
-    ]
-  },
-  "outer_executor_usage": {
-    "wall_clock_start": "2026-06-25T09:54:52+08:00",
-    "wall_clock_end": "2026-06-25T16:25:32+08:00",
-    "notes": [
-      "Outer Codex executor usage is reported as wall-clock time only and is not included in api_spend_usd or L4 agent-session usage."
     ]
   },
   "local_compute_notes": [

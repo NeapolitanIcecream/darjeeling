@@ -52,11 +52,11 @@ L2:
 
 ## Budget And Usage
 
-- `api_spend_usd`: `$0.00` observed, against a `$100.00` cap.
-- All CLINC150 teacher rows and validations used copied processed data and existing replay artifacts.
-- L4 agent-session usage is recorded separately in `docs/experiments/2026-06-25_daytime_autonomous_research_usage_ledger.json`.
+- Total observed L4 API spend estimate: `$66.529614` against the `$100.00` experiment cap.
+- Live teacher / benchmark serving spend: `$0.00`; all CLINC150 teacher rows and validations used copied processed data and existing replay artifacts.
+- L4 agent-session spend estimate: `$66.529614`, counted against the same experiment cap.
 - Observed completed L4 agent-session usage in the ledger: 67,438,236 input tokens, 62,720,768 cached input tokens, 386,063 output tokens, 107,793 reasoning output tokens.
-- Outer executor usage is reported as wall-clock time only and is not folded into API spend or L4 agent-session usage.
+- Pricing assumption: GPT-5.5 at `$5/M` uncached input, `$0.50/M` cached input, and `$30/M` output; reasoning output tokens are treated as already included in output tokens.
 
 ## Validation Artifacts
 

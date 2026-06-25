@@ -17,9 +17,9 @@ Time policy:
 
 Budget policy:
 
-- `api_spend_usd` cap: `$100.00`.
-- L4 agent-session usage is recorded separately from `api_spend_usd`.
-- Outer executor usage is recorded as wall-clock time only.
+- Total L4 API spend cap: `$100.00`.
+- Live teacher / benchmark serving spend and Darjeeling-launched L4 agent-session spend both count against that cap.
+- Serving calls and agent-session transcript usage are reported separately in the ledger so replay-only benchmark work is distinguishable from L4 AutoResearch/evolve work.
 
 ## Cycle 0 - Preflight And Setup
 
@@ -783,7 +783,7 @@ Evidence collected:
   - validation sequential: 1553 accepts, 1539 correct, 14 wrong, precision 0.990985, coverage 0.500968, accuracy delta vs all-L4 -0.001613, OOS false accept rate 0.010000.
   - validation uniform: 1534 accepts, 1524 correct, 10 wrong, precision 0.993481, coverage 0.494839, accuracy delta +0.000323.
   - locked-test exposures: `0`.
-  - API spend: `$0.00`; all teacher rows used replay artifacts.
+  - live teacher / benchmark serving spend: `$0.00`; all teacher rows used replay artifacts. L4 agent-session spend is counted separately in the usage ledger.
 - Private failure examples remained concentrated in dense neighbor intents:
   - selection: `cook_time -> timer`, `improve_credit_score -> credit_score`, `last_maintenance -> tire_change`.
   - promotion: `improve_credit_score -> credit_score`, `todo_list_update -> todo_list`.
@@ -826,7 +826,7 @@ Evidence collected:
 - Official validation for the diagnostic candidate:
   - sequential: 1554 accepts, 1540 correct, 14 wrong, precision 0.990991, coverage 0.501290, accuracy delta -0.001613.
   - uniform: 1532 accepts, 1522 correct, 10 wrong, precision 0.993473, coverage 0.494194, accuracy delta +0.000323.
-  - locked-test exposures: `0`; API spend: `$0.00`.
+  - locked-test exposures: `0`; live teacher / benchmark serving spend: `$0.00`. L4 agent-session spend is counted separately in the usage ledger.
 - Round 2 stopped after a workspace scope violation caused by `uv run --project system/darjeeling` creating protected `system/darjeeling/.venv` files.
 - The agent-facing local search command also exceeded its configured search timeout by a wide margin before the later harness patch.
 
@@ -906,7 +906,7 @@ Evidence collected:
 - Official validation:
   - sequential: 1560 accepts, 1544 correct, 16 wrong, precision 0.989744, coverage 0.503226, accuracy delta -0.001613.
   - uniform: 1542 accepts, 1531 correct, 11 wrong, precision 0.992866, coverage 0.497419, accuracy delta +0.001290.
-  - locked-test exposures: `0`; API spend: `$0.00`.
+  - locked-test exposures: `0`; live teacher / benchmark serving spend: `$0.00`. L4 agent-session spend is counted separately in the usage ledger.
 
 Decision:
 
@@ -943,7 +943,7 @@ Evidence collected:
 - Official validation:
   - sequential: 1558 accepts, 1544 correct, 14 wrong, precision 0.991014, coverage 0.502581, accuracy delta -0.000968.
   - uniform: 1540 accepts, 1530 correct, 10 wrong, precision 0.993506, coverage 0.496774, accuracy delta +0.001613.
-  - locked-test exposures: `0`; API spend: `$0.00`.
+  - locked-test exposures: `0`; live teacher / benchmark serving spend: `$0.00`. L4 agent-session spend is counted separately in the usage ledger.
 
 Decision:
 
@@ -980,7 +980,7 @@ Evidence collected:
 - Official validation:
   - sequential: 1559 accepts, 1546 correct, 13 wrong, precision 0.991661, coverage 0.502903, accuracy delta -0.000645.
   - uniform: 1542 accepts, 1533 correct, 9 wrong, precision 0.994163, coverage 0.497419, accuracy delta +0.001935.
-  - locked-test exposures: `0`; API spend: `$0.00`.
+  - locked-test exposures: `0`; live teacher / benchmark serving spend: `$0.00`. L4 agent-session spend is counted separately in the usage ledger.
 - `local_search_final.json` recorded a structured `wall_clock_timeout` with `timeout_s=30.0` and `wall_clock_timeout_s=45.0`, confirming the hard timeout path worked.
 
 Decision:
@@ -998,5 +998,5 @@ Status:
 
 - Stopped launching new experiments and moved to checkpoint/report/validation/commit.
 - No locked-test exposure occurred during daytime work.
-- Observed API spend remains `$0.00`; all validation used replay artifacts.
-- L4 agent-session usage is recorded separately in the usage ledger.
+- Live teacher / benchmark serving spend remains `$0.00`; all validation used replay artifacts.
+- Completed L4 agent-session usage is recorded in the usage ledger and estimated at `$66.529614` against the `$100.00` experiment L4 API cap.
