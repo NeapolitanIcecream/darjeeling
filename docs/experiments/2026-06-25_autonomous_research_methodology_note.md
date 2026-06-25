@@ -152,12 +152,8 @@ Keep three concepts separate:
   token usage, artifact path, and observed or estimated dollar cost. If exact
   pricing is unavailable, record token usage and mark the cost estimate as
   pending; do not silently treat it as zero.
-- outer executor usage: the agent executing the plan. Report wall-clock time if
-  useful, but do not count it as experiment cost.
-
-This distinction avoids two opposite mistakes: counting the outer executor as
-experiment cost, or reporting `$0` experiment L4 spend while Darjeeling-launched
-L4 agent-sessions did substantial research work.
+The important accounting risk is reporting `$0` experiment L4 spend while
+Darjeeling-launched L4 agent-sessions did substantial research work.
 
 ## Candidate Skill Family
 
@@ -218,8 +214,8 @@ project-local lesson, such as:
 - long-running research plans use time as the execution boundary;
 - support work cannot substitute for scorecard progress;
 - strategy state and retired directions are required for long sprints;
-- experiment L4 spend, L4 agent-session usage details, and outer executor usage
-  must be reported separately.
+- experiment L4 spend and L4 agent-session usage details must be reported
+  together without treating agent-session usage as zero-cost by default.
 
 AGENTS.md should remain project discipline. The reusable method should live in
 the generic skill.

@@ -89,8 +89,7 @@ materially reduces uncertainty about a promising candidate.
 ### L4 Agent-Session Usage
 
 Darjeeling may launch L4 AutoResearch/evolve agent sessions as part of L1/L2
-experiments. These sessions are part of the experiment's L4 spend budget, not
-outer executor overhead.
+experiments. These sessions are part of the experiment's L4 spend budget.
 
 Record them in detail:
 
@@ -109,13 +108,6 @@ If exact dollar pricing is not available from the artifacts, record token usage
 and mark the dollar estimate as pending or approximate. Do not report the
 experiment L4 spend as `$0` merely because the call path used a Codex
 agent-session wrapper.
-
-### Outer Executor Usage
-
-The agent executing this plan is the outer research executor. Its own Codex
-subscription/quota usage is not experiment cost and must not be folded into the
-experiment L4 budget or the L4 agent-session ledger. It may be reported as
-wall-clock time only.
 
 ### Local Compute Notes
 
@@ -421,7 +413,6 @@ The report must include:
 - `experiment_l4_spend_usd` ledger summary and path, including benchmark API
   spend plus L4 agent-session spend;
 - L4 agent-session usage details and path;
-- outer executor wall-clock time, reported separately from experiment cost;
 - cycle table with hypotheses, actions, evidence, and decisions;
 - metric deltas and precision/coverage figures for any serious L1/L2
   candidate;
