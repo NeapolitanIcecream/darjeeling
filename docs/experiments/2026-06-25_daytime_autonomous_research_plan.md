@@ -67,30 +67,32 @@ this sprint.
 
 Use separate ledgers. Do not mix these categories.
 
-### API Spend
+### Experiment L4 Spend
 
-`api_spend_usd` is the only dollar-denominated experiment cost in this plan.
+`experiment_l4_spend_usd` is the dollar-denominated experiment cost controlled
+by this plan. Its budget cap is **$100**.
 
-It includes:
+It includes both:
 
-- live teacher calls;
-- L4 benchmark serving calls;
-- OpenAI API calls made by benchmark/evaluation code;
-- any other serving call with token usage and a price table.
+- `benchmark_api_spend_usd`: live teacher calls, L4 benchmark serving calls,
+  OpenAI API calls made by benchmark/evaluation code, and any other priced
+  serving call;
+- `l4_agent_session_spend_usd`: L4 AutoResearch/evolve agent sessions launched
+  by Darjeeling experiment harnesses.
 
-The API budget cap is **$100**. Estimate the intended API cost before launching
-a paid run, then record observed usage/cost from artifacts. Spending $0 is
-acceptable only when replay artifacts are enough to answer the current
-experimental question; do not avoid paid validation if it materially reduces
-uncertainty about a promising candidate.
+Estimate the intended L4 cost before launching a paid run or a large L4
+agent-session batch, then record observed usage/cost from artifacts. Spending
+$0 is acceptable only when replay artifacts and no L4 agent-sessions are enough
+to answer the current experimental question; do not avoid paid validation if it
+materially reduces uncertainty about a promising candidate.
 
 ### L4 Agent-Session Usage
 
 Darjeeling may launch L4 AutoResearch/evolve agent sessions as part of L1/L2
-experiments. These are not counted as `api_spend_usd` when they run through
-Codex subscription/quota rather than a priced API ledger.
+experiments. These sessions are part of the experiment's L4 spend budget, not
+outer executor overhead.
 
-Record them separately:
+Record them in detail:
 
 - layer and track;
 - command or harness entry point;
@@ -99,18 +101,21 @@ Record them separately:
 - timeout setting;
 - rounds requested/completed;
 - stop reason;
+- observed token usage when available;
+- estimated or observed dollar cost and pricing assumptions;
 - output artifact path.
 
-This ledger is part of the research evidence because it measures how much L4
-research effort was used to externalize capability, but it is not the $100 API
-budget.
+If exact dollar pricing is not available from the artifacts, record token usage
+and mark the dollar estimate as pending or approximate. Do not report the
+experiment L4 spend as `$0` merely because the call path used a Codex
+agent-session wrapper.
 
 ### Outer Executor Usage
 
 The agent executing this plan is the outer research executor. Its own Codex
 subscription/quota usage is not experiment cost and must not be folded into the
-API budget or the L4 agent-session ledger. It may be reported as wall-clock time
-only.
+experiment L4 budget or the L4 agent-session ledger. It may be reported as
+wall-clock time only.
 
 ### Local Compute Notes
 
@@ -312,7 +317,7 @@ Possible actions:
 
 ### Paid API / Live Validation
 
-Use the $100 API budget when it answers a concrete uncertainty.
+Use the $100 experiment L4 budget when it answers a concrete uncertainty.
 
 Possible uses:
 
@@ -322,8 +327,9 @@ Possible uses:
   labels or teacher artifacts are blocking progress;
 - a small live benchmark shard if it can distinguish two candidate policies.
 
-Do not spend API budget merely to burn money. Do not refuse to spend API budget
-when a bounded paid run would materially improve the decision.
+Do not spend L4 budget merely to burn money. Do not refuse to spend L4 budget
+when a bounded paid run or L4 agent-session would materially improve the
+decision.
 
 ### Related Work To Experiment
 
@@ -412,8 +418,9 @@ The report must include:
 - exact execution time window and whether the soft/hard stop policy was
   followed;
 - branch, worktree, commit list, and clean/dirty status;
-- `api_spend_usd` ledger summary and path;
-- L4 agent-session usage ledger summary and path;
+- `experiment_l4_spend_usd` ledger summary and path, including benchmark API
+  spend plus L4 agent-session spend;
+- L4 agent-session usage details and path;
 - outer executor wall-clock time, reported separately from experiment cost;
 - cycle table with hypotheses, actions, evidence, and decisions;
 - metric deltas and precision/coverage figures for any serious L1/L2

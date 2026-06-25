@@ -17,8 +17,8 @@ it failed the intended long-running research behavior:
   discipline;
 - it mostly tightened gates and repaired harness issues, but did not materially
   improve L1/L2 effect;
-- it reported paid benchmark API spend correctly as `$0`, but did not
-  separately emphasize L4 agent-session usage inside the experiment;
+- it reported paid benchmark API spend as `$0`, but did not treat L4
+  agent-session usage as part of the experiment L4 budget;
 - it did not have a strong enough mechanism for abandoning a low-yield direction
   and moving to a better one.
 
@@ -132,8 +132,8 @@ should be retired or paused when one or more of these holds:
 - a timeout is repaired or reduced once, but the same bottleneck still prevents
   useful candidate generation;
 - continuing would require violating the target/core boundary;
-- continuing needs extra API budget, product-goal changes, or risk-tolerance
-  decisions outside the plan;
+- continuing needs extra experiment L4 budget, product-goal changes, or
+  risk-tolerance decisions outside the plan;
 - a different backlog item now has clearly higher expected value.
 
 Retiring a direction is not failure. It is evidence hygiene. The final report
@@ -143,17 +143,21 @@ should list retired directions and the evidence that retired them.
 
 Keep three concepts separate:
 
-- `api_spend_usd`: real priced API or benchmark serving cost. This is the only
-  dollar-denominated budget cap.
-- L4 agent-session usage: L4 AutoResearch/evolve sessions launched by the
-  experiment harness. Record session count, model if visible, elapsed time,
-  timeout, rounds requested/completed, stop reason, and artifact path. Do not
-  fold this into API spend when it uses Codex subscription/quota.
+- `experiment_l4_spend_usd`: the budgeted L4 cost controlled by the experiment.
+  It includes priced benchmark/API serving calls and Darjeeling-launched L4
+  AutoResearch/evolve agent-sessions.
+- L4 agent-session usage: detailed records for each L4 AutoResearch/evolve
+  session launched by the experiment harness. Record session count, model if
+  visible, elapsed time, timeout, rounds requested/completed, stop reason,
+  token usage, artifact path, and observed or estimated dollar cost. If exact
+  pricing is unavailable, record token usage and mark the cost estimate as
+  pending; do not silently treat it as zero.
 - outer executor usage: the agent executing the plan. Report wall-clock time if
   useful, but do not count it as experiment cost.
 
-This distinction avoids the confusion where a plan reports `$0` paid benchmark
-spend while still having used L4 agent-sessions inside the research process.
+This distinction avoids two opposite mistakes: counting the outer executor as
+experiment cost, or reporting `$0` experiment L4 spend while Darjeeling-launched
+L4 agent-sessions did substantial research work.
 
 ## Candidate Skill Family
 
@@ -214,8 +218,8 @@ project-local lesson, such as:
 - long-running research plans use time as the execution boundary;
 - support work cannot substitute for scorecard progress;
 - strategy state and retired directions are required for long sprints;
-- API spend, L4 agent-session usage, and outer executor usage must be reported
-  separately.
+- experiment L4 spend, L4 agent-session usage details, and outer executor usage
+  must be reported separately.
 
 AGENTS.md should remain project discipline. The reusable method should live in
 the generic skill.
@@ -226,6 +230,6 @@ the generic skill.
 - Did the agent maintain a useful strategy state, or only a chronological log?
 - Did meta-strategic review cause a real direction switch or retirement?
 - Did the sprint try to improve L1/L2 effect, not only safety gates?
-- Were API spend and L4 agent-session usage reported separately and correctly?
+- Were experiment L4 spend and L4 agent-session usage reported correctly?
 - Which instructions were useful enough to promote into a skill?
 - Which instructions were too Darjeeling-specific and should stay in repo docs?
