@@ -175,6 +175,9 @@ related-work tracks while respecting the target/core boundary.
 Plan:
 [2026-06-25_daytime_autonomous_research_plan.md](2026-06-25_daytime_autonomous_research_plan.md)
 
+Methodology note:
+[2026-06-25_autonomous_research_methodology_note.md](2026-06-25_autonomous_research_methodology_note.md)
+
 Current decision: planned.
 
 This is the follow-up long-running sprint after the overnight attempt stopped
