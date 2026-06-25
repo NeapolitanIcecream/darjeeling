@@ -169,3 +169,17 @@ Codex quota before 2026-06-25 08:00 Asia/Shanghai. It should not stop after a
 single successful patch; it should continue hypothesis, experiment,
 implementation, validation, and reporting cycles across L1, L2, evidence, and
 related-work tracks while respecting the target/core boundary.
+
+## Daytime Autonomous Research
+
+Plan:
+[2026-06-25_daytime_autonomous_research_plan.md](2026-06-25_daytime_autonomous_research_plan.md)
+
+Current decision: planned.
+
+This is the follow-up long-running sprint after the overnight attempt stopped
+too early. Its execution boundary is time: continue autonomous research until
+the 2026-06-25 16:30 soft stop and 17:00 hard stop. The main goal is to try to
+move the L1/L2 precision-coverage frontier or clearly identify the mechanism
+that blocks improvement, while separately accounting for API spend and L4
+agent-session usage.
