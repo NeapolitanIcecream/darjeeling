@@ -47,6 +47,30 @@ A module is complete when:
 
 If the agent cannot make a module complete because the design is ambiguous or inconsistent, it must update the design documents first and then continue. Do not silently complete a different design.
 
+## Per-Module Design Review Loop
+
+After each module slice reaches the module acceptance protocol above, run an independent Codex CLI review session before moving on to the next module. Reuse the lightweight shape of `codex-design-review-loop`; a full long-running workflow is optional, but these parts are mandatory:
+
+- Keep a module-local workflow folder under `.codex-workflows/`.
+- Keep `worker/process.md` and `reviewer/process.md` as the progress and handoff channel.
+- Do not rely on worker or reviewer CLI logs for coordination.
+- Start a separate reviewer session after the worker marks the module slice as delivered.
+- The reviewer must not edit implementation files during review-only passes.
+- If the reviewer reports `issues_found`, the worker must fix the issues, update the traceability matrix, and request a reviewer re-check.
+- The module is not done until the reviewer reports `no_issues`.
+
+The reviewer prompt for each module must require:
+
+- Read [00 Overall Design](00_overall_design.md), the module document being implemented, and every directly connected module document.
+- Check whether the implementation is correct and complete against the design documents as the sole source of truth.
+- Check all module data types, functions, boundary inputs/outputs, invariants, hard-fail paths, and cross-module data flows against the traceability matrix.
+- Check that focused tests cover important positive and negative cases.
+- Check for overdesign: unnecessary new terms, new framework layers, generic abstractions, compatibility shims, or concepts that are not required by the design.
+- Check that Core remains target-independent and that target-specific logic stays outside Core.
+- Preserve accepted design decisions; do not reopen by-design choices as findings.
+
+Reviewer findings should be concise and actionable. Each finding should say which design requirement is violated or which added concept is unnecessary. If no issue remains, the reviewer should explicitly say `status: no_issues`.
+
 ## Suggested Implementation Order
 
 ### 0. Baseline And Status
@@ -351,6 +375,7 @@ When an implementation agent finishes, report:
 - Commit hash.
 - Module slices completed.
 - Module slices intentionally deferred.
+- Per-module reviewer workflow paths and final reviewer statuses.
 - Test commands and results.
 - Any design doc changes made during implementation.
 - Known risks or follow-up work.
