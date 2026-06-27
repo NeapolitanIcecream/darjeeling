@@ -17,6 +17,21 @@ The goal is not to preserve the current implementation shape. The goal is to imp
 - Do not invent compatibility shims for historical experiment artifacts unless they are required by current tests or explicitly approved.
 - Update design docs only when implementation exposes a real design gap. Keep changes narrow, update the affected module boundary first, then implement against the updated design.
 
+## Archive And Fresh Implementation
+
+This reboot is a fresh implementation against the reboot design, not an incremental patch of the old architecture.
+
+Before implementing active reboot code, archive historical implementation and design surfaces that would otherwise compete with the reboot design as active guidance. The exact archive layout may be chosen by the implementation agent after inspecting the repository, but it must make the boundary obvious. Examples include `archive/pre-reboot/` for old implementation code and `docs/archive/pre-reboot/` for old design documents. The reboot design documents under `docs/design/reboot/` remain active and must not be archived.
+
+Rules:
+
+- New active code should be written from the reboot design documents.
+- Archived code and docs may be read as historical context, but they must not define behavior.
+- Do not keep old and reboot implementations active for the same Core path.
+- Reuse is allowed only for small utilities, tests, fixtures, or target adapters that do not carry old architecture assumptions into the reboot Core.
+- If a current test only protects historical behavior that conflicts with the reboot design, update or archive that test instead of adding compatibility code.
+- Keep the archive inspectable; do not delete historical code or docs unless the user explicitly asks.
+
 ## Module Acceptance Protocol
 
 After each module slice, the implementation agent must decide whether the module is correctly and completely implemented by checking it against the design documents, not against the current code shape.
@@ -85,12 +100,15 @@ Do:
 
 - Inspect the current code and tests.
 - Write a short implementation status note in the worktree that maps existing code to reboot modules.
-- Identify code that can be reused without carrying old target-specific assumptions into Core.
+- Identify historical implementation and design surfaces that should be archived before active reboot implementation starts.
+- Archive old active surfaces that would otherwise compete with reboot code or reboot design docs.
+- Identify any small utilities, tests, fixtures, or target adapters that can be reused without carrying old architecture assumptions into Core.
 
 Done when:
 
 - The agent can name the files it will touch first.
 - The current test command is known.
+- Historical code/docs that should no longer be active have been archived or explicitly deferred with a reason.
 - The branch/worktree state is clean or the existing changes are intentionally accounted for.
 
 ### 1. Target Definition And Contract Hash
