@@ -26,8 +26,11 @@ Before implementing active reboot code, archive historical implementation and de
 Rules:
 
 - New active code should be written from the reboot design documents.
+- Use `archive/pre-reboot/` for old implementation code and `docs/archive/pre-reboot/` for old design documents unless the implementation status note justifies a different layout.
 - Archived code and docs may be read as historical context, but they must not define behavior.
 - Do not keep old and reboot implementations active for the same Core path.
+- Do not archive repository scaffolding that the fresh implementation still needs, such as `AGENTS.md`, package metadata, lockfiles, CI configuration, formatter/linter configuration, or the reboot design documents.
+- After archiving old active code, create a minimal active reboot package skeleton so the repository has an intentional import/test surface instead of accidentally depending on archived code.
 - Reuse is allowed only for small utilities, tests, fixtures, or target adapters that do not carry old architecture assumptions into the reboot Core.
 - If a current test only protects historical behavior that conflicts with the reboot design, update or archive that test instead of adding compatibility code.
 - Keep the archive inspectable; do not delete historical code or docs unless the user explicitly asks.
@@ -40,9 +43,9 @@ For the module being implemented, create or update a short status note with a tr
 
 - Each data type in the module document maps to implementation files and focused tests.
 - Each function in the module document maps to implementation files and focused tests.
-- Each boundary input and output maps to the producing module and consuming module, or is marked deferred.
+- Each boundary input and output maps to the producing module and consuming module, or is marked as a temporary cross-module deferral.
 - Each invariant maps to at least one positive test or negative test, unless the invariant is purely documentary.
-- Each deferred item has a reason, owner, and the later module slice that will finish it.
+- Each deferred item has a reason, owner, and the later module slice that will finish it. Deferral is for cross-module sequencing only; it is not a way to skip a requirement owned by the current module.
 
 A module is correct when:
 
@@ -54,7 +57,8 @@ A module is correct when:
 
 A module is complete when:
 
-- Every data type, function, boundary data flow, and invariant in that module document is implemented, tested, or explicitly deferred.
+- Every data type, function, boundary data flow, and invariant owned by that module document is implemented and tested.
+- Temporary deferrals remain only for inputs or consumers owned by later modules, and each one names the later module that will close it.
 - All cross-module data flows used by the module are wired to the named producer and consumer modules.
 - Agent-visible, durable runtime, holdout, release, snapshot, and telemetry boundaries match the design.
 - Focused tests for the module pass.
@@ -80,6 +84,7 @@ The reviewer prompt for each module must require:
 - Check whether the implementation is correct and complete against the design documents as the sole source of truth.
 - Check all module data types, functions, boundary inputs/outputs, invariants, hard-fail paths, and cross-module data flows against the traceability matrix.
 - Check that focused tests cover important positive and negative cases.
+- Treat unsupported deferrals as findings, especially when the deferred item is owned by the module under review rather than a later module.
 - Check for overdesign: unnecessary new terms, new framework layers, generic abstractions, compatibility shims, or concepts that are not required by the design.
 - Check that Core remains target-independent and that target-specific logic stays outside Core.
 - Preserve accepted design decisions; do not reopen by-design choices as findings.
@@ -109,6 +114,7 @@ Done when:
 - The agent can name the files it will touch first.
 - The current test command is known.
 - Historical code/docs that should no longer be active have been archived or explicitly deferred with a reason.
+- A minimal active reboot package skeleton exists after archive, even before feature modules are complete.
 - The branch/worktree state is clean or the existing changes are intentionally accounted for.
 
 ### 1. Target Definition And Contract Hash
@@ -377,7 +383,8 @@ Done when:
 
 The reboot implementation is complete when:
 
-- Every module document has a corresponding implementation surface or an explicit documented reason for deferral.
+- Every module document has a corresponding implementation surface.
+- No design-owned module requirement remains deferred unless the user explicitly approved narrowing the reboot scope.
 - The main end-to-end path works from cold start to first lower-layer Release.
 - Core remains target-independent under tests and code review.
 - L1/L2/L3 artifacts are invoked only through the worker protocol.
