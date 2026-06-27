@@ -1,6 +1,6 @@
 # Reboot Implementation Runbook
 
-This runbook is for an implementation agent that will turn the reboot design into code. Treat the design documents in this directory as the source of truth, especially [00 Overall Design](00_overall_design.md) and the module documents under [modules/](modules).
+This runbook is for an implementation agent that will turn the reboot design into code. Treat the design documents in this directory as the sole source of truth, especially [00 Overall Design](00_overall_design.md) and the module documents under [modules/](modules). If this runbook, the current implementation, old experiment code, or historical docs conflict with the reboot design documents, the reboot design documents win.
 
 The goal is not to preserve the current implementation shape. The goal is to implement the reboot architecture with the lowest reasonable abstraction tax while keeping the system target-independent in Core.
 
@@ -15,7 +15,37 @@ The goal is not to preserve the current implementation shape. The goal is to imp
 - Do not count cache hits as L1/L2/L3 Coverage.
 - Do not create a separate cold-start compile path. The first lower-layer compile is a `RecompileRequest`.
 - Do not invent compatibility shims for historical experiment artifacts unless they are required by current tests or explicitly approved.
-- Update design docs only when implementation exposes a real design gap. Keep changes narrow and re-check the affected module boundary.
+- Update design docs only when implementation exposes a real design gap. Keep changes narrow, update the affected module boundary first, then implement against the updated design.
+
+## Module Acceptance Protocol
+
+After each module slice, the implementation agent must decide whether the module is correctly and completely implemented by checking it against the design documents, not against the current code shape.
+
+For the module being implemented, create or update a short status note with a traceability matrix:
+
+- Each data type in the module document maps to implementation files and focused tests.
+- Each function in the module document maps to implementation files and focused tests.
+- Each boundary input and output maps to the producing module and consuming module, or is marked deferred.
+- Each invariant maps to at least one positive test or negative test, unless the invariant is purely documentary.
+- Each deferred item has a reason, owner, and the later module slice that will finish it.
+
+A module is correct when:
+
+- Its behavior matches the Purpose text of each implemented function.
+- It accepts and returns the documented inputs and outputs, or a deliberately equivalent low-abstraction representation.
+- It enforces the documented hard-fail conditions.
+- It rejects the important negative cases described by the module's invariants.
+- It does not add target-specific interpretation to Core.
+
+A module is complete when:
+
+- Every data type, function, boundary data flow, and invariant in that module document is implemented, tested, or explicitly deferred.
+- All cross-module data flows used by the module are wired to the named producer and consumer modules.
+- Agent-visible, durable runtime, holdout, release, snapshot, and telemetry boundaries match the design.
+- Focused tests for the module pass.
+- The repository remains runnable with the agreed full or broad test command for the current stage.
+
+If the agent cannot make a module complete because the design is ambiguous or inconsistent, it must update the design documents first and then continue. Do not silently complete a different design.
 
 ## Suggested Implementation Order
 
