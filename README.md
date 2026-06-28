@@ -1,114 +1,69 @@
-# darjeeling
+# Darjeeling
 
-Darjeeling is a profile-guided edge intelligence runtime MVP. It explores how a
-strong cloud model, L4, can externalize stable parts of a workload into cheaper
-local layers while preserving quality:
+Darjeeling helps you run cheaper local artifacts in front of a strong reference
+model. A local artifact can answer only when it is confident; otherwise
+Darjeeling falls back to the reference model.
 
-```text
-L0 cache -> L1 native ProgramBank -> L2 trainable student -> L3 local SLM -> L4
-```
+You define the task boundary. Darjeeling keeps that target-specific logic out of
+the framework, then handles validation, evaluation, routing, fallback, tracing,
+and the data needed to improve artifacts later.
 
-The original demo target is NLU. The current Phase 1 benchmark is CLINC150
-`data_full`; MASSIVE remains available as a historical NLU adapter and comparison
-point.
+## What You Provide
 
-## Design
+A target directory defines one task:
 
-- [MVP demo proposal](docs/mvp_demo_proposal.md)
-- [Module-level design](docs/design/README.md)
-- [Experiment index](docs/experiments/README.md)
+- `target.yaml` for metadata, requirements, and paths
+- `schemas/input.json` and `schemas/output.json` for request and response shapes
+- `contract.py` for target-owned validation, correctness, grouping, and redaction
+- optional `reference.py` for adapting a reference model response
+- optional `data.yaml` and `tests/` for target data and contract checks
 
-Current design state:
+Darjeeling treats target inputs, labels, outputs, and business rules as opaque
+data.
 
-- Darjeeling core is target-independent. NLU schemas, prompts, labels, CLINC150,
-  MASSIVE, intent/slot diagnostics, and target-specific L1/L2/L3 logic stay under
-  `src/darjeeling/targets/nlu` or experiment artifacts.
-- L1, L2, and L3 share a small outer evolution policy: `max_rounds`,
-  per-round timeout, patience, round executor, and round result summaries. Core
-  does not declare target quality claims or private gate semantics.
-- Generated L1/L2/L3 artifacts may be large or target-specific. They still must
-  pass target-owned evaluation and outer replay/promotion gates before adoption.
-
-## Setup
+## Install
 
 ```bash
 uv sync --extra dev
 ```
 
-Dataset adapter dependencies are optional. Install them when you need CLINC150
-or MASSIVE dataset preparation:
+## Check A Target
+
+Validate a target directory:
 
 ```bash
-uv sync --extra dev --extra massive
+uv run darjeeling target check /path/to/target
 ```
 
-The `massive` extra currently carries shared dataset tooling such as `pandas`,
-`pyarrow`, and Hugging Face `datasets`. `datasets` is pinned below 4.0 because
-the MASSIVE adapter still loads `AmazonScience/massive` through its dataset
-script.
-
-Create a `.env` from `.env.example` and set `OPENAI_API_KEY` unless the selected
-run already has a complete teacher cache.
-
-Optional run settings can live in `settings.yaml`. Environment variables and
-`.env` override the YAML file. To select a file explicitly, put `--settings`
-before the subcommand:
+Require a reference adapter during the check:
 
 ```bash
-uv run edge-mvp-nlu --settings settings.yaml experiment preflight --run-dir runs/latest
+uv run darjeeling target check /path/to/target --require-reference
 ```
 
-## CLINC150 local setup
+The target directory contract is documented in
+`docs/design/reboot/modules/01_target_definition.md`.
 
-Prepare the current Phase 1 dataset:
+## Repository Map
+
+- `src/darjeeling/`: active framework implementation
+- `tests/`: active test suite
+- `docs/design/reboot/`: architecture design documents
+
+## Current Status
+
+This repository contains a filesystem/in-memory implementation of the
+architecture. It is suitable for development and design validation.
+
+Production hardening remains future work:
+
+- persistent stores and durable queues
+- OS-portable resource-limit adapters
+- real external reference broker integrations
+
+Run the checks:
 
 ```bash
-uv sync --extra dev --extra massive
-uv run edge-mvp-nlu clinc150 prepare --out data/processed/clinc150_data_full
+uv run --with pytest pytest tests -q
+uv run --with ruff ruff check src tests
 ```
-
-The CLINC150 source is pinned and checksum-verified in
-`src/darjeeling/targets/nlu/adapters/clinc150.py`.
-
-Recent CLINC150 status:
-
-- The repaired L4 teacher gate passed with `clinc150-intent-v2-label-cards`.
-- Teacher-distilled L2 is promising but not adopted: validation passed at
-  threshold `0.98`, locked test accepted precision was `98.77%`, below the
-  `99%` gate.
-- The latest L1 ProgramBank run failed locked test after a strong validation
-  result: validation accepted precision `100.00%` at `60.35%` coverage, locked
-  test accepted precision `92.73%`.
-
-See [docs/experiments/README.md](docs/experiments/README.md) for the current
-experiment map.
-
-## MASSIVE smoke run
-
-```bash
-uv sync --extra dev --extra massive
-uv run edge-mvp-nlu massive prepare --locale en-US
-uv run edge-mvp-nlu experiment preflight --run-dir runs/latest --teacher live-or-cache
-uv run edge-mvp run --stream zipf-heavy --max-requests 3000 --compile-every 500 --teacher live-or-cache
-uv run edge-mvp report --run-dir runs/latest
-uv run pytest
-```
-
-## Real L1 evolution run
-
-The default config keeps `L1_AGENT_MODE=disabled`, so smoke runs do not launch
-Codex CLI. For a real L1 evolution experiment, enable the coding-agent harness.
-Use `agent-session` for current experiments; `codex-cli` remains available for
-older paths and tests:
-
-```bash
-L1_AGENT_MODE=agent-session L4_PROPOSAL_MODE=live \
-  uv run edge-mvp-nlu experiment main-evolution --run-dir runs/main --teacher live-or-cache
-```
-
-Run preflight first. If `l1.agent` is `warn`, L1 evolution is still disabled; if
-it is `fail`, the configured `codex` command or dry-run patch is missing.
-
-The project is intentionally fail-fast for the main demo: if `OPENAI_API_KEY` is absent and no
-teacher cache exists for the selected run directory, `edge-mvp run` exits instead of fabricating
-labels.

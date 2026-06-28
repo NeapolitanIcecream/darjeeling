@@ -1,47 +1,24 @@
 [project]
 name = "darjeeling"
 version = "0.1.0"
-description = "Profile-guided edge intelligence runtime MVP."
+description = "Darjeeling reboot runtime."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "Apache-2.0" }
 dependencies = [
-  "openai>=1.0.0",
-  "pydantic>=2.0.0",
-  "pydantic-settings>=2.0.0",
   "pyyaml>=6.0.0",
   "typer>=0.12.0",
-  "rich>=13.0.0",
-  "numpy>=1.26.0",
-  "scikit-learn>=1.5.0",
-  "joblib>=1.4.0",
-  "sentence-transformers>=3.0.0",
-  "faiss-cpu>=1.8.0",
-  "torch>=2.3.0",
-  "transformers>=4.45.0",
-  "accelerate>=0.33.0",
-  "json-repair>=0.30.0",
-  "jinja2>=3.1.0",
-  "matplotlib>=3.9.0",
-  "seaborn>=0.13.0",
-  "plotly>=5.22.0",
-  "optuna>=4.0.0",
+  "jsonschema>=4.0.0",
 ]
 
 [project.optional-dependencies]
-massive = [
-  "datasets>=2.20.0,<4.0.0",
-  "pandas>=2.2.0",
-  "pyarrow>=15.0.0",
-]
 dev = [
   "pytest>=8.0.0",
   "ruff>=0.6.0",
 ]
 
 [project.scripts]
-edge-mvp = "darjeeling.cli:app"
-edge-mvp-nlu = "darjeeling.targets.nlu.main_cli:app"
+darjeeling = "darjeeling.cli:app"
 
 [build-system]
 requires = ["hatchling"]

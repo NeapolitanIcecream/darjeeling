@@ -490,7 +490,10 @@ Input:
 - `request: RuntimeRequest`
 - `stable_release: Release`
 - `shadow_release: Release`
+- `contract: TargetRuntimeContract`
+- `worker_pool: WorkerPool`
 - `runtime_context: RuntimeContext`
+- `circuit_breaker_state: CircuitBreakerStateStore | None`
 
 Output:
 
@@ -584,11 +587,3 @@ Used by:
 - Canary uses stable routing keys.
 - Rollback is pointer movement, not rebuild.
 - Runtime traces include `release_id`, `contract_hash`, redacted/hash layer attempts, cost, latency, and audit probability.
-
-## Alignment Against 0626-2
-
-- Implements L1 -> L2 -> L3 -> L4 fallback in Core.
-- Supports cold start serving before any lower-layer compile has succeeded by using a Release with no local artifacts.
-- Keeps cache before cascade but outside capability coverage.
-- Supports shadow, canary, stable, rollback, and multiple Releases.
-- Ensures runtime traces can feed future compile without hiding layer behavior.

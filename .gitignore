@@ -209,6 +209,9 @@ tempCodeRunnerFile.py
 # Darjeeling generated data and runs
 data/processed/
 runs/
+.codex-workflows/
+archive/
+docs/archive/
 
 # PyPI configuration file
 .pypirc

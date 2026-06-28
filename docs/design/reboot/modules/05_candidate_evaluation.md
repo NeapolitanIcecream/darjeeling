@@ -38,6 +38,9 @@ This module must not expose raw validation/test rows to the agent.
 Fields:
 
 - `candidate_id: str`
+- `submission_id: str`
+- `compile_id: str`
+- `attempt_id: str`
 - `target_name: str`
 - `contract_hash: str`
 - `snapshot_id: str`
@@ -49,6 +52,11 @@ Fields:
 - `status: Literal["submitted", "frozen", "validation_failed", "validation_passed", "test_failed", "eligible_for_release", "rejected"]`
 
 `routing.enabled_layers` controls the official cascade path for this Candidate. A Candidate may include an artifact for a layer that is disabled in routing; Core may evaluate that artifact in diagnostics, but official Precision, Coverage, latency, cost, and release eligibility follow the enabled route only.
+
+`submission_id`, `compile_id`, and `attempt_id` preserve target-independent
+lineage from Agent Workspace. Release-backed workspace baseline advancement
+uses these fields to prove that an accepted Release came from the closed
+attempt being promoted.
 
 ### `EvaluationRun`
 
@@ -253,6 +261,7 @@ Input:
 - `base_release: Release`
 - `definition: TargetDefinition`
 - `artifact_store: ArtifactStore`
+- `source_snapshot_digest: str`
 
 Output:
 
@@ -262,6 +271,7 @@ Purpose:
 
 - Convert a mutable submission into an immutable Candidate.
 - Freeze changed artifact packages.
+- Pass the current evaluation snapshot digest into frozen artifact package metadata.
 - Inherit unchanged artifacts from the base Release.
 - If the base Release has no lower-layer artifacts, there are no unchanged artifacts to inherit.
 - Compute candidate digest and workspace provenance.
@@ -825,10 +835,3 @@ Used by:
 - Reports distinguish gold/human correctness from versioned L4 agreement.
 - Cache hits are excluded from local Coverage.
 - Hard quality requirements cannot be overridden by cost or latency improvements.
-
-## Alignment Against 0626-2
-
-- Implements Candidate freeze, Core-owned validation/test, Report, and Candidate comparison.
-- Measures standalone, residual, ablation, full cascade, fault fallback, latency, and cost.
-- Treats Generalization as a first-class release constraint without inventing a single magic score.
-- Avoids old hidden-release-check terminology in user-facing design while preserving hidden validation/test boundaries.

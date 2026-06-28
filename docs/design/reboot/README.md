@@ -1,7 +1,10 @@
-# Darjeeling Reboot Design
+# Darjeeling Architecture Design
 
-This directory is a from-scratch system design for the next Darjeeling architecture.
-It is based on `/Users/chenmohan/Downloads/Darjeeling-research-0626-2.md` and should be read as a design target, not a description of the current implementation.
+This directory contains the active architecture design for Darjeeling. The
+implementation in `src/darjeeling/` is expected to follow these documents.
+
+The directory name is historical. Do not treat `reboot` as a user-facing product
+concept or a separate runtime mode.
 
 The design assumes:
 
@@ -18,7 +21,6 @@ The design assumes:
 ## Documents
 
 - [00 Overall Design](00_overall_design.md)
-- [Implementation Runbook](implementation_runbook.md)
 - [01 Target Definition Module](modules/01_target_definition.md)
 - [02 Snapshot And Reference Module](modules/02_snapshot_reference.md)
 - [03 Agent Workspace Module](modules/03_agent_workspace.md)

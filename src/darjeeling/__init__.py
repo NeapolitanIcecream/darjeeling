@@ -1,5 +1,9 @@
-"""Darjeeling edge intelligence MVP package."""
+"""Darjeeling core package.
 
-__all__ = ["__version__"]
+Active code in this package follows docs/design/reboot as the architecture
+source of truth.
+"""
 
-__version__ = "0.1.0"
+from darjeeling.model import *  # noqa: F403
+
+__all__ = [name for name in globals() if not name.startswith("_")]

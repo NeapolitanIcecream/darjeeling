@@ -477,6 +477,10 @@ Output:
 Purpose:
 
 - Export allowed train rows to the agent sandbox.
+- Return a manifest that binds the exported file to `snapshot_id`,
+  `snapshot_digest`, row count, redaction level, file digest, and
+  `view_kind == "agent_train_export"` so Agent Workspace can reject stale or
+  caller-constructed train views.
 - Apply target redaction where required.
 - Include reference provenance and slice tags only when allowed by target policy.
 
@@ -522,10 +526,3 @@ Used by:
 - L4/reference qualification is recorded before compile and distinguishes agreement from gold correctness.
 - Exposed validation/test rows are marked consumed and replaced by future holdout windows.
 - Existing gold/human/reference provenance is preserved; L4 agreement is not mislabeled as absolute gold correctness.
-
-## Alignment Against 0626-2
-
-- Implements immutable Snapshot and train/validation/test boundary.
-- Keeps L4/reference credentials, retries, cache, usage, and cost in Core.
-- Lets target code define request/response parsing without owning credentials or evaluation authority.
-- Supports future compile from approved telemetry evidence through `TelemetryDataSource` without leaking runtime evidence into old snapshots.

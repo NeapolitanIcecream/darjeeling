@@ -74,6 +74,14 @@ Fields:
 - `snapshot_options: SnapshotOptions | None`
 - `created_at: datetime`
 
+### `CompileRunStore`
+
+Fields:
+
+- `runs: dict[str, CompileRun]`
+
+This is the minimal Core-owned compile run store used by orchestration to record accepted launches and by schedulers to provide current active jobs back into `plan_compile_launch`. It is deliberately a plain store boundary rather than a scheduler framework.
+
 ## Functions
 
 ### `plan_compile_launch`
@@ -117,14 +125,18 @@ Input:
 - `decision: CompileLaunchDecision`
 - `definition: TargetDefinition`
 - `contract: TargetRuntimeContract`
+- `target_check: TargetCheckReport`
 - `data_config: DataConfig`
 - `request: RecompileRequest`
 - `base_release: Release`
 - `consumed_manifests: list[ConsumedRowsManifest]`
 - `broker: ReferenceBroker`
 - `workspace_store: WorkspaceStore`
+- `compile_run_store: CompileRunStore`
 - `compile_options: CompileOptions`
 - `agent_options: AgentAttemptOptions`
+- `report_views: list[AgentVisibleReport]`
+- `telemetry_summaries: list[AgentVisibleTelemetrySummary]`
 
 Output:
 
@@ -139,7 +151,12 @@ Purpose:
 - Hard-fail if the request carries a `TelemetryDataSource` whose `cutoff_time` is later than `decision.snapshot_cutoff_time`.
 - Call Snapshot And Reference `build_snapshot(...)`, passing the request's telemetry source, `decision.snapshot_cutoff_time`, consumed manifests, reference broker, and `decision.snapshot_options`.
 - Refuse to continue when snapshot build or reference qualification is not acceptable under policy.
+- If reference qualification is insufficient, continue only when the compile
+  launch options explicitly approve insufficient reference evidence for this
+  run.
 - Load the target workspace, create a `CompileRun`, create an isolated `AgentAttempt`, mount allowed inputs, write the agent brief, and launch the single target adaptation agent.
+- Pass selected historical `AgentVisibleReport` summaries and
+  `AgentVisibleTelemetrySummary` values through to Agent Workspace mounting.
 - Record the compile launch in the compile run store.
 
 Used by:
@@ -156,10 +173,3 @@ Used by:
 - It never creates or approves a Release; Release Runtime owns that.
 - It never turns runtime traces into Snapshot rows; Telemetry Evidence And Recompile and Snapshot And Reference own that path.
 - It may defer or reject a compile for budget, concurrency, policy, stale base Release, failed target checks, or failed reference qualification.
-
-## Alignment Against 0626-2
-
-- Makes recompile the only lower-layer compile entrypoint, including the first compile after cold start.
-- Keeps scheduling separate from Candidate quality decisions.
-- Connects approved runtime evidence back into the normal Snapshot and Agent Workspace flow.
-- Keeps the module thin enough that the main claim still lives in Core-owned data boundaries, evaluation, release, and runtime feedback.

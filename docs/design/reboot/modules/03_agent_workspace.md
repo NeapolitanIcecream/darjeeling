@@ -82,6 +82,7 @@ Fields:
 - `target_name: str`
 - `contract_hash: str`
 - `snapshot_id: str`
+- `snapshot_digest: str`
 - `base_release_id: str`
 - `workspace_baseline_commit: str`
 - `started_at: datetime`
@@ -116,12 +117,32 @@ Fields:
 
 - `attempt_id: str`
 - `compile_id: str`
+- `target_name: str`
+- `contract_hash: str`
+- `snapshot_id: str`
+- `snapshot_digest: str`
 - `workspace_path: Path`
 - `source_workspace_commit: str`
 - `initial_commit: str | None`
 - `final_commit: str | None`
 - `agent_model: str`
 - `status: Literal["running", "closed", "failed", "timed_out"]`
+
+### `ClosedAgentAttempt`
+
+Fields:
+
+- `attempt_id: str`
+- `compile_id: str`
+- `target_name: str`
+- `contract_hash: str`
+- `snapshot_id: str`
+- `snapshot_digest: str`
+- `source_workspace_commit: str`
+- `workspace_path: Path`
+- `final_commit: str`
+- `status: Literal["closed", "failed", "timed_out"]`
+- `usage: dict`
 
 ### `CandidateSubmission`
 
@@ -156,6 +177,7 @@ Fields:
 Input:
 
 - `definition: TargetDefinition`
+- `target_check: TargetCheckReport`
 - `snapshot: Snapshot`
 - `base_release: Release`
 - `budget: CompileBudget`
@@ -230,6 +252,7 @@ Input:
 - `target_workspace: TargetWorkspace`
 - `closed_attempt: ClosedAgentAttempt`
 - `release: Release | None`
+- `accepted_candidate: Candidate | None`
 - `reason: Literal["accepted_release", "explicit_carry_forward"]`
 
 Output:
@@ -239,7 +262,11 @@ Output:
 Purpose:
 
 - Advance the long-term target workspace baseline to an attempt final commit.
-- Require either an accepted Release or an explicit carry-forward decision.
+- Require either an accepted Release for a Candidate produced by the closed attempt or an
+  explicit carry-forward decision.
+- When `reason == "accepted_release"`, hard-fail unless `release.candidate_id` matches
+  `accepted_candidate.candidate_id` and the Candidate's `compile_id` and `attempt_id`
+  match `closed_attempt`.
 - Keep rejected attempts available for inspection without making them the next compile baseline by default.
 
 Used by:
@@ -329,6 +356,7 @@ Input:
 - `attempts: list[AgentAttempt]`
 - `candidate_limit: int`
 - `time_limit: Duration`
+- `validation_feedback: Callable[[CandidateSubmission], AgentFeedback]`
 
 Output:
 
@@ -481,10 +509,3 @@ Used by:
 - The agent can edit `scaffolding/` and `runtime/`, but not active target definition, evaluator, snapshot, registry, or telemetry.
 - Generated scaffolding may call trainers, tuners, compilers, and Core brokers, but not another autonomous coding agent.
 - Test evaluation starts only after the relevant agent attempt is closed.
-
-## Alignment Against 0626-2
-
-- Implements the one-Agent answer.
-- Keeps compile-time scaffolding and runtime source in one workspace with directory separation.
-- Supports candidate-level parallel search without introducing an agent role graph.
-- Preserves the packaging firewall between scaffolding and deployed artifacts.

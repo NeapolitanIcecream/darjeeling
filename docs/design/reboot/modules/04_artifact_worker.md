@@ -76,7 +76,7 @@ Fields:
 - `layer: Literal["L1", "L2", "L3"]`
 - `start_command: list[str]`
 - `healthcheck_command: list[str] | None`
-- `protocol: Literal["jsonl", "unix_socket"]`
+- `protocol: Literal["jsonl"]`
 - `timeout_ms: int`
 - `memory_mb: int | None`
 - `network: Literal["disabled"]`
@@ -185,6 +185,7 @@ Input:
 - `artifact_dir: Path`
 - `manifest: ArtifactManifest`
 - `artifact_store: ArtifactStore`
+- `source_snapshot_digest: str`
 
 Output:
 
@@ -193,7 +194,8 @@ Output:
 Purpose:
 
 - Copy package bytes into immutable content-addressed storage.
-- Compute digest and source snapshot digest.
+- Compute the package digest and content-addressed artifact id from package bytes.
+- Record the source snapshot digest supplied by Candidate Evaluation; it is not inferred from the artifact package or target contract.
 - Return package metadata used by Candidate and Release.
 
 Used by:
@@ -301,7 +303,7 @@ Output:
 
 Purpose:
 
-- Parse JSONL or socket response.
+- Parse the JSONL response.
 - Enforce exactly one `accept` or `abstain` decision.
 - Reject malformed, oversized, multiple, or missing responses.
 
@@ -404,10 +406,3 @@ Used by:
 - The deployed package contains runtime files only.
 - The package bytes evaluated by Core are the package bytes eligible for Release.
 - Cache behavior is not implemented inside artifacts.
-
-## Alignment Against 0626-2
-
-- Collapses L1/L2/L3 into resource layers under one runtime ABI.
-- Keeps fallback in Core.
-- Prevents scaffolding, training data, transcripts, or validation/test data from entering runtime packages.
-- Avoids a per-layer compiler class or framework.
