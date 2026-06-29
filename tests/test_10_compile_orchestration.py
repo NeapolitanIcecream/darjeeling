@@ -722,7 +722,14 @@ def test_interactive_compile_loop_stops_agent_when_timeout_expires_during_valida
             agent_timeout_seconds=2,
         )
     )
-    handle = replace(handle, started_at=utcnow() - timedelta(seconds=1.5))
+    started_at = utcnow() - timedelta(seconds=1.5)
+    handle = replace(handle, started_at=started_at)
+    core_session_path = (
+        attempt.workspace_path.parent / "_core" / attempt.attempt_id / "agent_session.json"
+    )
+    core_session = json.loads(core_session_path.read_text())
+    core_session["started_at"] = started_at.isoformat()
+    core_session_path.write_text(json.dumps(core_session), encoding="utf-8")
     original_evaluate = compile_orchestration_module.evaluate_candidate_on_validation
 
     def slow_validation(*args, **kwargs):

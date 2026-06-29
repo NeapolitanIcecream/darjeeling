@@ -980,6 +980,46 @@ def test_poll_agent_session_stops_completed_parent_process_group_children(
         agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
 
 
+def test_poll_agent_session_stops_orphaned_recorded_process_group_on_resume(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    agent_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import os",
+            "import signal",
+            "import time",
+            "pid = os.fork()",
+            "if pid == 0:",
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            "    time.sleep(1.0)",
+            "    Path('journal/child-survived.txt').write_text('survived', encoding='utf-8')",
+            "    time.sleep(30)",
+            "    os._exit(0)",
+            "Path('journal/child.pid').write_text(str(pid), encoding='utf-8')",
+        ]
+    )
+    attempt, handle = _launch_process_test_agent(target_dir, tmp_path, now, agent_code)
+    child_pid_path = attempt.workspace_path / "journal" / "child.pid"
+    _wait_for_path(child_pid_path)
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    process = agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id)
+    try:
+        process.wait(timeout=2.0)
+        updated = poll_agent_session(handle)
+        time.sleep(1.2)
+        assert updated.status == "failed"
+        assert not (attempt.workspace_path / "journal" / "child-survived.txt").exists()
+        session = json.loads(
+            (attempt.workspace_path / "journal" / "agent_session.json").read_text()
+        )
+        assert session["status"] == "failed"
+    finally:
+        if _process_alive(child_pid):
+            subprocess.run(["kill", "-9", str(child_pid)], check=False)
+        agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
+
+
 def test_stop_agent_session_kills_recorded_group_after_agent_parent_exits(
     target_dir: Path, tmp_path: Path, now
 ) -> None:
