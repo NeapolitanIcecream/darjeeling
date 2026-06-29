@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
@@ -535,6 +534,25 @@ def _agent_session_elapsed_seconds(
     return max(0.0, (utcnow() - started_at).total_seconds())
 
 
+class ValidationProcessError(RuntimeError):
+    pass
+
+
+def _validation_process_main(
+    connection: Any,
+    args: tuple[Any, ...],
+) -> None:
+    try:
+        connection.send(("ok", evaluate_candidate_on_validation(*args)))
+    except BaseException as exc:
+        try:
+            connection.send(("error", exc))
+        except Exception:
+            connection.send(("error_class", exc.__class__.__name__))
+    finally:
+        connection.close()
+
+
 def start_compile_launch(
     decision: CompileLaunchDecision,
     definition: TargetDefinition,
@@ -727,33 +745,61 @@ def run_interactive_compile_loop(
     def evaluate_candidate_with_budget_checks(
         submission: CandidateSubmission,
     ) -> dict[str, Any]:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                evaluate_candidate_on_validation,
-                submission,
-                definition,
-                snapshot,
-                base_release,
-                reference_qualification,
-                refresh_agent_usage_ledger(),
-                reference_usage,
-                options.get("audit_usage"),
-                options.get("local_training_search_usage"),
-                baseline_cost,
-                options,
-            )
+        context = mp.get_context("fork")
+        parent_connection, child_connection = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_validation_process_main,
+            args=(
+                child_connection,
+                (
+                    submission,
+                    definition,
+                    snapshot,
+                    base_release,
+                    reference_qualification,
+                    refresh_agent_usage_ledger(),
+                    reference_usage,
+                    options.get("audit_usage"),
+                    options.get("local_training_search_usage"),
+                    baseline_cost,
+                    options,
+                ),
+            ),
+        )
+        process.start()
+        child_connection.close()
+        try:
             while True:
-                try:
-                    evaluation = future.result(timeout=poll_interval_seconds)
-                except FutureTimeoutError:
+                if parent_connection.poll(poll_interval_seconds):
+                    status, payload = parent_connection.recv()
+                    process.join(timeout=1.0)
                     reason = current_stop_reason()
                     if reason is not None:
                         stop_running_agent(reason)
-                    continue
+                    if status == "ok":
+                        return payload
+                    if status == "error":
+                        raise payload
+                    raise ValidationProcessError(str(payload))
                 reason = current_stop_reason()
-                if reason is not None:
-                    stop_running_agent(reason)
-                return evaluation
+                if reason is None:
+                    continue
+                stop_running_agent(reason)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=1.0)
+                if process.is_alive():
+                    process.kill()
+                    process.join()
+                raise TimeoutError(f"validation stopped after {reason}")
+        finally:
+            parent_connection.close()
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+            if process.is_alive():
+                process.kill()
+                process.join()
 
     def drain_ready_submissions() -> str | None:
         nonlocal evaluated_count, feedback_count, failed_count, total_candidate_cost

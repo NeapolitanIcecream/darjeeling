@@ -522,9 +522,15 @@ def test_interactive_compile_loop_stops_agent_when_timeout_expires_during_valida
     )
 
     assert result["evaluated_submission_count"] == 1
-    assert result["feedback_count"] == 1
+    assert result["feedback_count"] == 0
+    assert result["failed_submission_count"] == 1
     assert result["stop_reason"] == "time_limit"
     assert result["closed_attempt_status"] == "closed"
+    feedback = json.loads(
+        (attempt.workspace_path / "journal" / "feedback-slowvalid.json").read_text()
+    )
+    assert feedback["summary"]["status"] == "evaluation_failed"
+    assert feedback["summary"]["safe_error_message"] == "The request failed at runtime."
     session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
     assert session["status"] == "timed_out"
     assert session["stop_reason"] == "time_limit"
@@ -635,10 +641,15 @@ def test_interactive_compile_loop_preserves_usage_high_water_during_validation(
     )
 
     assert result["evaluated_submission_count"] == 1
-    assert result["feedback_count"] == 1
+    assert result["feedback_count"] == 0
+    assert result["failed_submission_count"] == 1
     assert result["stop_reason"] == "budget_exhausted"
     assert result["closed_attempt_status"] == "closed"
     assert result["total_candidate_cost"] == 3.0
+    feedback = json.loads(
+        (attempt.workspace_path / "journal" / "feedback-costtamper.json").read_text()
+    )
+    assert feedback["summary"]["status"] == "evaluation_failed"
     session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
     assert session["status"] == "stopped"
     assert session["stop_reason"] == "budget_exhausted"
@@ -708,11 +719,13 @@ def test_interactive_compile_loop_overwrites_stale_evaluation_contract(
         )
     )
     original_evaluate = compile_orchestration_module.evaluate_candidate_on_validation
-    seen_options: dict[str, object] = {}
+    seen_contract_path = tmp_path / "seen-contract.txt"
 
     def assert_current_contract(*args, **kwargs):
         evaluation_options = args[-1]
-        seen_options["contract"] = evaluation_options["contract"]
+        seen_contract_path.write_text(
+            str(evaluation_options["contract"] is contract), encoding="utf-8"
+        )
         return original_evaluate(*args, **kwargs)
 
     monkeypatch.setattr(
@@ -738,7 +751,7 @@ def test_interactive_compile_loop_overwrites_stale_evaluation_contract(
 
     assert result["evaluated_submission_count"] == 1
     assert result["feedback_count"] == 1
-    assert seen_options["contract"] is contract
+    assert seen_contract_path.read_text(encoding="utf-8") == "True"
 
 
 def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(
