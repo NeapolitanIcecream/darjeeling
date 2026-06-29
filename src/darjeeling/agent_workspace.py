@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +74,7 @@ _FORBIDDEN_REPORT_KEYS = {
     "validation_rows",
     "test_rows",
 }
+_LIVE_AGENT_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 
 
 def _ensure_workspace_layout(path: Path, *, include_submissions: bool = True) -> None:
@@ -609,6 +611,12 @@ def write_agent_brief(
                 "autonomous coding agent.",
                 "Submit candidates under submissions/<candidate>/artifacts/"
                 "l1|l2|l3 with artifact.yaml files.",
+                "During an interactive compile, keep watching journal/ for "
+                "official validation feedback files named feedback-<candidate>.json. "
+                "Continue local search from aggregate feedback only.",
+                "Core may stop the session when time, candidate, cost, or user-stop "
+                "budgets are reached. Test evaluation and release decisions happen "
+                "only after this attempt is closed.",
                 f"objective: {objective}",
                 f"readonly_entries: {mount_manifest.entries}",
             ]
@@ -619,11 +627,11 @@ def write_agent_brief(
     return brief
 
 
-def launch_target_adaptation_agent(
+def _prepare_agent_launch(
     attempt: AgentAttempt,
     brief_path: Path,
     agent_runtime: dict[str, Any],
-) -> AgentSessionHandle:
+) -> dict[str, Any]:
     try:
         brief_path.resolve().relative_to(attempt.workspace_path.resolve())
     except ValueError as exc:
@@ -651,6 +659,7 @@ def launch_target_adaptation_agent(
     sandbox_exec = shutil.which("sandbox-exec")
     if sandbox_exec is None:
         sandbox_profile: Path | None = None
+        sandbox_mode = "portable_python"
         sandboxed_command = _agent_portable_sandbox_command(
             attempt.workspace_path, command, protected_paths
         )
@@ -658,6 +667,7 @@ def launch_target_adaptation_agent(
         sandbox_profile = _write_agent_sandbox_profile(
             attempt.workspace_path, command, protected_paths
         )
+        sandbox_mode = "sandbox_exec"
         sandboxed_command = [
             sandbox_exec,
             "-f",
@@ -671,54 +681,272 @@ def launch_target_adaptation_agent(
         "DARJEELING_ATTEMPT_ID": attempt.attempt_id,
         "DARJEELING_BRIEF_PATH": str(brief_path),
     }
+    return {
+        "command": command,
+        "sandboxed_command": sandboxed_command,
+        "sandbox_profile": sandbox_profile,
+        "sandbox_mode": sandbox_mode,
+        "started_at": started_at,
+        "env": env,
+        "timeout_seconds": timeout_seconds,
+        "session_record": session_record,
+        "log_path": attempt.workspace_path / "journal" / "agent.log",
+    }
+
+
+def _write_completed_session_record(
+    *,
+    attempt_id: str,
+    command: list[str],
+    sandbox_profile: Path | None,
+    sandbox_mode: str,
+    started_at: Any,
+    session_record: Path,
+    log_path: Path,
+    status: str,
+    returncode: int | None,
+    timeout_seconds: int | None = None,
+    stop_reason: str | None = None,
+) -> None:
+    record: dict[str, Any] = {
+        "attempt_id": attempt_id,
+        "command": command,
+        "sandbox_profile": str(sandbox_profile) if sandbox_profile else None,
+        "sandbox_mode": sandbox_mode,
+        "status": status,
+        "returncode": returncode,
+        "started_at": started_at,
+        "completed_at": utcnow(),
+        "log_path": log_path,
+    }
+    if timeout_seconds is not None:
+        record["timeout_seconds"] = timeout_seconds
+    if stop_reason is not None:
+        record["stop_reason"] = stop_reason
+    write_json(session_record, record)
+
+
+def launch_target_adaptation_agent(
+    attempt: AgentAttempt,
+    brief_path: Path,
+    agent_runtime: dict[str, Any],
+) -> AgentSessionHandle:
+    launch = _prepare_agent_launch(attempt, brief_path, agent_runtime)
+    command = launch["command"]
+    sandbox_profile = launch["sandbox_profile"]
+    sandbox_mode = launch["sandbox_mode"]
+    started_at = launch["started_at"]
+    session_record = launch["session_record"]
+    log_path = launch["log_path"]
+    timeout_seconds = launch["timeout_seconds"]
     try:
         completed = subprocess.run(
-            sandboxed_command,
+            launch["sandboxed_command"],
             cwd=attempt.workspace_path,
-            env=env,
+            env=launch["env"],
             text=True,
             capture_output=True,
             timeout=timeout_seconds,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        write_json(
-            session_record,
-            {
-                "attempt_id": attempt.attempt_id,
-                "command": command,
-                "sandbox_profile": str(sandbox_profile) if sandbox_profile else None,
-                "status": "timed_out",
-                "started_at": started_at,
-                "completed_at": utcnow(),
-                "timeout_seconds": timeout_seconds,
-            },
+        stdout = (
+            exc.stdout.decode("utf-8", errors="replace")
+            if isinstance(exc.stdout, bytes)
+            else (exc.stdout or "")
+        )
+        stderr = (
+            exc.stderr.decode("utf-8", errors="replace")
+            if isinstance(exc.stderr, bytes)
+            else (exc.stderr or "")
+        )
+        log_path.write_text(
+            f"$ {' '.join(command)}\n\n[stdout]\n{stdout}\n[stderr]\n{stderr}\n",
+            encoding="utf-8",
+        )
+        _write_completed_session_record(
+            attempt_id=attempt.attempt_id,
+            command=command,
+            sandbox_profile=sandbox_profile,
+            sandbox_mode=sandbox_mode,
+            started_at=started_at,
+            session_record=session_record,
+            log_path=log_path,
+            status="timed_out",
+            returncode=None,
+            timeout_seconds=timeout_seconds,
         )
         raise WorkspaceError("agent runtime command timed out") from exc
-    log_path = attempt.workspace_path / "journal" / "agent.log"
     log_path.write_text(
         f"$ {' '.join(command)}\n\n[stdout]\n{completed.stdout}\n[stderr]\n"
         f"{completed.stderr}\n",
         encoding="utf-8",
     )
+    status = "completed" if completed.returncode == 0 else "failed"
+    _write_completed_session_record(
+        attempt_id=attempt.attempt_id,
+        command=command,
+        sandbox_profile=sandbox_profile,
+        sandbox_mode=sandbox_mode,
+        started_at=started_at,
+        session_record=session_record,
+        log_path=log_path,
+        status=status,
+        returncode=completed.returncode,
+        timeout_seconds=timeout_seconds,
+    )
+    if completed.returncode != 0:
+        raise WorkspaceError("agent runtime command failed")
+    return AgentSessionHandle(
+        attempt_id=attempt.attempt_id,
+        status="completed",
+        command=command,
+        started_at=started_at,
+        log_path=log_path,
+        session_record_path=session_record,
+        sandbox_mode=sandbox_mode,
+    )
+
+
+def launch_target_adaptation_agent_async(
+    attempt: AgentAttempt,
+    brief_path: Path,
+    agent_runtime: dict[str, Any],
+) -> AgentSessionHandle:
+    launch = _prepare_agent_launch(attempt, brief_path, agent_runtime)
+    command = launch["command"]
+    sandbox_profile = launch["sandbox_profile"]
+    sandbox_mode = launch["sandbox_mode"]
+    started_at = launch["started_at"]
+    session_record = launch["session_record"]
+    log_path = launch["log_path"]
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as log_file:
+        log_file.write(f"$ {' '.join(command)}\n\n")
+        log_file.flush()
+        try:
+            process = subprocess.Popen(
+                launch["sandboxed_command"],
+                cwd=attempt.workspace_path,
+                env=launch["env"],
+                text=True,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise WorkspaceError("agent runtime command could not be started") from exc
+    _LIVE_AGENT_PROCESSES[attempt.attempt_id] = process
     write_json(
         session_record,
         {
             "attempt_id": attempt.attempt_id,
             "command": command,
             "sandbox_profile": str(sandbox_profile) if sandbox_profile else None,
-            "status": "completed" if completed.returncode == 0 else "failed",
-            "returncode": completed.returncode,
+            "sandbox_mode": sandbox_mode,
+            "status": "running",
+            "pid": process.pid,
             "started_at": started_at,
-            "completed_at": utcnow(),
             "log_path": log_path,
+            "timeout_seconds": launch["timeout_seconds"],
         },
     )
-    if completed.returncode != 0:
-        raise WorkspaceError("agent runtime command failed")
     return AgentSessionHandle(
-        attempt_id=attempt.attempt_id, status="completed", command=command
+        attempt_id=attempt.attempt_id,
+        status="running",
+        command=command,
+        pid=process.pid,
+        started_at=started_at,
+        log_path=log_path,
+        session_record_path=session_record,
+        sandbox_mode=sandbox_mode,
     )
+
+
+def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
+    process = _LIVE_AGENT_PROCESSES.get(handle.attempt_id)
+    if process is None:
+        if handle.session_record_path is not None and handle.session_record_path.exists():
+            record = read_json(handle.session_record_path)
+            return replace(
+                handle,
+                status=record.get("status", handle.status),
+                pid=record.get("pid", handle.pid),
+            )
+        return handle
+    returncode = process.poll()
+    if returncode is None:
+        return replace(handle, status="running", pid=process.pid)
+    _LIVE_AGENT_PROCESSES.pop(handle.attempt_id, None)
+    status = "completed" if returncode == 0 else "failed"
+    if handle.session_record_path is not None:
+        record = (
+            read_json(handle.session_record_path)
+            if handle.session_record_path.exists()
+            else {}
+        )
+        _write_completed_session_record(
+            attempt_id=handle.attempt_id,
+            command=list(record.get("command", handle.command)),
+            sandbox_profile=Path(record["sandbox_profile"])
+            if record.get("sandbox_profile")
+            else None,
+            sandbox_mode=record.get("sandbox_mode") or handle.sandbox_mode or "unknown",
+            started_at=record.get("started_at") or handle.started_at or utcnow(),
+            session_record=handle.session_record_path,
+            log_path=Path(record.get("log_path") or handle.log_path or ""),
+            status=status,
+            returncode=returncode,
+            timeout_seconds=record.get("timeout_seconds"),
+        )
+    return replace(handle, status=status, pid=process.pid)
+
+
+def stop_agent_session(
+    handle: AgentSessionHandle,
+    reason: str = "stopped",
+    timeout_seconds: float = 5.0,
+) -> AgentSessionHandle:
+    process = _LIVE_AGENT_PROCESSES.get(handle.attempt_id)
+    status = "timed_out" if reason == "time_limit" else "stopped"
+    if process is not None and process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except Exception:
+            process.terminate()
+        try:
+            process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except Exception:
+                process.kill()
+            process.wait()
+    returncode = process.returncode if process is not None else None
+    _LIVE_AGENT_PROCESSES.pop(handle.attempt_id, None)
+    if handle.session_record_path is not None:
+        record = (
+            read_json(handle.session_record_path)
+            if handle.session_record_path.exists()
+            else {}
+        )
+        log_path = Path(record.get("log_path") or handle.log_path or "")
+        _write_completed_session_record(
+            attempt_id=handle.attempt_id,
+            command=list(record.get("command", handle.command)),
+            sandbox_profile=Path(record["sandbox_profile"])
+            if record.get("sandbox_profile")
+            else None,
+            sandbox_mode=record.get("sandbox_mode") or handle.sandbox_mode or "unknown",
+            started_at=record.get("started_at") or handle.started_at or utcnow(),
+            session_record=handle.session_record_path,
+            log_path=log_path,
+            status=status,
+            returncode=returncode,
+            timeout_seconds=record.get("timeout_seconds"),
+            stop_reason=reason,
+        )
+    return replace(handle, status=status, pid=process.pid if process is not None else handle.pid)
 
 
 def run_compile_loop(
@@ -840,6 +1068,16 @@ def close_agent_attempt(attempt: AgentAttempt, reason: str) -> ClosedAgentAttemp
         "failure",
     }:
         raise WorkspaceError("unsupported agent attempt close reason")
+    session_record = attempt.workspace_path / "journal" / "agent_session.json"
+    if attempt.attempt_id in _LIVE_AGENT_PROCESSES:
+        stop_agent_session(
+            AgentSessionHandle(
+                attempt_id=attempt.attempt_id,
+                status="running",
+                session_record_path=session_record,
+            ),
+            reason=reason,
+        )
     final_commit = _baseline_content_digest(attempt.workspace_path)
     write_json(
         attempt.workspace_path / "journal" / "closed.json",
@@ -855,7 +1093,9 @@ def close_agent_attempt(attempt: AgentAttempt, reason: str) -> ClosedAgentAttemp
         source_workspace_commit=attempt.source_workspace_commit,
         workspace_path=attempt.workspace_path,
         final_commit=final_commit,
-        status="closed" if reason != "failure" else "failed",
+        status="timed_out"
+        if reason == "time_limit"
+        else ("failed" if reason == "failure" else "closed"),
     )
 
 

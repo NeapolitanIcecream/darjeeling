@@ -579,8 +579,13 @@ class WorkspaceMountManifest:
 @dataclass(frozen=True)
 class AgentSessionHandle:
     attempt_id: str
-    status: Literal["running", "not_started", "completed"]
+    status: Literal["running", "not_started", "completed", "failed", "timed_out", "stopped"]
     command: list[str] = field(default_factory=list)
+    pid: int | None = None
+    started_at: datetime | None = None
+    log_path: Path | None = None
+    session_record_path: Path | None = None
+    sandbox_mode: str | None = None
 
 
 @dataclass(frozen=True)

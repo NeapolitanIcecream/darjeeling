@@ -1,23 +1,36 @@
 from __future__ import annotations
 
+import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from darjeeling.agent_workspace import (
+    close_agent_attempt,
     create_agent_workspace,
     create_compile_run,
     launch_target_adaptation_agent,
+    launch_target_adaptation_agent_async,
     load_target_workspace,
     mount_readonly_inputs,
+    poll_agent_session,
+    provide_validation_feedback,
+    receive_candidate_submission,
     write_agent_brief,
 )
 from darjeeling.artifact_worker import build_protocol_docs
+from darjeeling.candidate_evaluation import evaluate_candidate_on_validation
 from darjeeling.errors import CompileLaunchError, SnapshotBuildError
 from darjeeling.model import (
     AgentAttempt,
     AgentAttemptOptions,
+    AgentFeedback,
     AgentSessionHandle,
+    AgentUsageEvent,
+    AgentUsageLedger,
     AgentViewOptions,
+    CandidateSubmission,
+    ClosedAgentAttempt,
     CompileLaunchDecision,
     CompileOptions,
     CompileRun,
@@ -35,7 +48,14 @@ from darjeeling.model import (
 )
 from darjeeling.snapshot_reference import build_snapshot, export_train_view_for_agent
 from darjeeling.target_definition import export_agent_readonly_target_view
-from darjeeling.util import utcnow
+from darjeeling.util import (
+    file_digest,
+    read_json,
+    safe_public_error,
+    stable_hash,
+    utcnow,
+    write_json,
+)
 
 
 def plan_compile_launch(
@@ -292,6 +312,121 @@ def _record_compile_run(store: CompileRunStore, compile_run: CompileRun) -> None
     store.runs[compile_run.compile_id] = compile_run
 
 
+def _submission_ready(path: Path) -> bool:
+    artifacts = path / "artifacts"
+    return any((artifacts / layer / "artifact.yaml").exists() for layer in ["l1", "l2", "l3"])
+
+
+def _submission_content_digest(path: Path) -> str:
+    entries: list[tuple[str, str]] = []
+    for item in sorted(path.rglob("*")):
+        rel = item.relative_to(path).as_posix()
+        if item.is_file() and not item.is_symlink():
+            entries.append((rel, file_digest(item)))
+        elif item.is_symlink():
+            entries.append((rel, "symlink"))
+    return stable_hash(entries)
+
+
+def _ledger_path(attempt: AgentAttempt) -> Path:
+    return attempt.workspace_path / "journal" / "evaluated_submissions.json"
+
+
+def _load_submission_ledger(attempt: AgentAttempt) -> list[dict[str, Any]]:
+    path = _ledger_path(attempt)
+    if not path.exists():
+        return []
+    raw = read_json(path)
+    if not isinstance(raw, list):
+        raise CompileLaunchError("evaluated submission ledger must contain a list")
+    return [entry for entry in raw if isinstance(entry, dict)]
+
+
+def _write_submission_ledger(attempt: AgentAttempt, ledger: list[dict[str, Any]]) -> None:
+    write_json(_ledger_path(attempt), ledger)
+
+
+def _ledger_contains(
+    ledger: list[dict[str, Any]], submission_id: str, submission_digest: str
+) -> bool:
+    return any(
+        entry.get("submission_id") == submission_id
+        and entry.get("submission_digest") == submission_digest
+        and entry.get("validation_status")
+        in {"feedback_written", "evaluation_failed", "skipped"}
+        for entry in ledger
+    )
+
+
+def _count_evaluated_entries(ledger: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for entry in ledger
+        if entry.get("validation_status") in {"feedback_written", "evaluation_failed"}
+    )
+
+
+def _ledger_cost(ledger: list[dict[str, Any]]) -> float:
+    total = 0.0
+    for entry in ledger:
+        value = entry.get("candidate_cost")
+        if isinstance(value, (int, float)):
+            total += float(value)
+    return total
+
+
+def _read_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
+    path = attempt.workspace_path / "journal" / "agent_usage.json"
+    if not path.exists():
+        return AgentUsageLedger()
+    raw = read_json(path)
+    if not isinstance(raw, list):
+        return AgentUsageLedger()
+    events = [AgentUsageEvent(**event) for event in raw if isinstance(event, dict)]
+    return AgentUsageLedger(events)
+
+
+def _safe_failure_feedback(submission_id: str, exc: Exception) -> AgentFeedback:
+    message = str(exc).strip()
+    if not message or any(term in message.lower() for term in ["secret", "token", "password"]):
+        message = safe_public_error("runtime_error")
+    return AgentFeedback(
+        candidate_id=submission_id,
+        summary={
+            "status": "evaluation_failed",
+            "error_class": exc.__class__.__name__,
+            "safe_error_message": message[:300],
+        },
+        requirement_results=[],
+        metrics={},
+        safe_slice_summaries=[],
+        latency_cost_summary={},
+        raw_rows_included=False,
+    )
+
+
+def _feedback_for_submission(
+    submission: CandidateSubmission, evaluation: dict[str, Any]
+) -> AgentFeedback:
+    feedback = evaluation["feedback"]
+    candidate = evaluation.get("candidate")
+    summary = dict(feedback.summary)
+    summary.setdefault("submission_id", submission.submission_id)
+    if candidate is not None:
+        summary.setdefault("candidate_id", candidate.candidate_id)
+    return replace(feedback, candidate_id=submission.submission_id, summary=summary)
+
+
+def _close_reason_for_agent_status(status: str) -> str:
+    if status == "completed":
+        return "ready_for_test"
+    if status == "timed_out":
+        return "time_limit"
+    if status in {"failed", "stopped"}:
+        return "failure"
+    return "ready_for_test"
+
+
 def start_compile_launch(
     decision: CompileLaunchDecision,
     definition: TargetDefinition,
@@ -308,6 +443,8 @@ def start_compile_launch(
     agent_options: AgentAttemptOptions,
     report_views: list[Any] | None = None,
     telemetry_summaries: list[Any] | None = None,
+    *,
+    launch_async: bool = False,
 ) -> tuple[CompileRun, AgentAttempt, AgentSessionHandle]:
     if decision.status != "accepted":
         raise CompileLaunchError("compile launch decision is not accepted")
@@ -378,7 +515,12 @@ def start_compile_launch(
     timeout_seconds = agent_options.agent_timeout_seconds or (
         decision.budget.max_agent_seconds if decision.budget.max_agent_seconds > 0 else None
     )
-    handle = launch_target_adaptation_agent(
+    launch = (
+        launch_target_adaptation_agent_async
+        if launch_async
+        else launch_target_adaptation_agent
+    )
+    handle = launch(
         attempt,
         brief,
         {
@@ -388,3 +530,166 @@ def start_compile_launch(
     )
     _record_compile_run(compile_run_store, compile_run)
     return compile_run, attempt, handle
+
+
+def run_interactive_compile_loop(
+    compile_run: CompileRun,
+    attempt: AgentAttempt,
+    agent_handle: AgentSessionHandle,
+    definition: TargetDefinition,
+    contract: TargetRuntimeContract,
+    snapshot: Any,
+    base_release: Release,
+    reference_qualification: Any,
+    reference_usage: Any,
+    baseline_cost: dict[str, Any],
+    evaluation_options: dict[str, Any],
+    *,
+    poll_interval_seconds: float = 0.05,
+) -> dict[str, Any]:
+    if attempt.compile_id != compile_run.compile_id:
+        raise CompileLaunchError("agent attempt does not match compile run")
+    if agent_handle.attempt_id != attempt.attempt_id:
+        raise CompileLaunchError("agent handle does not match agent attempt")
+    if poll_interval_seconds <= 0:
+        raise CompileLaunchError("poll interval must be positive")
+    ledger = _load_submission_ledger(attempt)
+    evaluated_count = _count_evaluated_entries(ledger)
+    feedback_count = sum(
+        1 for entry in ledger if entry.get("validation_status") == "feedback_written"
+    )
+    failed_count = sum(
+        1 for entry in ledger if entry.get("validation_status") == "evaluation_failed"
+    )
+    skipped_count = sum(1 for entry in ledger if entry.get("validation_status") == "skipped")
+    total_candidate_cost = _ledger_cost(ledger)
+    started = time.monotonic()
+    stop_reason: str | None = (
+        "candidate_limit"
+        if evaluated_count >= compile_run.budget.max_candidates
+        else None
+    )
+    handle = agent_handle
+    options = dict(evaluation_options)
+    options.setdefault("contract", contract)
+
+    while stop_reason is None:
+        elapsed = time.monotonic() - started
+        if (
+            compile_run.budget.max_agent_seconds > 0
+            and elapsed >= compile_run.budget.max_agent_seconds
+        ):
+            stop_reason = "time_limit"
+            break
+        if (attempt.workspace_path / "journal" / "stop_compile").exists():
+            stop_reason = "user_stop"
+            break
+        if (
+            compile_run.budget.max_cost is not None
+            and total_candidate_cost >= compile_run.budget.max_cost
+        ):
+            stop_reason = "budget_exhausted"
+            break
+        submissions_dir = attempt.workspace_path / "submissions"
+        if submissions_dir.exists():
+            for submission_path in sorted(
+                path
+                for path in submissions_dir.iterdir()
+                if path.is_dir() and _submission_ready(path)
+            ):
+                submission_digest = _submission_content_digest(submission_path)
+                if _ledger_contains(ledger, submission_path.name, submission_digest):
+                    continue
+                if evaluated_count >= compile_run.budget.max_candidates:
+                    stop_reason = "candidate_limit"
+                    break
+                feedback_path: str | None = None
+                candidate_cost: float | None = None
+                try:
+                    submission = receive_candidate_submission(attempt, submission_path)
+                    evaluation = evaluate_candidate_on_validation(
+                        submission,
+                        definition,
+                        snapshot,
+                        base_release,
+                        reference_qualification,
+                        _read_agent_usage_ledger(attempt),
+                        reference_usage,
+                        options.get("audit_usage"),
+                        options.get("local_training_search_usage"),
+                        baseline_cost,
+                        options,
+                    )
+                    feedback = _feedback_for_submission(submission, evaluation)
+                    feedback_record = provide_validation_feedback(attempt, feedback)
+                    feedback_path = str(feedback_record.path)
+                    report = evaluation.get("report")
+                    report_cost = getattr(getattr(report, "cost", None), "compile_cost", None)
+                    if isinstance(report_cost, (int, float)):
+                        candidate_cost = float(report_cost)
+                        total_candidate_cost += candidate_cost
+                    ledger.append(
+                        {
+                            "submission_id": submission.submission_id,
+                            "submission_digest": submission_digest,
+                            "workspace_commit": submission.workspace_commit,
+                            "validation_status": "feedback_written",
+                            "candidate_id": evaluation["candidate"].candidate_id,
+                            "feedback_path": feedback_path,
+                            "candidate_cost": candidate_cost,
+                            "timestamp": utcnow(),
+                        }
+                    )
+                    feedback_count += 1
+                except Exception as exc:
+                    feedback = _safe_failure_feedback(submission_path.name, exc)
+                    feedback_record = provide_validation_feedback(attempt, feedback)
+                    feedback_path = str(feedback_record.path)
+                    ledger.append(
+                        {
+                            "submission_id": submission_path.name,
+                            "submission_digest": submission_digest,
+                            "validation_status": "evaluation_failed",
+                            "feedback_path": feedback_path,
+                            "error_class": exc.__class__.__name__,
+                            "safe_error_message": feedback.summary["safe_error_message"],
+                            "timestamp": utcnow(),
+                        }
+                    )
+                    failed_count += 1
+                evaluated_count += 1
+                _write_submission_ledger(attempt, ledger)
+                if evaluated_count >= compile_run.budget.max_candidates:
+                    stop_reason = "candidate_limit"
+                    break
+                if (
+                    compile_run.budget.max_cost is not None
+                    and total_candidate_cost >= compile_run.budget.max_cost
+                ):
+                    stop_reason = "budget_exhausted"
+                    break
+        if stop_reason is not None:
+            break
+        handle = poll_agent_session(handle)
+        if handle.status in {"completed", "failed", "timed_out", "stopped"}:
+            stop_reason = _close_reason_for_agent_status(handle.status)
+            break
+        time.sleep(poll_interval_seconds)
+
+    elapsed_seconds = time.monotonic() - started
+    close_reason = stop_reason or "ready_for_test"
+    closed_attempt: ClosedAgentAttempt = close_agent_attempt(attempt, close_reason)
+    return {
+        "compile_id": compile_run.compile_id,
+        "attempt_id": attempt.attempt_id,
+        "evaluated_submission_count": evaluated_count,
+        "feedback_count": feedback_count,
+        "skipped_submission_count": skipped_count,
+        "failed_submission_count": failed_count,
+        "stop_reason": close_reason,
+        "elapsed_seconds": elapsed_seconds,
+        "total_candidate_cost": total_candidate_cost,
+        "closed_attempt_status": closed_attempt.status,
+        "closed_attempt_final_commit": closed_attempt.final_commit,
+        "ledger_path": _ledger_path(attempt),
+    }

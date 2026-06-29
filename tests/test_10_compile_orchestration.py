@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from conftest import PrefixBroker
 
-from darjeeling.compile_orchestration import plan_compile_launch, start_compile_launch
+from darjeeling.agent_workspace import (
+    create_agent_workspace,
+    create_compile_run,
+    launch_target_adaptation_agent_async,
+    load_target_workspace,
+    mount_readonly_inputs,
+    write_agent_brief,
+)
+from darjeeling.artifact_worker import build_protocol_docs
+from darjeeling.compile_orchestration import (
+    plan_compile_launch,
+    run_interactive_compile_loop,
+    start_compile_launch,
+)
 from darjeeling.errors import CompileLaunchError, WorkspaceError
 from darjeeling.model import (
     AgentAttemptOptions,
+    AgentViewOptions,
     AgentVisibleDecisionSummary,
     AgentVisibleReport,
     AgentVisibleTelemetrySummary,
+    CompileBudget,
     CompileOptions,
     CompileRunStore,
     RecompileReason,
@@ -25,8 +41,314 @@ from darjeeling.model import (
     WorkspaceStore,
 )
 from darjeeling.release_runtime import create_release_without_artifacts
-from darjeeling.target_definition import load_checked_target
+from darjeeling.snapshot_reference import build_snapshot, export_train_view_for_agent
+from darjeeling.target_definition import export_agent_readonly_target_view, load_checked_target
 from darjeeling.util import utcnow
+
+
+def _write_agent_artifact_snippet(contract_hash: str) -> str:
+    return f"""
+def write_artifact(candidate, prefixes):
+    from pathlib import Path
+    p = Path("submissions") / candidate / "artifacts" / "l1"
+    p.mkdir(parents=True, exist_ok=True)
+    worker = '''
+import json
+import sys
+
+request = json.loads(sys.stdin.readline())
+text = request["input"]["text"]
+prefixes = __PREFIXES__
+if any(text.startswith(prefix + ":") for prefix in prefixes):
+    print(json.dumps({{
+        "decision": "accept",
+        "output": {{"label": text.split(":", 1)[0]}},
+        "confidence": 0.99,
+        "reason": "prefix_match",
+    }}))
+else:
+    print(json.dumps({{"decision": "abstain", "confidence": 0.1, "reason": "outside"}}))
+'''.replace("__PREFIXES__", repr(prefixes))
+    (p / "worker.py").write_text(worker, encoding="utf-8")
+    (p / "healthcheck.py").write_text("raise SystemExit(0)\\n", encoding="utf-8")
+    (p / "artifact.yaml").write_text('''api_version: v1
+layer: L1
+start_command:
+- python3
+- worker.py
+healthcheck_command:
+- python3
+- healthcheck.py
+protocol: jsonl
+timeout_ms: 1000
+memory_mb: 64
+network: disabled
+contract_hash: {contract_hash}
+allowed_reason_codes:
+- prefix_match
+- outside
+''', encoding="utf-8")
+"""
+
+
+def _launch_interactive_agent(
+    target_dir: Path,
+    tmp_path: Path,
+    now,
+    budget: CompileBudget,
+    agent_code: str,
+):
+    definition, contract, check = load_checked_target(target_dir)
+    registry = ReleaseRegistry()
+    release = create_release_without_artifacts(
+        definition, contract, check, PrefixBroker(), RoutingSettings(), registry
+    )
+    snapshot = build_snapshot(
+        definition,
+        contract,
+        definition.data_config,
+        None,
+        [],
+        PrefixBroker(),
+        now,
+        SnapshotOptions(storage_root=tmp_path / "snapshots"),
+    )
+    workspace = load_target_workspace(
+        definition.name, definition.contract_hash, WorkspaceStore(tmp_path / "workspaces")
+    )
+    compile_run = create_compile_run(
+        definition,
+        check,
+        snapshot.snapshot,
+        release,
+        budget,
+        workspace,
+        snapshot.reference_qualification,
+        CompileOptions(),
+    )
+    attempt = create_agent_workspace(compile_run, workspace, AgentAttemptOptions())
+    target_view = export_agent_readonly_target_view(
+        definition, attempt.workspace_path / "readonly_source" / "target"
+    )
+    train_view = export_train_view_for_agent(
+        snapshot.snapshot,
+        contract,
+        AgentViewOptions(),
+        attempt.workspace_path / "readonly_source" / "train",
+    )
+    mount_manifest = mount_readonly_inputs(
+        attempt,
+        target_view,
+        train_view,
+        release,
+        [],
+        [],
+        build_protocol_docs("v1"),
+    )
+    brief = write_agent_brief(attempt, compile_run, mount_manifest, {})
+    handle = launch_target_adaptation_agent_async(
+        attempt, brief, {"command": ["/usr/bin/python3", "-c", agent_code]}
+    )
+    return definition, contract, release, snapshot, compile_run, attempt, handle
+
+
+def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=3),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import json",
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('c1', ['a'])",
+                    "deadline = time.time() + 5",
+                    "while time.time() < deadline:",
+                    "    feedback = Path('journal/feedback-c1.json')",
+                    "    if feedback.exists():",
+                    "        data = json.loads(feedback.read_text())",
+                    "        seen = Path('journal/c1-feedback-seen.txt')",
+                    "        seen.write_text(str(data['raw_rows_included']))",
+                    "        write_artifact('c2', ['a', 'b'])",
+                    "        break",
+                    "    time.sleep(0.05)",
+                    "else:",
+                    "    raise SystemExit(44)",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 2
+    assert result["feedback_count"] == 2
+    assert result["failed_submission_count"] == 0
+    assert result["stop_reason"] == "ready_for_test"
+    assert (attempt.workspace_path / "journal" / "feedback-c1.json").exists()
+    assert (attempt.workspace_path / "journal" / "feedback-c2.json").exists()
+    assert (attempt.workspace_path / "journal" / "c1-feedback-seen.txt").read_text() == "False"
+    feedback_text = "\n".join(
+        path.read_text()
+        for path in sorted((attempt.workspace_path / "journal").glob("feedback-*.json"))
+    )
+    assert "r2" not in feedback_text
+    assert "r3" not in feedback_text
+    assert "r4" not in feedback_text
+    assert "expected_output" not in feedback_text
+    ledger_path = attempt.workspace_path / "journal" / "evaluated_submissions.json"
+    ledger = json.loads(ledger_path.read_text())
+    assert [entry["submission_id"] for entry in ledger] == ["c1", "c2"]
+    assert {entry["validation_status"] for entry in ledger} == {"feedback_written"}
+
+
+def test_interactive_compile_loop_stops_at_candidate_limit(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "\n".join(
+                [
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('c1', ['a'])",
+                    "time.sleep(30)",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["stop_reason"] == "candidate_limit"
+    assert json.loads((attempt.workspace_path / "journal" / "closed.json").read_text())[
+        "reason"
+    ] == "candidate_limit"
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["status"] == "stopped"
+
+
+def test_interactive_compile_loop_stops_running_agent_at_time_limit(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=1, max_candidates=1),
+            "import time; time.sleep(30)",
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 0
+    assert result["stop_reason"] == "time_limit"
+    assert result["closed_attempt_status"] == "timed_out"
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["status"] == "timed_out"
+
+
+def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "p = Path('submissions/bad/artifacts/l1')",
+                    "p.mkdir(parents=True, exist_ok=True)",
+                    "payload = 'api_version: v1\\nlayer: L1\\n'",
+                    "(p / 'artifact.yaml').write_text(payload, encoding='utf-8')",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["failed_submission_count"] == 1
+    feedback = json.loads((attempt.workspace_path / "journal" / "feedback-bad.json").read_text())
+    assert feedback["raw_rows_included"] is False
+    assert feedback["summary"]["status"] == "evaluation_failed"
+    assert "error_class" in feedback["summary"]
+    feedback_text = json.dumps(feedback)
+    assert "r2" not in feedback_text
+    assert "expected_output" not in feedback_text
 
 
 def test_first_compile_after_cold_start_uses_recompile_request_path(
