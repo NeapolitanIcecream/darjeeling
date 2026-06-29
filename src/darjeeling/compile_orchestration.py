@@ -509,14 +509,14 @@ def _close_reason_for_agent_status(status: str) -> str:
 
 
 def _agent_session_timeout_seconds(handle: AgentSessionHandle) -> float | None:
-    timeout_seconds = handle.timeout_seconds
-    if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
-        return float(timeout_seconds)
     if handle.session_record_path is not None:
         record = _read_session_record_for_handle(handle)
         timeout_seconds = record.get("timeout_seconds")
         if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
             return float(timeout_seconds)
+    timeout_seconds = handle.timeout_seconds
+    if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
+        return float(timeout_seconds)
     return None
 
 

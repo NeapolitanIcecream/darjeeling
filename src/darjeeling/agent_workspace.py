@@ -122,11 +122,21 @@ def _read_session_record_for_handle(handle: AgentSessionHandle) -> dict[str, Any
 def _write_session_record(
     session_record: Path, attempt_id: str, record: dict[str, Any]
 ) -> None:
-    write_json(session_record, record)
     write_json(
         _core_session_record_path_for_path(session_record.parent.parent, attempt_id),
         record,
     )
+    tmp_path = session_record.with_name(
+        f".{session_record.name}.{os.getpid()}.tmp"
+    )
+    try:
+        write_json(tmp_path, record)
+        tmp_path.replace(session_record)
+    except OSError:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
 
 
 def candidate_submission_ready(path: Path) -> bool:
@@ -957,9 +967,9 @@ def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
                         status="failed",
                         returncode=None,
                         timeout_seconds=(
-                            handle.timeout_seconds
-                            if handle.timeout_seconds is not None
-                            else record.get("timeout_seconds")
+                            record.get("timeout_seconds")
+                            if record.get("timeout_seconds") is not None
+                            else handle.timeout_seconds
                         ),
                     )
                     return replace(handle, status="failed", pid=recorded_pid)
@@ -989,9 +999,9 @@ def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
             status=status,
             returncode=returncode,
             timeout_seconds=(
-                handle.timeout_seconds
-                if handle.timeout_seconds is not None
-                else record.get("timeout_seconds")
+                record.get("timeout_seconds")
+                if record.get("timeout_seconds") is not None
+                else handle.timeout_seconds
             ),
         )
     return replace(handle, status=status, pid=process.pid)
@@ -1185,9 +1195,9 @@ def stop_agent_session(
             status=status,
             returncode=returncode,
             timeout_seconds=(
-                handle.timeout_seconds
-                if handle.timeout_seconds is not None
-                else record.get("timeout_seconds")
+                record.get("timeout_seconds")
+                if record.get("timeout_seconds") is not None
+                else handle.timeout_seconds
             ),
             stop_reason=reason,
         )

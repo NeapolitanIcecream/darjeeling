@@ -1062,6 +1062,45 @@ def test_poll_agent_session_marks_missing_persisted_pid_failed(tmp_path: Path) -
     assert session["returncode"] is None
 
 
+def test_poll_agent_session_persists_core_when_journal_record_is_unwritable(
+    tmp_path: Path,
+) -> None:
+    attempt_id = "attempt-unwritable-journal"
+    attempt_path = tmp_path / "attempt"
+    journal_session = attempt_path / "journal" / "agent_session.json"
+    core_session = attempt_path.parent / "_core" / attempt_id / "agent_session.json"
+    log_path = attempt_path / "journal" / "agent.log"
+    record = {
+        "attempt_id": attempt_id,
+        "command": ["/usr/bin/python3", "-c", "raise SystemExit(0)"],
+        "sandbox_profile": None,
+        "sandbox_mode": "portable_python",
+        "status": "running",
+        "pid": 999999999,
+        "started_at": utcnow(),
+        "log_path": log_path,
+        "timeout_seconds": 10,
+    }
+    journal_session.parent.mkdir(parents=True)
+    journal_session.mkdir()
+    write_json(core_session, record)
+    handle = AgentSessionHandle(
+        attempt_id=attempt_id,
+        status="running",
+        pid=999999999,
+        session_record_path=journal_session,
+        timeout_seconds=1000,
+    )
+
+    updated = poll_agent_session(handle)
+
+    core_record = json.loads(core_session.read_text())
+    assert updated.status == "failed"
+    assert core_record["status"] == "failed"
+    assert core_record["timeout_seconds"] == 10
+    assert journal_session.is_dir()
+
+
 def test_baseline_advances_only_with_accepted_release_or_explicit_carry_forward(
     target_dir: Path, tmp_path: Path, now
 ) -> None:

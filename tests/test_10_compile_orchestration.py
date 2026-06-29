@@ -645,7 +645,14 @@ def test_interactive_compile_loop_reads_resumed_timeout_from_core_record(
             tmp_path,
             now,
             CompileBudget(max_agent_seconds=30, max_candidates=1),
-            "import time; time.sleep(30)",
+            "\n".join(
+                [
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('timeoutbypass', ['a'])",
+                ]
+            ),
             agent_timeout_seconds=5,
         )
     )
@@ -661,7 +668,7 @@ def test_interactive_compile_loop_reads_resumed_timeout_from_core_record(
     core_session["timeout_seconds"] = 5
     journal_session_path.write_text(json.dumps(journal_session), encoding="utf-8")
     core_session_path.write_text(json.dumps(core_session), encoding="utf-8")
-    resumed_handle = replace(handle, started_at=None, timeout_seconds=None)
+    resumed_handle = replace(handle, started_at=None, timeout_seconds=1000)
 
     result = run_interactive_compile_loop(
         compile_run,
