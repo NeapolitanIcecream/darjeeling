@@ -833,21 +833,20 @@ def test_stop_agent_session_kills_agent_process_group_children(
         attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
     )
     brief = write_agent_brief(attempt, compile_run, manifest, {})
-    child_code = (
-        "import signal, time\n"
-        "from pathlib import Path\n"
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "time.sleep(1.0)\n"
-        "Path('journal/child-survived.txt').write_text('survived', encoding='utf-8')\n"
-        "time.sleep(30)\n"
-    )
     agent_code = "\n".join(
         [
             "from pathlib import Path",
-            "import subprocess",
+            "import os",
+            "import signal",
             "import time",
-            "child = subprocess.Popen(['/usr/bin/python3', '-c', " + repr(child_code) + "])",
-            "Path('journal/child.pid').write_text(str(child.pid), encoding='utf-8')",
+            "pid = os.fork()",
+            "if pid == 0:",
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            "    time.sleep(1.0)",
+            "    Path('journal/child-survived.txt').write_text('survived', encoding='utf-8')",
+            "    time.sleep(30)",
+            "    os._exit(0)",
+            "Path('journal/child.pid').write_text(str(pid), encoding='utf-8')",
             "time.sleep(30)",
         ]
     )
