@@ -17,9 +17,27 @@ and filesystem-backed immutable snapshot/artifact/workspace stores.
 
 ## Verification
 
-- `uv run --with pytest pytest tests -q`: 162 passed.
-- `uv run --with ruff ruff check src tests`: passed.
+- `uv run pytest tests -q`: 198 passed.
+- `uv run ruff check src tests`: passed.
+- `git diff --check`: passed.
+
+## Implemented Interactive Compile Loop
+
+The interactive compile loop runbook has been implemented in the active code
+surface. `compile_orchestration.run_interactive_compile_loop` keeps one async
+agent session alive while Core polls `READY` submissions, deduplicates
+candidates through Core-owned state, evaluates validation candidates, writes
+agent-safe feedback under `journal/feedback-<candidate>.json`, enforces time,
+cost, user-stop, and candidate budgets, and closes the attempt with a terminal
+session record. `agent_workspace.launch_target_adaptation_agent_async` provides
+the non-blocking session launch and durable Core session records used by that
+driver.
+
+See `docs/implementation/reboot/interactive_compile_loop_runbook.md` for the
+implementation checklist and boundary rationale.
 
 ## Deferred Items
 
-No design-owned module requirement is intentionally deferred in this implementation slice. Production hardening remains future work: persistent databases, durable queues, long-running worker pools, OS-portable resource-limit adapters beyond the local `sandbox-exec` boundary, and real external reference broker integrations.
+Production hardening remains future work: persistent databases, durable queues,
+long-running worker pools, OS-portable resource-limit adapters beyond the
+current local sandbox boundary, and real external reference broker integrations.
