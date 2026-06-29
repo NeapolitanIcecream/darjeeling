@@ -688,6 +688,59 @@ def test_interactive_compile_loop_tolerates_malformed_agent_usage_ledger(
     assert (attempt.workspace_path / "journal" / "feedback-usagebad.json").exists()
 
 
+def test_interactive_compile_loop_overwrites_stale_evaluation_contract(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "\n".join(
+                [
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('contractcheck', ['a'])",
+                ]
+            ),
+        )
+    )
+    original_evaluate = compile_orchestration_module.evaluate_candidate_on_validation
+    seen_options: dict[str, object] = {}
+
+    def assert_current_contract(*args, **kwargs):
+        evaluation_options = args[-1]
+        seen_options["contract"] = evaluation_options["contract"]
+        return original_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "darjeeling.compile_orchestration.evaluate_candidate_on_validation",
+        assert_current_contract,
+    )
+
+    stale_contract = replace(contract, contract_hash="stale-contract")
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts", "contract": stale_contract},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert seen_options["contract"] is contract
+
+
 def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(
     target_dir: Path, tmp_path: Path, now
 ) -> None:

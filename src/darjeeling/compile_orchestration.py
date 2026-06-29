@@ -680,7 +680,7 @@ def run_interactive_compile_loop(
     )
     handle = agent_handle
     options = dict(evaluation_options)
-    options.setdefault("contract", contract)
+    options["contract"] = contract
     fixed_compile_cost = _fixed_compile_cost(
         reference_usage, options.get("local_training_search_usage")
     )

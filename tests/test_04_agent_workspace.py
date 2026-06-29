@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from dataclasses import replace
@@ -8,12 +9,14 @@ from pathlib import Path
 import pytest
 from conftest import PrefixBroker, write_artifact
 
+from darjeeling import agent_workspace as agent_workspace_module
 from darjeeling.agent_workspace import (
     advance_target_workspace_baseline,
     close_agent_attempt,
     create_agent_workspace,
     create_compile_run,
     launch_target_adaptation_agent,
+    launch_target_adaptation_agent_async,
     load_target_workspace,
     mount_readonly_inputs,
     provide_validation_feedback,
@@ -685,6 +688,78 @@ def test_agent_mount_contains_train_only_inputs(target_dir: Path, tmp_path: Path
             [],
             build_protocol_docs("v1"),
         )
+
+
+def test_close_agent_attempt_stops_persisted_async_pid_when_process_map_is_empty(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, check = load_checked_target(target_dir)
+    registry = __import__("darjeeling.model").model.ReleaseRegistry()
+    release = create_release_without_artifacts(
+        definition, contract, check, PrefixBroker(), RoutingSettings(), registry
+    )
+    snapshot = build_snapshot(
+        definition,
+        contract,
+        definition.data_config,
+        None,
+        [],
+        PrefixBroker(),
+        now,
+        SnapshotOptions(storage_root=tmp_path / "snapshots"),
+    )
+    workspace = load_target_workspace(
+        definition.name, definition.contract_hash, WorkspaceStore(tmp_path / "workspaces")
+    )
+    compile_run = create_compile_run(
+        definition,
+        check,
+        snapshot.snapshot,
+        release,
+        CompileBudget(max_agent_seconds=5, max_candidates=1),
+        workspace,
+        snapshot.reference_qualification,
+        CompileOptions(),
+    )
+    attempt = create_agent_workspace(compile_run, workspace, AgentAttemptOptions())
+    target_view = export_agent_readonly_target_view(
+        definition, attempt.workspace_path / "target_view"
+    )
+    train_view = export_train_view_for_agent(
+        snapshot.snapshot,
+        contract,
+        __import__("darjeeling.model").model.AgentViewOptions(),
+        attempt.workspace_path / "train_view",
+    )
+    manifest = mount_readonly_inputs(
+        attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
+    )
+    brief = write_agent_brief(attempt, compile_run, manifest, {})
+    launch_target_adaptation_agent_async(
+        attempt,
+        brief,
+        {"command": ["/usr/bin/python3", "-c", "import time; time.sleep(30)"]},
+    )
+    process = agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id)
+    journal_session = attempt.workspace_path / "journal" / "agent_session.json"
+    tampered_session = json.loads(journal_session.read_text())
+    tampered_session["pid"] = 999999999
+    journal_session.write_text(json.dumps(tampered_session), encoding="utf-8")
+    try:
+        closed = close_agent_attempt(attempt, "time_limit")
+        process.wait(timeout=2)
+        session = json.loads(
+            journal_session.read_text()
+        )
+        assert closed.status == "closed"
+        assert process.poll() is not None
+        assert session["status"] == "timed_out"
+        assert session["stop_reason"] == "time_limit"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
 
 
 def test_baseline_advances_only_with_accepted_release_or_explicit_carry_forward(
