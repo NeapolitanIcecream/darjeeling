@@ -57,6 +57,8 @@ from darjeeling.util import (
     write_json,
 )
 
+_SUBMISSION_READY_MARKER = "READY"
+
 
 def plan_compile_launch(
     definition: TargetDefinition,
@@ -314,7 +316,9 @@ def _record_compile_run(store: CompileRunStore, compile_run: CompileRun) -> None
 
 def _submission_ready(path: Path) -> bool:
     artifacts = path / "artifacts"
-    return any((artifacts / layer / "artifact.yaml").exists() for layer in ["l1", "l2", "l3"])
+    return (path / _SUBMISSION_READY_MARKER).is_file() and any(
+        (artifacts / layer / "artifact.yaml").exists() for layer in ["l1", "l2", "l3"]
+    )
 
 
 def _submission_content_digest(path: Path) -> str:
@@ -369,9 +373,9 @@ def _count_evaluated_entries(ledger: list[dict[str, Any]]) -> int:
 def _ledger_cost(ledger: list[dict[str, Any]]) -> float:
     total = 0.0
     for entry in ledger:
-        value = entry.get("candidate_cost")
+        value = entry.get("total_compile_cost", entry.get("candidate_cost"))
         if isinstance(value, (int, float)):
-            total += float(value)
+            total = max(total, float(value))
     return total
 
 
@@ -573,6 +577,85 @@ def run_interactive_compile_loop(
     options = dict(evaluation_options)
     options.setdefault("contract", contract)
 
+    def drain_ready_submissions() -> str | None:
+        nonlocal evaluated_count, feedback_count, failed_count, total_candidate_cost
+        if evaluated_count >= compile_run.budget.max_candidates:
+            return "candidate_limit"
+        submissions_dir = attempt.workspace_path / "submissions"
+        if not submissions_dir.exists():
+            return None
+        for submission_path in sorted(
+            path
+            for path in submissions_dir.iterdir()
+            if path.is_dir() and _submission_ready(path)
+        ):
+            submission_digest = _submission_content_digest(submission_path)
+            if _ledger_contains(ledger, submission_path.name, submission_digest):
+                continue
+            if evaluated_count >= compile_run.budget.max_candidates:
+                return "candidate_limit"
+            candidate_cost: float | None = None
+            try:
+                submission = receive_candidate_submission(attempt, submission_path)
+                evaluation = evaluate_candidate_on_validation(
+                    submission,
+                    definition,
+                    snapshot,
+                    base_release,
+                    reference_qualification,
+                    _read_agent_usage_ledger(attempt),
+                    reference_usage,
+                    options.get("audit_usage"),
+                    options.get("local_training_search_usage"),
+                    baseline_cost,
+                    options,
+                )
+                feedback = _feedback_for_submission(submission, evaluation)
+                feedback_record = provide_validation_feedback(attempt, feedback)
+                report = evaluation.get("report")
+                report_cost = getattr(getattr(report, "cost", None), "compile_cost", None)
+                if isinstance(report_cost, (int, float)):
+                    candidate_cost = float(report_cost)
+                    total_candidate_cost = max(total_candidate_cost, candidate_cost)
+                ledger.append(
+                    {
+                        "submission_id": submission.submission_id,
+                        "submission_digest": submission_digest,
+                        "workspace_commit": submission.workspace_commit,
+                        "validation_status": "feedback_written",
+                        "candidate_id": evaluation["candidate"].candidate_id,
+                        "feedback_path": str(feedback_record.path),
+                        "total_compile_cost": candidate_cost,
+                        "timestamp": utcnow(),
+                    }
+                )
+                feedback_count += 1
+            except Exception as exc:
+                feedback = _safe_failure_feedback(submission_path.name, exc)
+                feedback_record = provide_validation_feedback(attempt, feedback)
+                ledger.append(
+                    {
+                        "submission_id": submission_path.name,
+                        "submission_digest": submission_digest,
+                        "validation_status": "evaluation_failed",
+                        "feedback_path": str(feedback_record.path),
+                        "error_class": exc.__class__.__name__,
+                        "safe_error_message": feedback.summary["safe_error_message"],
+                        "timestamp": utcnow(),
+                    }
+                )
+                failed_count += 1
+            evaluated_count += 1
+            _write_submission_ledger(attempt, ledger)
+            if evaluated_count >= compile_run.budget.max_candidates:
+                return "candidate_limit"
+            if (
+                compile_run.budget.max_cost is not None
+                and total_candidate_cost >= compile_run.budget.max_cost
+            ):
+                return "budget_exhausted"
+        return None
+
     while stop_reason is None:
         elapsed = time.monotonic() - started
         if (
@@ -590,89 +673,13 @@ def run_interactive_compile_loop(
         ):
             stop_reason = "budget_exhausted"
             break
-        submissions_dir = attempt.workspace_path / "submissions"
-        if submissions_dir.exists():
-            for submission_path in sorted(
-                path
-                for path in submissions_dir.iterdir()
-                if path.is_dir() and _submission_ready(path)
-            ):
-                submission_digest = _submission_content_digest(submission_path)
-                if _ledger_contains(ledger, submission_path.name, submission_digest):
-                    continue
-                if evaluated_count >= compile_run.budget.max_candidates:
-                    stop_reason = "candidate_limit"
-                    break
-                feedback_path: str | None = None
-                candidate_cost: float | None = None
-                try:
-                    submission = receive_candidate_submission(attempt, submission_path)
-                    evaluation = evaluate_candidate_on_validation(
-                        submission,
-                        definition,
-                        snapshot,
-                        base_release,
-                        reference_qualification,
-                        _read_agent_usage_ledger(attempt),
-                        reference_usage,
-                        options.get("audit_usage"),
-                        options.get("local_training_search_usage"),
-                        baseline_cost,
-                        options,
-                    )
-                    feedback = _feedback_for_submission(submission, evaluation)
-                    feedback_record = provide_validation_feedback(attempt, feedback)
-                    feedback_path = str(feedback_record.path)
-                    report = evaluation.get("report")
-                    report_cost = getattr(getattr(report, "cost", None), "compile_cost", None)
-                    if isinstance(report_cost, (int, float)):
-                        candidate_cost = float(report_cost)
-                        total_candidate_cost += candidate_cost
-                    ledger.append(
-                        {
-                            "submission_id": submission.submission_id,
-                            "submission_digest": submission_digest,
-                            "workspace_commit": submission.workspace_commit,
-                            "validation_status": "feedback_written",
-                            "candidate_id": evaluation["candidate"].candidate_id,
-                            "feedback_path": feedback_path,
-                            "candidate_cost": candidate_cost,
-                            "timestamp": utcnow(),
-                        }
-                    )
-                    feedback_count += 1
-                except Exception as exc:
-                    feedback = _safe_failure_feedback(submission_path.name, exc)
-                    feedback_record = provide_validation_feedback(attempt, feedback)
-                    feedback_path = str(feedback_record.path)
-                    ledger.append(
-                        {
-                            "submission_id": submission_path.name,
-                            "submission_digest": submission_digest,
-                            "validation_status": "evaluation_failed",
-                            "feedback_path": feedback_path,
-                            "error_class": exc.__class__.__name__,
-                            "safe_error_message": feedback.summary["safe_error_message"],
-                            "timestamp": utcnow(),
-                        }
-                    )
-                    failed_count += 1
-                evaluated_count += 1
-                _write_submission_ledger(attempt, ledger)
-                if evaluated_count >= compile_run.budget.max_candidates:
-                    stop_reason = "candidate_limit"
-                    break
-                if (
-                    compile_run.budget.max_cost is not None
-                    and total_candidate_cost >= compile_run.budget.max_cost
-                ):
-                    stop_reason = "budget_exhausted"
-                    break
+        stop_reason = drain_ready_submissions()
         if stop_reason is not None:
             break
         handle = poll_agent_session(handle)
         if handle.status in {"completed", "failed", "timed_out", "stopped"}:
-            stop_reason = _close_reason_for_agent_status(handle.status)
+            terminal_reason = _close_reason_for_agent_status(handle.status)
+            stop_reason = drain_ready_submissions() or terminal_reason
             break
         time.sleep(poll_interval_seconds)
 

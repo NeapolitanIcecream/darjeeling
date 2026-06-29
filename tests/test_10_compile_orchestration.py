@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from conftest import PrefixBroker
+from conftest import PrefixBroker, write_artifact
 
 from darjeeling.agent_workspace import (
     create_agent_workspace,
@@ -88,6 +88,7 @@ allowed_reason_codes:
 - prefix_match
 - outside
 ''', encoding="utf-8")
+    (Path("submissions") / candidate / "READY").write_text("ready\\n", encoding="utf-8")
 """
 
 
@@ -320,6 +321,7 @@ def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(
                     "p.mkdir(parents=True, exist_ok=True)",
                     "payload = 'api_version: v1\\nlayer: L1\\n'",
                     "(p / 'artifact.yaml').write_text(payload, encoding='utf-8')",
+                    "Path('submissions/bad/READY').write_text('ready\\n', encoding='utf-8')",
                 ]
             ),
         )
@@ -349,6 +351,151 @@ def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(
     feedback_text = json.dumps(feedback)
     assert "r2" not in feedback_text
     assert "expected_output" not in feedback_text
+
+
+def test_interactive_compile_loop_waits_for_ready_marker_before_evaluating(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import time",
+                    "p = Path('submissions/c1/artifacts/l1')",
+                    "p.mkdir(parents=True, exist_ok=True)",
+                    "payload = 'api_version: v1\\nlayer: L1\\n'",
+                    "(p / 'artifact.yaml').write_text(payload, encoding='utf-8')",
+                    "time.sleep(0.2)",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('c1', ['a'])",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert result["failed_submission_count"] == 0
+    assert (attempt.workspace_path / "journal" / "feedback-c1.json").exists()
+
+
+def test_interactive_compile_loop_drains_ready_submission_after_agent_exit(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=2),
+            "import time; time.sleep(30)",
+        )
+    )
+    created = False
+
+    def fake_poll(session_handle):
+        nonlocal created
+        if not created:
+            write_artifact(
+                attempt.workspace_path / "submissions" / "late" / "artifacts" / "l1",
+                definition.contract_hash,
+                accept_prefixes=["a"],
+            )
+            (attempt.workspace_path / "submissions" / "late" / "READY").write_text(
+                "ready\n", encoding="utf-8"
+            )
+            created = True
+        return replace(session_handle, status="completed")
+
+    monkeypatch.setattr("darjeeling.compile_orchestration.poll_agent_session", fake_poll)
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert result["stop_reason"] == "ready_for_test"
+    assert (attempt.workspace_path / "journal" / "feedback-late.json").exists()
+
+
+def test_interactive_compile_loop_uses_cumulative_compile_cost_without_double_counting(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=3, max_cost=15.0),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "Path('journal/agent_usage.json').write_text(",
+                    """    '[{"kind":"agent","cost":10.0,"metadata":{}}]\\n',""",
+                    "    encoding='utf-8',",
+                    ")",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('c1', ['a'])",
+                    "write_artifact('c2', ['a', 'b'])",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 2
+    assert result["stop_reason"] == "ready_for_test"
+    assert result["total_candidate_cost"] == 10.0
 
 
 def test_first_compile_after_cold_start_uses_recompile_request_path(

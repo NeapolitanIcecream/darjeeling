@@ -611,6 +611,9 @@ def write_agent_brief(
                 "autonomous coding agent.",
                 "Submit candidates under submissions/<candidate>/artifacts/"
                 "l1|l2|l3 with artifact.yaml files.",
+                "After all candidate files are complete, create "
+                "submissions/<candidate>/READY as the final atomic marker. "
+                "Core evaluates only submissions with this marker.",
                 "During an interactive compile, keep watching journal/ for "
                 "official validation feedback files named feedback-<candidate>.json. "
                 "Continue local search from aggregate feedback only.",
