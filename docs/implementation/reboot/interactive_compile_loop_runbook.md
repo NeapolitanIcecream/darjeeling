@@ -142,7 +142,7 @@ Core needs to avoid evaluating the same submission repeatedly.
 Use a small JSON file in the attempt journal, for example:
 
 ```text
-journal/evaluated_submissions.json
+<attempt-parent>/_core/<attempt-id>/evaluated_submissions.json
 ```
 
 Record:
@@ -154,7 +154,9 @@ Record:
 - error class and safe error message when evaluation fails;
 - timestamp.
 
-This is compile-time bookkeeping, not an artifact.
+This is compile-time bookkeeping, not an artifact. Keep it outside the
+agent-writable attempt tree so the agent cannot pre-create, edit, or suppress
+Core's trusted submission state.
 
 ### 3. Add the interactive driver
 

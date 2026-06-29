@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from darjeeling.agent_workspace import (
+    candidate_submission_ready,
     close_agent_attempt,
+    core_attempt_state_dir,
     create_agent_workspace,
     create_compile_run,
     launch_target_adaptation_agent,
@@ -58,8 +60,6 @@ from darjeeling.util import (
     utcnow,
     write_json,
 )
-
-_SUBMISSION_READY_MARKER = "READY"
 
 
 def plan_compile_launch(
@@ -316,13 +316,6 @@ def _record_compile_run(store: CompileRunStore, compile_run: CompileRun) -> None
     store.runs[compile_run.compile_id] = compile_run
 
 
-def _submission_ready(path: Path) -> bool:
-    artifacts = path / "artifacts"
-    return (path / _SUBMISSION_READY_MARKER).is_file() and any(
-        (artifacts / layer / "artifact.yaml").exists() for layer in ["l1", "l2", "l3"]
-    )
-
-
 def _submission_content_digest(path: Path) -> str:
     entries: list[tuple[str, str]] = []
     for item in sorted(path.rglob("*")):
@@ -339,7 +332,7 @@ def _submission_digest_failure_marker(submission_id: str) -> str:
 
 
 def _ledger_path(attempt: AgentAttempt) -> Path:
-    return attempt.workspace_path / "journal" / "evaluated_submissions.json"
+    return core_attempt_state_dir(attempt) / "evaluated_submissions.json"
 
 
 def _load_submission_ledger(attempt: AgentAttempt) -> list[dict[str, Any]]:
@@ -649,7 +642,7 @@ def run_interactive_compile_loop(
         for submission_path in sorted(
             path
             for path in submissions_dir.iterdir()
-            if path.is_dir() and _submission_ready(path)
+            if path.is_dir() and candidate_submission_ready(path)
         ):
             if evaluated_count >= compile_run.budget.max_candidates:
                 return "candidate_limit"

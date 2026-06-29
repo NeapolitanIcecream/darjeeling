@@ -46,6 +46,7 @@ from darjeeling.util import file_digest, new_id, read_json, stable_hash, utcnow,
 
 _BASELINE_DIRS = ["scaffolding", "runtime", "proposals", "journal", "tests"]
 _ATTEMPT_DIRS = [*_BASELINE_DIRS, "submissions"]
+_SUBMISSION_READY_MARKER = "READY"
 _FORBIDDEN_REPORT_KEYS = {
     "record_id",
     "record_ids",
@@ -83,6 +84,21 @@ def _ensure_workspace_layout(path: Path, *, include_submissions: bool = True) ->
         (path / name).mkdir(parents=True, exist_ok=True)
     for layer in ["l1", "l2", "l3"]:
         (path / "runtime" / layer).mkdir(parents=True, exist_ok=True)
+
+
+def _core_attempt_state_dir_for_path(attempt_path: Path, attempt_id: str) -> Path:
+    return attempt_path.parent / "_core" / attempt_id
+
+
+def core_attempt_state_dir(attempt: AgentAttempt) -> Path:
+    return _core_attempt_state_dir_for_path(attempt.workspace_path, attempt.attempt_id)
+
+
+def candidate_submission_ready(path: Path) -> bool:
+    artifacts = path / "artifacts"
+    return (path / _SUBMISSION_READY_MARKER).is_file() and any(
+        (artifacts / layer / "artifact.yaml").exists() for layer in ["l1", "l2", "l3"]
+    )
 
 
 def _workspace_tree_digest(
@@ -382,10 +398,14 @@ def create_agent_workspace(
     attempt_path = (
         target_workspace.workspace_path.parent / "attempts" / compile_run.compile_id / attempt_id
     )
+    core_state_path = _core_attempt_state_dir_for_path(attempt_path, attempt_id)
     if attempt_path.exists():
         shutil.rmtree(attempt_path)
+    if core_state_path.exists():
+        shutil.rmtree(core_state_path)
     shutil.copytree(target_workspace.workspace_path, attempt_path, symlinks=False)
     _ensure_workspace_layout(attempt_path)
+    core_state_path.mkdir(parents=True, exist_ok=False)
     initial_commit = _workspace_tree_digest(attempt_path)
     return AgentAttempt(
         attempt_id=attempt_id,
@@ -985,7 +1005,11 @@ def run_compile_loop(
         submissions_dir = attempt.workspace_path / "submissions"
         if not submissions_dir.exists():
             continue
-        for submission_path in sorted(path for path in submissions_dir.iterdir() if path.is_dir()):
+        for submission_path in sorted(
+            path
+            for path in submissions_dir.iterdir()
+            if path.is_dir() and candidate_submission_ready(path)
+        ):
             if deadline is not None and time.monotonic() >= deadline:
                 break
             submission = receive_candidate_submission(attempt, submission_path)

@@ -243,10 +243,71 @@ def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     assert "r3" not in feedback_text
     assert "r4" not in feedback_text
     assert "expected_output" not in feedback_text
-    ledger_path = attempt.workspace_path / "journal" / "evaluated_submissions.json"
+    ledger_path = Path(result["ledger_path"])
+    with pytest.raises(ValueError):
+        ledger_path.resolve().relative_to(attempt.workspace_path.resolve())
     ledger = json.loads(ledger_path.read_text())
     assert [entry["submission_id"] for entry in ledger] == ["c1", "c2"]
     assert {entry["validation_status"] for entry in ledger} == {"feedback_written"}
+
+
+def test_interactive_compile_loop_ignores_agent_written_submission_ledger(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "\n".join(
+                [
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('real', ['a'])",
+                ]
+            ),
+        )
+    )
+    fake_ledger = attempt.workspace_path / "journal" / "evaluated_submissions.json"
+    fake_ledger.write_text(
+        json.dumps(
+            [
+                {
+                    "submission_id": "real",
+                    "submission_digest": "agent-controlled",
+                    "validation_status": "feedback_written",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert result["stop_reason"] == "candidate_limit"
+    assert (attempt.workspace_path / "journal" / "feedback-real.json").exists()
+    trusted_ledger_path = Path(result["ledger_path"])
+    assert trusted_ledger_path != fake_ledger
+    trusted_ledger = json.loads(trusted_ledger_path.read_text())
+    assert [entry["submission_id"] for entry in trusted_ledger] == ["real"]
+    assert fake_ledger.read_text(encoding="utf-8")
 
 
 def test_interactive_compile_loop_stops_at_candidate_limit(
@@ -606,9 +667,7 @@ def test_interactive_compile_loop_turns_digest_failure_into_safe_feedback(
         (attempt.workspace_path / "journal" / "feedback-digestbad.json").read_text()
     )
     assert feedback["summary"]["safe_error_message"] == "The request failed at runtime."
-    ledger = json.loads(
-        (attempt.workspace_path / "journal" / "evaluated_submissions.json").read_text()
-    )
+    ledger = json.loads(Path(result["ledger_path"]).read_text())
     assert ledger[0]["submission_digest"].startswith("digest_failed:")
     feedback_text = json.dumps(feedback)
     assert "expected_output" not in feedback_text

@@ -434,6 +434,25 @@ def test_agent_mount_contains_train_only_inputs(target_dir: Path, tmp_path: Path
         definition.contract_hash,
         accept_prefixes=["a"],
     )
+    not_ready = run_compile_loop(
+        compile_run,
+        [attempt],
+        1,
+        None,
+        lambda submission: AgentFeedback(
+            candidate_id=submission.submission_id,
+            summary={},
+            requirement_results=[],
+            metrics={},
+            safe_slice_summaries=[],
+            latency_cost_summary={},
+            raw_rows_included=False,
+        ),
+    )
+    assert not_ready["submissions"] == []
+    (attempt.workspace_path / "submissions" / "loop" / "READY").write_text(
+        "ready\n", encoding="utf-8"
+    )
     with pytest.raises(WorkspaceError, match="feedback callback"):
         run_compile_loop(compile_run, [attempt], 1, None)
     with pytest.raises(WorkspaceError, match="compile run"):
@@ -488,6 +507,9 @@ def test_agent_mount_contains_train_only_inputs(target_dir: Path, tmp_path: Path
         attempt.workspace_path / "submissions" / "later" / "artifacts" / "l1",
         definition.contract_hash,
         accept_prefixes=["a"],
+    )
+    (attempt.workspace_path / "submissions" / "later" / "READY").write_text(
+        "ready\n", encoding="utf-8"
     )
 
     def slow_feedback(submission):
