@@ -1,7 +1,7 @@
 [project]
-name = "darjeeling"
-version = "0.1.0"
-description = "Darjeeling reboot runtime."
+name = "darjeeling-ai"
+version = "0.1.0a1"
+description = "LLM runtime for moving stable model behavior into fast local artifacts with safe fallback."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "Apache-2.0" }

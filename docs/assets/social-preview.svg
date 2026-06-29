@@ -1,0 +1,25 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1280" height="640" fill="#F7FAFC"/>
+  <rect x="64" y="64" width="1152" height="512" rx="28" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+  <text x="112" y="156" fill="#152033" font-family="Inter, Arial, sans-serif" font-size="58" font-weight="700">Darjeeling</text>
+  <text x="112" y="218" fill="#526173" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="500">Local when safe. Fallback when needed.</text>
+
+  <rect x="132" y="324" width="250" height="120" rx="18" fill="#EAF2FF" stroke="#77A7F7" stroke-width="3"/>
+  <text x="257" y="373" fill="#174C91" font-family="Inter, Arial, sans-serif" font-size="27" font-weight="700" text-anchor="middle">Request</text>
+  <text x="257" y="414" fill="#47627F" font-family="Inter, Arial, sans-serif" font-size="22" text-anchor="middle">repeated work</text>
+
+  <path d="M405 384H504" stroke="#8EA0B4" stroke-width="5" stroke-linecap="round"/>
+  <path d="M492 364L524 384L492 404" stroke="#8EA0B4" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="544" y="294" width="264" height="180" rx="20" fill="#EAF8F0" stroke="#49A36D" stroke-width="3"/>
+  <text x="676" y="357" fill="#217246" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700" text-anchor="middle">Local artifact</text>
+  <text x="676" y="397" fill="#3F7155" font-family="Inter, Arial, sans-serif" font-size="22" text-anchor="middle">accepts only inside</text>
+  <text x="676" y="430" fill="#3F7155" font-family="Inter, Arial, sans-serif" font-size="22" text-anchor="middle">a checked boundary</text>
+
+  <path d="M831 384H930" stroke="#8EA0B4" stroke-width="5" stroke-linecap="round"/>
+  <path d="M918 364L950 384L918 404" stroke="#8EA0B4" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="970" y="324" width="178" height="120" rx="18" fill="#FFF4E8" stroke="#E9A64C" stroke-width="3"/>
+  <text x="1059" y="373" fill="#9A5A14" font-family="Inter, Arial, sans-serif" font-size="27" font-weight="700" text-anchor="middle">Fallback</text>
+  <text x="1059" y="414" fill="#8A6740" font-family="Inter, Arial, sans-serif" font-size="22" text-anchor="middle">main LLM</text>
+</svg>

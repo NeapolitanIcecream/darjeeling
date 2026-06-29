@@ -1,0 +1,50 @@
+name: Demo feedback
+description: Share what happened when you ran the five-minute demo.
+title: "[Demo feedback]: "
+labels:
+  - demo-feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying the alpha demo. Please do not include API keys, private target data, or provider credentials.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What do you think Darjeeling does?
+      description: A sentence or two is enough.
+    validations:
+      required: true
+  - type: dropdown
+    id: completed
+    attributes:
+      label: Did the demo run in five minutes?
+      options:
+        - "Yes"
+        - "No"
+        - "I did not finish"
+    validations:
+      required: true
+  - type: textarea
+    id: command-output
+    attributes:
+      label: Command and output
+      description: Paste the command you ran and the relevant output or error.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: clarity
+    attributes:
+      label: What was unclear?
+      description: Include anything that made Darjeeling sound like a cache, router, or one-off distillation pass.
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, and uv version if available.
+      placeholder: "macOS 15, Python 3.12, uv 0.9.x"
+    validations:
+      required: false

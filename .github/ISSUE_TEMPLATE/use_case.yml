@@ -1,0 +1,38 @@
+name: Use case
+description: Describe a target you would try with Darjeeling.
+title: "[Use case]: "
+labels:
+  - use-case
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the shape of the work without sharing secrets, private user data, or proprietary prompts.
+  - type: textarea
+    id: workload
+    attributes:
+      label: What repeated LLM work would you try?
+      description: Describe the request shape, output shape, and why it repeats.
+    validations:
+      required: true
+  - type: textarea
+    id: reliability
+    attributes:
+      label: What would make a local artifact safe enough to answer?
+      description: Mention validation rules, precision needs, fallback expectations, or failure costs.
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: What examples or feedback would be available?
+      description: Training examples, validation examples, production traces, human labels, or none yet.
+    validations:
+      required: false
+  - type: textarea
+    id: success
+    attributes:
+      label: What result would matter?
+      description: Latency, inference cost, coverage, reliability, local deployment, or another metric.
+    validations:
+      required: false
