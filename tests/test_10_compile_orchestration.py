@@ -233,6 +233,58 @@ def test_interactive_compile_loop_skips_symlink_submission_root_before_hashing(
     assert result["failed_submission_count"] == 0
 
 
+def test_interactive_compile_loop_skips_symlinked_submissions_root_before_hashing(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "raise SystemExit(0)",
+        )
+    )
+    outside_submissions = tmp_path / "outside-submissions"
+    write_artifact(
+        outside_submissions / "linked" / "artifacts" / "l1",
+        definition.contract_hash,
+        accept_prefixes=["a"],
+    )
+    (outside_submissions / "linked" / "READY").write_text("ready\n", encoding="utf-8")
+    submissions_root = attempt.workspace_path / "submissions"
+    submissions_root.rmdir()
+    submissions_root.symlink_to(outside_submissions, target_is_directory=True)
+
+    def fail_if_any_submission_is_hashed(path: Path) -> str:
+        raise AssertionError(f"submission root was hashed: {path}")
+
+    monkeypatch.setattr(
+        compile_orchestration_module,
+        "_submission_content_digest",
+        fail_if_any_submission_is_hashed,
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 0
+    assert result["feedback_count"] == 0
+    assert result["failed_submission_count"] == 0
+
+
 def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     target_dir: Path, tmp_path: Path, now
 ) -> None:

@@ -1225,7 +1225,11 @@ def run_compile_loop(
         if attempt.compile_id != compile_run.compile_id:
             raise WorkspaceError("agent attempt does not match compile run")
         submissions_dir = attempt.workspace_path / "submissions"
-        if not submissions_dir.exists():
+        if (
+            not submissions_dir.exists()
+            or submissions_dir.is_symlink()
+            or not submissions_dir.is_dir()
+        ):
             continue
         for submission_path in sorted(
             path

@@ -807,7 +807,11 @@ def run_interactive_compile_loop(
         if evaluated_count >= compile_run.budget.max_candidates:
             return "candidate_limit"
         submissions_dir = attempt.workspace_path / "submissions"
-        if not submissions_dir.exists():
+        if (
+            not submissions_dir.exists()
+            or submissions_dir.is_symlink()
+            or not submissions_dir.is_dir()
+        ):
             return None
         for submission_path in sorted(
             path

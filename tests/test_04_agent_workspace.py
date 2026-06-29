@@ -500,6 +500,35 @@ def test_agent_mount_contains_train_only_inputs(
         receive_candidate_submission(attempt, linked_submission)
     linked_submission.unlink()
 
+    outside_submissions = tmp_path / "outside-submissions"
+    write_artifact(
+        outside_submissions / "loop" / "artifacts" / "l1",
+        definition.contract_hash,
+        accept_prefixes=["a"],
+    )
+    (outside_submissions / "loop" / "READY").write_text("ready\n", encoding="utf-8")
+    submissions_root = attempt.workspace_path / "submissions"
+    submissions_root.rmdir()
+    submissions_root.symlink_to(outside_submissions, target_is_directory=True)
+    symlinked_root = run_compile_loop(
+        compile_run,
+        [attempt],
+        1,
+        None,
+        lambda submission: AgentFeedback(
+            candidate_id=submission.submission_id,
+            summary={},
+            requirement_results=[],
+            metrics={},
+            safe_slice_summaries=[],
+            latency_cost_summary={},
+            raw_rows_included=False,
+        ),
+    )
+    assert symlinked_root["submissions"] == []
+    submissions_root.unlink()
+    submissions_root.mkdir()
+
     write_artifact(
         attempt.workspace_path / "submissions" / "loop" / "artifacts" / "l1",
         definition.contract_hash,
