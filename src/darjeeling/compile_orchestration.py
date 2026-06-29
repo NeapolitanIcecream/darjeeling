@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,7 @@ from darjeeling.agent_workspace import (
     poll_agent_session,
     provide_validation_feedback,
     receive_candidate_submission,
+    stop_agent_session,
     write_agent_brief,
 )
 from darjeeling.artifact_worker import build_protocol_docs
@@ -335,6 +338,10 @@ def _ledger_path(attempt: AgentAttempt) -> Path:
     return core_attempt_state_dir(attempt) / "evaluated_submissions.json"
 
 
+def _core_agent_usage_path(attempt: AgentAttempt) -> Path:
+    return core_attempt_state_dir(attempt) / "agent_usage.json"
+
+
 def _load_submission_ledger(attempt: AgentAttempt) -> list[dict[str, Any]]:
     path = _ledger_path(attempt)
     if not path.exists():
@@ -378,16 +385,9 @@ def _ledger_cost(ledger: list[dict[str, Any]]) -> float:
     return total
 
 
-def _read_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
-    path = attempt.workspace_path / "journal" / "agent_usage.json"
-    if not path.exists():
-        return AgentUsageLedger()
-    try:
-        raw = read_json(path)
-    except (OSError, TypeError, ValueError):
-        return AgentUsageLedger()
+def _agent_usage_ledger_from_raw(raw: Any) -> AgentUsageLedger | None:
     if not isinstance(raw, list):
-        return AgentUsageLedger()
+        return None
     events: list[AgentUsageEvent] = []
     for event in raw:
         if not isinstance(event, dict):
@@ -395,12 +395,65 @@ def _read_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
         kind = event.get("kind")
         cost = event.get("cost", 0.0)
         metadata = event.get("metadata", {})
-        if not isinstance(kind, str) or not isinstance(cost, (int, float)):
+        if (
+            not isinstance(kind, str)
+            or isinstance(cost, bool)
+            or not isinstance(cost, (int, float))
+        ):
+            continue
+        cost_value = float(cost)
+        if cost_value < 0:
             continue
         if not isinstance(metadata, dict):
             metadata = {}
-        events.append(AgentUsageEvent(kind=kind, cost=float(cost), metadata=metadata))
+        events.append(AgentUsageEvent(kind=kind, cost=cost_value, metadata=metadata))
     return AgentUsageLedger(events)
+
+
+def _read_agent_usage_ledger_path(path: Path) -> AgentUsageLedger | None:
+    if not path.exists():
+        return AgentUsageLedger()
+    try:
+        raw = read_json(path)
+    except (OSError, TypeError, ValueError):
+        return None
+    return _agent_usage_ledger_from_raw(raw)
+
+
+def _read_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
+    ledger = _read_agent_usage_ledger_path(
+        attempt.workspace_path / "journal" / "agent_usage.json"
+    )
+    return ledger if ledger is not None else AgentUsageLedger()
+
+
+def _read_core_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
+    ledger = _read_agent_usage_ledger_path(_core_agent_usage_path(attempt))
+    if ledger is None:
+        raise CompileLaunchError("core agent usage ledger is malformed")
+    return ledger
+
+
+def _write_core_agent_usage_ledger(
+    attempt: AgentAttempt, ledger: AgentUsageLedger
+) -> None:
+    write_json(
+        _core_agent_usage_path(attempt),
+        [asdict(event) for event in ledger.events],
+    )
+
+
+def _sync_core_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
+    core_ledger = _read_core_agent_usage_ledger(attempt)
+    observed_ledger = _read_agent_usage_ledger_path(
+        attempt.workspace_path / "journal" / "agent_usage.json"
+    )
+    if observed_ledger is None:
+        return core_ledger
+    if observed_ledger.cost > core_ledger.cost:
+        _write_core_agent_usage_ledger(attempt, observed_ledger)
+        return observed_ledger
+    return core_ledger
 
 
 def _fixed_compile_cost(reference_usage: Any, local_training_search_usage: Any) -> float:
@@ -411,13 +464,9 @@ def _fixed_compile_cost(reference_usage: Any, local_training_search_usage: Any) 
 
 
 def _live_compile_cost(
-    attempt: AgentAttempt, fixed_compile_cost: float, reported_compile_cost: float
+    agent_usage: AgentUsageLedger, fixed_compile_cost: float, reported_compile_cost: float
 ) -> float:
-    try:
-        agent_cost = _read_agent_usage_ledger(attempt).cost
-    except (OSError, TypeError, ValueError):
-        return reported_compile_cost
-    return max(reported_compile_cost, fixed_compile_cost + agent_cost)
+    return max(reported_compile_cost, fixed_compile_cost + agent_usage.cost)
 
 
 def _safe_failure_feedback(submission_id: str, exc: Exception) -> AgentFeedback:
@@ -635,13 +684,76 @@ def run_interactive_compile_loop(
     fixed_compile_cost = _fixed_compile_cost(
         reference_usage, options.get("local_training_search_usage")
     )
+    agent_usage_ledger = _sync_core_agent_usage_ledger(attempt)
+    pending_stop_reason: str | None = None
+
+    def refresh_agent_usage_ledger() -> AgentUsageLedger:
+        nonlocal agent_usage_ledger
+        agent_usage_ledger = _sync_core_agent_usage_ledger(attempt)
+        return agent_usage_ledger
 
     def refresh_total_compile_cost() -> float:
         nonlocal total_candidate_cost
         total_candidate_cost = _live_compile_cost(
-            attempt, fixed_compile_cost, total_candidate_cost
+            refresh_agent_usage_ledger(), fixed_compile_cost, total_candidate_cost
         )
         return total_candidate_cost
+
+    def current_stop_reason() -> str | None:
+        elapsed = time.monotonic() - started
+        agent_elapsed = _agent_session_elapsed_seconds(handle, elapsed)
+        if agent_timeout_seconds is not None and agent_elapsed >= agent_timeout_seconds:
+            return "time_limit"
+        if (
+            compile_run.budget.max_agent_seconds > 0
+            and agent_elapsed >= compile_run.budget.max_agent_seconds
+        ):
+            return "time_limit"
+        if (attempt.workspace_path / "journal" / "stop_compile").exists():
+            return "user_stop"
+        if (
+            compile_run.budget.max_cost is not None
+            and refresh_total_compile_cost() >= compile_run.budget.max_cost
+        ):
+            return "budget_exhausted"
+        return None
+
+    def stop_running_agent(reason: str) -> None:
+        nonlocal handle, pending_stop_reason
+        pending_stop_reason = pending_stop_reason or reason
+        if handle.status == "running":
+            handle = stop_agent_session(handle, reason=reason)
+
+    def evaluate_candidate_with_budget_checks(
+        submission: CandidateSubmission,
+    ) -> dict[str, Any]:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                evaluate_candidate_on_validation,
+                submission,
+                definition,
+                snapshot,
+                base_release,
+                reference_qualification,
+                refresh_agent_usage_ledger(),
+                reference_usage,
+                options.get("audit_usage"),
+                options.get("local_training_search_usage"),
+                baseline_cost,
+                options,
+            )
+            while True:
+                try:
+                    evaluation = future.result(timeout=poll_interval_seconds)
+                except FutureTimeoutError:
+                    reason = current_stop_reason()
+                    if reason is not None:
+                        stop_running_agent(reason)
+                    continue
+                reason = current_stop_reason()
+                if reason is not None:
+                    stop_running_agent(reason)
+                return evaluation
 
     def drain_ready_submissions() -> str | None:
         nonlocal evaluated_count, feedback_count, failed_count, total_candidate_cost
@@ -664,19 +776,10 @@ def run_interactive_compile_loop(
                 if _ledger_contains(ledger, submission_path.name, submission_digest):
                     continue
                 submission = receive_candidate_submission(attempt, submission_path)
-                evaluation = evaluate_candidate_on_validation(
-                    submission,
-                    definition,
-                    snapshot,
-                    base_release,
-                    reference_qualification,
-                    _read_agent_usage_ledger(attempt),
-                    reference_usage,
-                    options.get("audit_usage"),
-                    options.get("local_training_search_usage"),
-                    baseline_cost,
-                    options,
-                )
+                pre_validation_stop = current_stop_reason()
+                if pre_validation_stop is not None:
+                    return pre_validation_stop
+                evaluation = evaluate_candidate_with_budget_checks(submission)
                 feedback = _feedback_for_submission(submission, evaluation)
                 feedback_record = provide_validation_feedback(attempt, feedback)
                 report = evaluation.get("report")
@@ -718,6 +821,8 @@ def run_interactive_compile_loop(
                 failed_count += 1
             evaluated_count += 1
             _write_submission_ledger(attempt, ledger)
+            if pending_stop_reason is not None:
+                return pending_stop_reason
             if evaluated_count >= compile_run.budget.max_candidates:
                 return "candidate_limit"
             if (
@@ -728,25 +833,8 @@ def run_interactive_compile_loop(
         return None
 
     while stop_reason is None:
-        elapsed = time.monotonic() - started
-        agent_elapsed = _agent_session_elapsed_seconds(handle, elapsed)
-        if agent_timeout_seconds is not None and agent_elapsed >= agent_timeout_seconds:
-            stop_reason = "time_limit"
-            break
-        if (
-            compile_run.budget.max_agent_seconds > 0
-            and agent_elapsed >= compile_run.budget.max_agent_seconds
-        ):
-            stop_reason = "time_limit"
-            break
-        if (attempt.workspace_path / "journal" / "stop_compile").exists():
-            stop_reason = "user_stop"
-            break
-        if (
-            compile_run.budget.max_cost is not None
-            and refresh_total_compile_cost() >= compile_run.budget.max_cost
-        ):
-            stop_reason = "budget_exhausted"
+        stop_reason = current_stop_reason()
+        if stop_reason is not None:
             break
         stop_reason = drain_ready_submissions()
         if stop_reason is not None:

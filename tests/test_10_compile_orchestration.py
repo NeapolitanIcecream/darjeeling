@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import PrefixBroker, write_artifact
 
+from darjeeling import compile_orchestration as compile_orchestration_module
 from darjeeling.agent_workspace import (
     create_agent_workspace,
     create_compile_run,
@@ -470,6 +472,64 @@ def test_interactive_compile_loop_honors_agent_timeout_before_compile_budget(
     assert session["timeout_seconds"] == 1
 
 
+def test_interactive_compile_loop_stops_agent_when_timeout_expires_during_validation(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=10, max_candidates=2),
+            "\n".join(
+                [
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('slowvalid', ['a'])",
+                    "time.sleep(30)",
+                ]
+            ),
+            agent_timeout_seconds=2,
+        )
+    )
+    handle = replace(handle, started_at=utcnow() - timedelta(seconds=1.5))
+    original_evaluate = compile_orchestration_module.evaluate_candidate_on_validation
+
+    def slow_validation(*args, **kwargs):
+        time.sleep(0.75)
+        return original_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "darjeeling.compile_orchestration.evaluate_candidate_on_validation",
+        slow_validation,
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert result["stop_reason"] == "time_limit"
+    assert result["closed_attempt_status"] == "closed"
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["status"] == "timed_out"
+    assert session["stop_reason"] == "time_limit"
+
+
 def test_interactive_compile_loop_honors_live_agent_usage_cost_budget(
     target_dir: Path, tmp_path: Path, now
 ) -> None:
@@ -514,6 +574,71 @@ def test_interactive_compile_loop_honors_live_agent_usage_cost_budget(
     assert result["closed_attempt_status"] == "closed"
     assert result["total_candidate_cost"] == 3.0
     assert result["elapsed_seconds"] < 5
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["status"] == "stopped"
+    assert session["stop_reason"] == "budget_exhausted"
+
+
+def test_interactive_compile_loop_preserves_usage_high_water_during_validation(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=10, max_candidates=2, max_cost=2.0),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('costtamper', ['a'])",
+                    "time.sleep(0.05)",
+                    "Path('journal/agent_usage.json').write_text(",
+                    """    '[{"kind":"agent","cost":3.0,"metadata":{}}]\\n',""",
+                    "    encoding='utf-8',",
+                    ")",
+                    "time.sleep(0.25)",
+                    "Path('journal/agent_usage.json').write_text('[]\\n', encoding='utf-8')",
+                    "time.sleep(30)",
+                ]
+            ),
+        )
+    )
+    original_evaluate = compile_orchestration_module.evaluate_candidate_on_validation
+
+    def slow_validation(*args, **kwargs):
+        time.sleep(0.5)
+        return original_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "darjeeling.compile_orchestration.evaluate_candidate_on_validation",
+        slow_validation,
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert result["stop_reason"] == "budget_exhausted"
+    assert result["closed_attempt_status"] == "closed"
+    assert result["total_candidate_cost"] == 3.0
     session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
     assert session["status"] == "stopped"
     assert session["stop_reason"] == "budget_exhausted"
