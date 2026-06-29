@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +24,7 @@ from darjeeling.agent_workspace import (
     provide_validation_feedback,
     receive_candidate_submission,
     run_compile_loop,
+    stop_agent_session,
     write_agent_brief,
 )
 from darjeeling.artifact_worker import build_protocol_docs
@@ -82,6 +84,28 @@ def _train_export_digest(
             "redaction_level": redaction_level,
         }
     )
+
+
+def _wait_for_path(path: Path, timeout_seconds: float = 5.0) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for {path}")
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
 
 
 def _accepted_release_from_attempt(
@@ -762,6 +786,131 @@ def test_close_agent_attempt_stops_persisted_async_pid_when_process_map_is_empty
             process.kill()
             process.wait()
         agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
+
+
+def test_stop_agent_session_kills_agent_process_group_children(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, check = load_checked_target(target_dir)
+    registry = __import__("darjeeling.model").model.ReleaseRegistry()
+    release = create_release_without_artifacts(
+        definition, contract, check, PrefixBroker(), RoutingSettings(), registry
+    )
+    snapshot = build_snapshot(
+        definition,
+        contract,
+        definition.data_config,
+        None,
+        [],
+        PrefixBroker(),
+        now,
+        SnapshotOptions(storage_root=tmp_path / "snapshots"),
+    )
+    workspace = load_target_workspace(
+        definition.name, definition.contract_hash, WorkspaceStore(tmp_path / "workspaces")
+    )
+    compile_run = create_compile_run(
+        definition,
+        check,
+        snapshot.snapshot,
+        release,
+        CompileBudget(max_agent_seconds=5, max_candidates=1),
+        workspace,
+        snapshot.reference_qualification,
+        CompileOptions(),
+    )
+    attempt = create_agent_workspace(compile_run, workspace, AgentAttemptOptions())
+    target_view = export_agent_readonly_target_view(
+        definition, attempt.workspace_path / "target_view"
+    )
+    train_view = export_train_view_for_agent(
+        snapshot.snapshot,
+        contract,
+        __import__("darjeeling.model").model.AgentViewOptions(),
+        attempt.workspace_path / "train_view",
+    )
+    manifest = mount_readonly_inputs(
+        attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
+    )
+    brief = write_agent_brief(attempt, compile_run, manifest, {})
+    child_code = (
+        "import signal, time\n"
+        "from pathlib import Path\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "time.sleep(1.0)\n"
+        "Path('journal/child-survived.txt').write_text('survived', encoding='utf-8')\n"
+        "time.sleep(30)\n"
+    )
+    agent_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import subprocess",
+            "import time",
+            "child = subprocess.Popen(['/usr/bin/python3', '-c', " + repr(child_code) + "])",
+            "Path('journal/child.pid').write_text(str(child.pid), encoding='utf-8')",
+            "time.sleep(30)",
+        ]
+    )
+    handle = launch_target_adaptation_agent_async(
+        attempt,
+        brief,
+        {"command": ["/usr/bin/python3", "-c", agent_code]},
+    )
+    child_pid_path = attempt.workspace_path / "journal" / "child.pid"
+    _wait_for_path(child_pid_path)
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    try:
+        stop_agent_session(handle, reason="time_limit", timeout_seconds=0.2)
+        time.sleep(1.2)
+        assert not (attempt.workspace_path / "journal" / "child-survived.txt").exists()
+    finally:
+        if _process_alive(child_pid):
+            subprocess.run(["kill", "-9", str(child_pid)], check=False)
+        agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
+
+
+def test_stop_agent_session_does_not_signal_mismatched_persisted_pid(
+    tmp_path: Path,
+) -> None:
+    unrelated = subprocess.Popen(
+        ["/usr/bin/python3", "-c", "import time; time.sleep(30)"]
+    )
+    attempt_id = "attempt-stale-pid"
+    attempt_path = tmp_path / "attempt"
+    journal_session = attempt_path / "journal" / "agent_session.json"
+    core_session = attempt_path.parent / "_core" / attempt_id / "agent_session.json"
+    log_path = attempt_path / "journal" / "agent.log"
+    record = {
+        "attempt_id": attempt_id,
+        "command": ["/usr/bin/python3", "-c", "import time; time.sleep(30)"],
+        "sandbox_profile": None,
+        "sandbox_mode": "portable_python",
+        "status": "running",
+        "pid": unrelated.pid,
+        "process_group_id": unrelated.pid,
+        "process_start_token": "stale-process-start-token",
+        "started_at": utcnow(),
+        "log_path": log_path,
+        "timeout_seconds": 10,
+    }
+    write_json(journal_session, record)
+    write_json(core_session, record)
+    handle = AgentSessionHandle(
+        attempt_id=attempt_id,
+        status="running",
+        pid=unrelated.pid,
+        session_record_path=journal_session,
+        timeout_seconds=10,
+    )
+    try:
+        stop_agent_session(handle, reason="time_limit", timeout_seconds=0.1)
+        assert unrelated.poll() is None
+        session = json.loads(journal_session.read_text())
+        assert session["status"] == "timed_out"
+    finally:
+        if unrelated.poll() is None:
+            unrelated.kill()
+            unrelated.wait()
 
 
 def test_poll_agent_session_marks_missing_persisted_pid_failed(tmp_path: Path) -> None:

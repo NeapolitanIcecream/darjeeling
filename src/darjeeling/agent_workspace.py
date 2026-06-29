@@ -896,6 +896,8 @@ def launch_target_adaptation_agent_async(
         except OSError as exc:
             raise WorkspaceError("agent runtime command could not be started") from exc
     _LIVE_AGENT_PROCESSES[attempt.attempt_id] = process
+    process_group_id = _process_group_id(process.pid)
+    process_start_token = _process_start_token(process.pid)
     _write_session_record(
         session_record,
         attempt.attempt_id,
@@ -906,6 +908,8 @@ def launch_target_adaptation_agent_async(
             "sandbox_mode": sandbox_mode,
             "status": "running",
             "pid": process.pid,
+            "process_group_id": process_group_id,
+            "process_start_token": process_start_token,
             "started_at": started_at,
             "log_path": log_path,
             "timeout_seconds": launch["timeout_seconds"],
@@ -933,7 +937,9 @@ def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
                 return handle
             recorded_pid = _session_record_pid(record)
             if record.get("status") == "running" and recorded_pid is not None:
-                if not _pid_exists(recorded_pid):
+                if not _recorded_agent_process_matches(
+                    record, require_start_token=False
+                ):
                     _write_completed_session_record(
                         attempt_id=handle.attempt_id,
                         command=list(record.get("command", handle.command)),
@@ -996,6 +1002,31 @@ def _session_record_pid(record: dict[str, Any]) -> int | None:
     return None
 
 
+def _process_group_id(pid: int) -> int | None:
+    try:
+        return os.getpgid(pid)
+    except ProcessLookupError:
+        return None
+    except Exception:
+        return None
+
+
+def _process_start_token(pid: int) -> str | None:
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    token = result.stdout.strip()
+    return token or None
+
+
 def _pid_exists(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -1006,30 +1037,99 @@ def _pid_exists(pid: int) -> bool:
     return True
 
 
-def _signal_recorded_agent_pid(pid: int, sig: signal.Signals) -> bool:
+def _process_group_exists(process_group_id: int) -> bool:
     try:
-        os.killpg(pid, sig)
-        return True
+        os.killpg(process_group_id, 0)
     except ProcessLookupError:
-        pass
-    except Exception:
-        pass
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _process_group_members(process_group_id: int) -> list[int]:
     try:
-        os.kill(pid, sig)
+        result = subprocess.run(
+            ["pgrep", "-g", str(process_group_id)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+    if result.returncode not in {0, 1}:
+        return []
+    members: list[int] = []
+    for line in result.stdout.splitlines():
+        try:
+            pid = int(line.strip())
+        except ValueError:
+            continue
+        if pid > 0:
+            members.append(pid)
+    return members
+
+
+def _signal_process_group(process_group_id: int, sig: signal.Signals) -> bool:
+    try:
+        os.killpg(process_group_id, sig)
         return True
     except ProcessLookupError:
         return False
+    except PermissionError:
+        sent = False
+        for pid in _process_group_members(process_group_id):
+            try:
+                os.kill(pid, sig)
+                sent = True
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                continue
+        return sent
 
 
-def _stop_recorded_agent_pid(pid: int, timeout_seconds: float) -> None:
-    if not _signal_recorded_agent_pid(pid, signal.SIGTERM):
+def _stop_process_group(process_group_id: int, timeout_seconds: float) -> None:
+    if not _signal_process_group(process_group_id, signal.SIGTERM):
         return
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        if not _pid_exists(pid):
+        if not _process_group_exists(process_group_id):
             return
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
-    _signal_recorded_agent_pid(pid, signal.SIGKILL)
+    _signal_process_group(process_group_id, signal.SIGKILL)
+
+
+def _recorded_agent_process_matches(
+    record: dict[str, Any], *, require_start_token: bool
+) -> bool:
+    pid = _session_record_pid(record)
+    if pid is None or not _pid_exists(pid):
+        return False
+    expected_start_token = record.get("process_start_token")
+    if require_start_token and not isinstance(expected_start_token, str):
+        return False
+    if isinstance(expected_start_token, str) and expected_start_token:
+        if _process_start_token(pid) != expected_start_token:
+            return False
+    expected_process_group = record.get("process_group_id")
+    if isinstance(expected_process_group, int) and expected_process_group > 0:
+        if _process_group_id(pid) != expected_process_group:
+            return False
+    return True
+
+
+def _stop_recorded_agent_process(record: dict[str, Any], timeout_seconds: float) -> None:
+    if not _recorded_agent_process_matches(record, require_start_token=True):
+        return
+    pid = _session_record_pid(record)
+    if pid is None:
+        return
+    process_group_id = record.get("process_group_id")
+    if not isinstance(process_group_id, int) or process_group_id <= 0:
+        process_group_id = _process_group_id(pid)
+    if process_group_id is not None:
+        _stop_process_group(process_group_id, timeout_seconds)
 
 
 def stop_agent_session(
@@ -1043,20 +1143,18 @@ def stop_agent_session(
     pid = process.pid if process is not None else handle.pid or recorded_pid
     status = "timed_out" if reason == "time_limit" else "stopped"
     if process is not None and process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except Exception:
+        process_group_id = _process_group_id(process.pid)
+        if process_group_id is not None:
+            _stop_process_group(process_group_id, timeout_seconds)
+        else:
             process.terminate()
         try:
-            process.wait(timeout=timeout_seconds)
+            process.wait(timeout=1.0)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except Exception:
-                process.kill()
+            process.kill()
             process.wait()
-    elif pid is not None:
-        _stop_recorded_agent_pid(pid, timeout_seconds)
+    elif process is None and pid is not None:
+        _stop_recorded_agent_process(record, timeout_seconds)
     returncode = process.returncode if process is not None else None
     _LIVE_AGENT_PROCESSES.pop(handle.attempt_id, None)
     if handle.session_record_path is not None:
