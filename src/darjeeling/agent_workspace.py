@@ -828,6 +828,7 @@ def launch_target_adaptation_agent(
         log_path=log_path,
         session_record_path=session_record,
         sandbox_mode=sandbox_mode,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -883,6 +884,7 @@ def launch_target_adaptation_agent_async(
         log_path=log_path,
         session_record_path=session_record,
         sandbox_mode=sandbox_mode,
+        timeout_seconds=launch["timeout_seconds"],
     )
 
 
@@ -920,7 +922,11 @@ def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
             log_path=Path(record.get("log_path") or handle.log_path or ""),
             status=status,
             returncode=returncode,
-            timeout_seconds=record.get("timeout_seconds"),
+            timeout_seconds=(
+                handle.timeout_seconds
+                if handle.timeout_seconds is not None
+                else record.get("timeout_seconds")
+            ),
         )
     return replace(handle, status=status, pid=process.pid)
 
@@ -966,7 +972,11 @@ def stop_agent_session(
             log_path=log_path,
             status=status,
             returncode=returncode,
-            timeout_seconds=record.get("timeout_seconds"),
+            timeout_seconds=(
+                handle.timeout_seconds
+                if handle.timeout_seconds is not None
+                else record.get("timeout_seconds")
+            ),
             stop_reason=reason,
         )
     return replace(handle, status=status, pid=process.pid if process is not None else handle.pid)
@@ -1085,7 +1095,9 @@ def provide_validation_feedback(
     return FeedbackDeliveryRecord(attempt_id=attempt.attempt_id, path=path, delivered_at=utcnow())
 
 
-def close_agent_attempt(attempt: AgentAttempt, reason: str) -> ClosedAgentAttempt:
+def close_agent_attempt(
+    attempt: AgentAttempt, reason: str, session_timeout_seconds: int | None = None
+) -> ClosedAgentAttempt:
     if reason not in {
         "budget_exhausted",
         "candidate_limit",
@@ -1102,6 +1114,7 @@ def close_agent_attempt(attempt: AgentAttempt, reason: str) -> ClosedAgentAttemp
                 attempt_id=attempt.attempt_id,
                 status="running",
                 session_record_path=session_record,
+                timeout_seconds=session_timeout_seconds,
             ),
             reason=reason,
         )

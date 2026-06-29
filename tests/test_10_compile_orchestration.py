@@ -441,6 +441,10 @@ def test_interactive_compile_loop_honors_agent_timeout_before_compile_budget(
             agent_timeout_seconds=1,
         )
     )
+    session_path = attempt.workspace_path / "journal" / "agent_session.json"
+    session = json.loads(session_path.read_text())
+    session["timeout_seconds"] = 1000
+    session_path.write_text(json.dumps(session), encoding="utf-8")
 
     result = run_interactive_compile_loop(
         compile_run,
@@ -461,7 +465,7 @@ def test_interactive_compile_loop_honors_agent_timeout_before_compile_budget(
     assert result["stop_reason"] == "time_limit"
     assert result["closed_attempt_status"] == "closed"
     assert result["elapsed_seconds"] < 5
-    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    session = json.loads(session_path.read_text())
     assert session["status"] == "timed_out"
     assert session["timeout_seconds"] == 1
 
@@ -513,6 +517,50 @@ def test_interactive_compile_loop_honors_live_agent_usage_cost_budget(
     session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
     assert session["status"] == "stopped"
     assert session["stop_reason"] == "budget_exhausted"
+
+
+def test_interactive_compile_loop_tolerates_malformed_agent_usage_ledger(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "Path('journal/agent_usage.json').write_text('{', encoding='utf-8')",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('usagebad', ['a'])",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert result["failed_submission_count"] == 0
+    assert result["stop_reason"] == "candidate_limit"
+    assert (attempt.workspace_path / "journal" / "feedback-usagebad.json").exists()
 
 
 def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(

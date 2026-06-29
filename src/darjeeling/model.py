@@ -586,6 +586,7 @@ class AgentSessionHandle:
     log_path: Path | None = None
     session_record_path: Path | None = None
     sandbox_mode: str | None = None
+    timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)

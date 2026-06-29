@@ -382,10 +382,24 @@ def _read_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
     path = attempt.workspace_path / "journal" / "agent_usage.json"
     if not path.exists():
         return AgentUsageLedger()
-    raw = read_json(path)
+    try:
+        raw = read_json(path)
+    except (OSError, TypeError, ValueError):
+        return AgentUsageLedger()
     if not isinstance(raw, list):
         return AgentUsageLedger()
-    events = [AgentUsageEvent(**event) for event in raw if isinstance(event, dict)]
+    events: list[AgentUsageEvent] = []
+    for event in raw:
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("kind")
+        cost = event.get("cost", 0.0)
+        metadata = event.get("metadata", {})
+        if not isinstance(kind, str) or not isinstance(cost, (int, float)):
+            continue
+        if not isinstance(metadata, dict):
+            metadata = {}
+        events.append(AgentUsageEvent(kind=kind, cost=float(cost), metadata=metadata))
     return AgentUsageLedger(events)
 
 
@@ -445,10 +459,7 @@ def _close_reason_for_agent_status(status: str) -> str:
 
 
 def _agent_session_timeout_seconds(handle: AgentSessionHandle) -> float | None:
-    if handle.session_record_path is None or not handle.session_record_path.exists():
-        return None
-    record = read_json(handle.session_record_path)
-    timeout_seconds = record.get("timeout_seconds")
+    timeout_seconds = handle.timeout_seconds
     if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
         return float(timeout_seconds)
     return None
@@ -750,7 +761,13 @@ def run_interactive_compile_loop(
     elapsed_seconds = time.monotonic() - started
     total_candidate_cost = refresh_total_compile_cost()
     close_reason = stop_reason or "ready_for_test"
-    closed_attempt: ClosedAgentAttempt = close_agent_attempt(attempt, close_reason)
+    closed_attempt: ClosedAgentAttempt = close_agent_attempt(
+        attempt,
+        close_reason,
+        session_timeout_seconds=(
+            int(agent_timeout_seconds) if agent_timeout_seconds is not None else None
+        ),
+    )
     return {
         "compile_id": compile_run.compile_id,
         "attempt_id": attempt.attempt_id,
