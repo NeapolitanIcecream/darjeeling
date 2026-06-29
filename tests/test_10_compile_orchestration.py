@@ -1091,6 +1091,29 @@ def test_interactive_compile_loop_tolerates_malformed_agent_usage_ledger(
     assert (attempt.workspace_path / "journal" / "feedback-usagebad.json").exists()
 
 
+def test_agent_usage_ledger_ignores_non_regular_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    usage_path = tmp_path / "agent_usage.json"
+    usage_path.write_text("[]\n", encoding="utf-8")
+    original_is_file = Path.is_file
+
+    def fake_is_file(path: Path) -> bool:
+        if path == usage_path:
+            return False
+        return original_is_file(path)
+
+    def fail_read_json(path: Path):
+        raise AssertionError(f"unexpected JSON read for {path}")
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+    monkeypatch.setattr(compile_orchestration_module, "read_json", fail_read_json)
+
+    ledger = compile_orchestration_module._read_agent_usage_ledger_path(usage_path)
+
+    assert ledger is None
+
+
 def test_interactive_compile_loop_overwrites_stale_evaluation_contract(
     target_dir: Path, tmp_path: Path, now, monkeypatch
 ) -> None:

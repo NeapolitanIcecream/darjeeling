@@ -106,6 +106,19 @@ def _core_session_record_path_for_path(attempt_path: Path, attempt_id: str) -> P
     return _core_attempt_state_dir_for_path(attempt_path, attempt_id) / "agent_session.json"
 
 
+def _session_record_path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _session_record_exists_for_path(
+    attempt_path: Path, attempt_id: str, journal_session_record: Path
+) -> bool:
+    core_record = _core_session_record_path_for_path(attempt_path, attempt_id)
+    return _session_record_path_exists(core_record) or _session_record_path_exists(
+        journal_session_record
+    )
+
+
 def _read_session_record_for_path(
     attempt_path: Path, attempt_id: str, journal_session_record: Path
 ) -> dict[str, Any]:
@@ -717,7 +730,9 @@ def _prepare_agent_launch(
     if not brief_path.exists():
         raise WorkspaceError("agent brief path does not exist")
     session_record = attempt.workspace_path / "journal" / "agent_session.json"
-    if session_record.exists():
+    if _session_record_exists_for_path(
+        attempt.workspace_path, attempt.attempt_id, session_record
+    ):
         raise WorkspaceError("agent already launched for attempt")
     command = list(agent_runtime.get("command", []))
     if not command:

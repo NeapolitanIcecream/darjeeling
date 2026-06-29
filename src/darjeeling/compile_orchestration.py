@@ -414,6 +414,8 @@ def _agent_usage_ledger_from_raw(raw: Any) -> AgentUsageLedger | None:
 def _read_agent_usage_ledger_path(path: Path) -> AgentUsageLedger | None:
     if not path.exists():
         return AgentUsageLedger()
+    if path.is_symlink() or not path.is_file():
+        return None
     try:
         raw = read_json(path)
     except (OSError, TypeError, ValueError):

@@ -1020,6 +1020,33 @@ def test_poll_agent_session_stops_orphaned_recorded_process_group_on_resume(
         agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
 
 
+def test_agent_launch_rejects_existing_core_session_without_journal(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    agent_code = "import time; time.sleep(30)"
+    attempt, handle = _launch_process_test_agent(target_dir, tmp_path, now, agent_code)
+    original_process = agent_workspace_module._LIVE_AGENT_PROCESSES[attempt.attempt_id]
+    journal_session = attempt.workspace_path / "journal" / "agent_session.json"
+    journal_session.unlink()
+    second_handle = None
+    try:
+        with pytest.raises(WorkspaceError, match="agent already launched"):
+            second_handle = launch_target_adaptation_agent_async(
+                attempt,
+                attempt.workspace_path / "AGENT_BRIEF.md",
+                {"command": ["/usr/bin/python3", "-c", agent_code]},
+            )
+    finally:
+        if second_handle is not None:
+            stop_agent_session(second_handle, reason="stopped", timeout_seconds=0.2)
+        else:
+            stop_agent_session(handle, reason="stopped", timeout_seconds=0.2)
+        if original_process.poll() is None:
+            original_process.kill()
+            original_process.wait()
+        agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
+
+
 def test_stop_agent_session_kills_recorded_group_after_agent_parent_exits(
     target_dir: Path, tmp_path: Path, now
 ) -> None:
