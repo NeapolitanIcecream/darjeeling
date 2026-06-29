@@ -1096,9 +1096,7 @@ def close_agent_attempt(attempt: AgentAttempt, reason: str) -> ClosedAgentAttemp
         source_workspace_commit=attempt.source_workspace_commit,
         workspace_path=attempt.workspace_path,
         final_commit=final_commit,
-        status="timed_out"
-        if reason == "time_limit"
-        else ("failed" if reason == "failure" else "closed"),
+        status="failed" if reason == "failure" else "closed",
     )
 
 

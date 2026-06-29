@@ -98,6 +98,7 @@ def _launch_interactive_agent(
     now,
     budget: CompileBudget,
     agent_code: str,
+    agent_timeout_seconds: int | None = None,
 ):
     definition, contract, check = load_checked_target(target_dir)
     registry = ReleaseRegistry()
@@ -148,7 +149,12 @@ def _launch_interactive_agent(
     )
     brief = write_agent_brief(attempt, compile_run, mount_manifest, {})
     handle = launch_target_adaptation_agent_async(
-        attempt, brief, {"command": ["/usr/bin/python3", "-c", agent_code]}
+        attempt,
+        brief,
+        {
+            "command": ["/usr/bin/python3", "-c", agent_code],
+            "timeout_seconds": agent_timeout_seconds,
+        },
     )
     return definition, contract, release, snapshot, compile_run, attempt, handle
 
@@ -300,9 +306,47 @@ def test_interactive_compile_loop_stops_running_agent_at_time_limit(
 
     assert result["evaluated_submission_count"] == 0
     assert result["stop_reason"] == "time_limit"
-    assert result["closed_attempt_status"] == "timed_out"
+    assert result["closed_attempt_status"] == "closed"
     session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
     assert session["status"] == "timed_out"
+
+
+def test_interactive_compile_loop_honors_agent_timeout_before_compile_budget(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=10, max_candidates=1),
+            "import time; time.sleep(30)",
+            agent_timeout_seconds=1,
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 0
+    assert result["stop_reason"] == "time_limit"
+    assert result["closed_attempt_status"] == "closed"
+    assert result["elapsed_seconds"] < 5
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["status"] == "timed_out"
+    assert session["timeout_seconds"] == 1
 
 
 def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(

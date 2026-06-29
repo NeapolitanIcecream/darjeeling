@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -431,6 +432,37 @@ def _close_reason_for_agent_status(status: str) -> str:
     return "ready_for_test"
 
 
+def _agent_session_timeout_seconds(handle: AgentSessionHandle) -> float | None:
+    if handle.session_record_path is None or not handle.session_record_path.exists():
+        return None
+    record = read_json(handle.session_record_path)
+    timeout_seconds = record.get("timeout_seconds")
+    if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
+        return float(timeout_seconds)
+    return None
+
+
+def _agent_session_elapsed_seconds(
+    handle: AgentSessionHandle, fallback_elapsed_seconds: float
+) -> float:
+    started_at = handle.started_at
+    if started_at is None and handle.session_record_path is not None:
+        record = (
+            read_json(handle.session_record_path)
+            if handle.session_record_path.exists()
+            else {}
+        )
+        raw_started = record.get("started_at")
+        if isinstance(raw_started, str):
+            try:
+                started_at = datetime.fromisoformat(raw_started)
+            except ValueError:
+                started_at = None
+    if started_at is None:
+        return fallback_elapsed_seconds
+    return max(0.0, (utcnow() - started_at).total_seconds())
+
+
 def start_compile_launch(
     decision: CompileLaunchDecision,
     definition: TargetDefinition,
@@ -568,6 +600,7 @@ def run_interactive_compile_loop(
     skipped_count = sum(1 for entry in ledger if entry.get("validation_status") == "skipped")
     total_candidate_cost = _ledger_cost(ledger)
     started = time.monotonic()
+    agent_timeout_seconds = _agent_session_timeout_seconds(agent_handle)
     stop_reason: str | None = (
         "candidate_limit"
         if evaluated_count >= compile_run.budget.max_candidates
@@ -658,6 +691,10 @@ def run_interactive_compile_loop(
 
     while stop_reason is None:
         elapsed = time.monotonic() - started
+        agent_elapsed = _agent_session_elapsed_seconds(handle, elapsed)
+        if agent_timeout_seconds is not None and agent_elapsed >= agent_timeout_seconds:
+            stop_reason = "time_limit"
+            break
         if (
             compile_run.budget.max_agent_seconds > 0
             and elapsed >= compile_run.budget.max_agent_seconds
