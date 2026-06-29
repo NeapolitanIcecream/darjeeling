@@ -1136,6 +1136,54 @@ def test_poll_agent_session_marks_missing_persisted_pid_failed(tmp_path: Path) -
     assert session["returncode"] is None
 
 
+def test_poll_agent_session_writes_core_record_atomically(
+    tmp_path: Path, monkeypatch
+) -> None:
+    attempt_id = "attempt-atomic-core-session"
+    attempt_path = tmp_path / "attempt"
+    journal_session = attempt_path / "journal" / "agent_session.json"
+    core_session = attempt_path.parent / "_core" / attempt_id / "agent_session.json"
+    log_path = attempt_path / "journal" / "agent.log"
+    record = {
+        "attempt_id": attempt_id,
+        "command": ["/usr/bin/python3", "-c", "raise SystemExit(0)"],
+        "sandbox_profile": None,
+        "sandbox_mode": "portable_python",
+        "status": "running",
+        "pid": 999999999,
+        "started_at": utcnow(),
+        "log_path": log_path,
+        "timeout_seconds": 10,
+    }
+    write_json(journal_session, record)
+    write_json(core_session, record)
+    handle = AgentSessionHandle(
+        attempt_id=attempt_id,
+        status="running",
+        pid=999999999,
+        session_record_path=journal_session,
+        timeout_seconds=10,
+    )
+    original_write_text = Path.write_text
+
+    def fail_in_place_core_write(path: Path, data: str, *args, **kwargs) -> int:
+        if path == core_session:
+            original_write_text(path, "{", *args, **kwargs)
+            raise OSError("simulated interrupted core write")
+        return original_write_text(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_in_place_core_write)
+
+    updated = poll_agent_session(handle)
+
+    core_record = json.loads(core_session.read_text())
+    journal_record = json.loads(journal_session.read_text())
+    assert updated.status == "failed"
+    assert core_record["status"] == "failed"
+    assert core_record["returncode"] is None
+    assert journal_record["status"] == "failed"
+
+
 def test_poll_agent_session_persists_core_when_journal_record_is_unwritable(
     tmp_path: Path,
 ) -> None:

@@ -62,7 +62,7 @@ from darjeeling.util import (
     safe_public_error,
     stable_hash,
     utcnow,
-    write_json,
+    write_json_atomic,
 )
 
 
@@ -354,7 +354,7 @@ def _load_submission_ledger(attempt: AgentAttempt) -> list[dict[str, Any]]:
 
 
 def _write_submission_ledger(attempt: AgentAttempt, ledger: list[dict[str, Any]]) -> None:
-    write_json(_ledger_path(attempt), ledger)
+    write_json_atomic(_ledger_path(attempt), ledger)
 
 
 def _ledger_contains(
@@ -438,7 +438,7 @@ def _read_core_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
 def _write_core_agent_usage_ledger(
     attempt: AgentAttempt, ledger: AgentUsageLedger
 ) -> None:
-    write_json(
+    write_json_atomic(
         _core_agent_usage_path(attempt),
         [asdict(event) for event in ledger.events],
     )

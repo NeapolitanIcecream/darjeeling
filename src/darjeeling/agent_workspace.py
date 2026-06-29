@@ -42,7 +42,15 @@ from darjeeling.model import (
     WorkspaceStore,
 )
 from darjeeling.portable_sandbox import build_python_sandbox_command, is_python_command
-from darjeeling.util import file_digest, new_id, read_json, stable_hash, utcnow, write_json
+from darjeeling.util import (
+    file_digest,
+    new_id,
+    read_json,
+    stable_hash,
+    utcnow,
+    write_json,
+    write_json_atomic,
+)
 
 _BASELINE_DIRS = ["scaffolding", "runtime", "proposals", "journal", "tests"]
 _ATTEMPT_DIRS = [*_BASELINE_DIRS, "submissions"]
@@ -122,7 +130,7 @@ def _read_session_record_for_handle(handle: AgentSessionHandle) -> dict[str, Any
 def _write_session_record(
     session_record: Path, attempt_id: str, record: dict[str, Any]
 ) -> None:
-    write_json(
+    write_json_atomic(
         _core_session_record_path_for_path(session_record.parent.parent, attempt_id),
         record,
     )
@@ -130,7 +138,7 @@ def _write_session_record(
         f".{session_record.name}.{os.getpid()}.tmp"
     )
     try:
-        write_json(tmp_path, record)
+        write_json_atomic(tmp_path, record)
         tmp_path.replace(session_record)
     except OSError:
         try:
