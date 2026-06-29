@@ -982,10 +982,19 @@ def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
     returncode = process.poll()
     if returncode is None:
         return replace(handle, status="running", pid=process.pid)
-    _LIVE_AGENT_PROCESSES.pop(handle.attempt_id, None)
     status = "completed" if returncode == 0 else "failed"
+    record: dict[str, Any] = {}
     if handle.session_record_path is not None:
         record = _read_session_record_for_handle(handle)
+        if (
+            record.get("status") == "running"
+            and _session_record_pid(record) == process.pid
+        ):
+            _stop_recorded_agent_process(
+                record, timeout_seconds=0.2, require_process_match=False
+            )
+    _LIVE_AGENT_PROCESSES.pop(handle.attempt_id, None)
+    if handle.session_record_path is not None:
         _write_completed_session_record(
             attempt_id=handle.attempt_id,
             command=list(record.get("command", handle.command)),

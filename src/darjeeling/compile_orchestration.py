@@ -523,8 +523,8 @@ def _agent_session_timeout_seconds(handle: AgentSessionHandle) -> float | None:
 def _agent_session_elapsed_seconds(
     handle: AgentSessionHandle, fallback_elapsed_seconds: float
 ) -> float:
-    started_at = handle.started_at
-    if started_at is None and handle.session_record_path is not None:
+    started_at = None
+    if handle.session_record_path is not None:
         record = _read_session_record_for_handle(handle)
         raw_started = record.get("started_at")
         if isinstance(raw_started, str):
@@ -532,6 +532,8 @@ def _agent_session_elapsed_seconds(
                 started_at = datetime.fromisoformat(raw_started)
             except ValueError:
                 started_at = None
+    if started_at is None:
+        started_at = handle.started_at
     if started_at is None:
         return fallback_elapsed_seconds
     return max(0.0, (utcnow() - started_at).total_seconds())

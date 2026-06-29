@@ -523,6 +523,12 @@ def test_interactive_compile_loop_counts_compile_budget_from_agent_start(
         )
     )
     handle = replace(handle, started_at=utcnow() - timedelta(seconds=2))
+    core_session_path = (
+        attempt.workspace_path.parent / "_core" / attempt.attempt_id / "agent_session.json"
+    )
+    core_session = json.loads(core_session_path.read_text())
+    core_session["started_at"] = (utcnow() - timedelta(seconds=2)).isoformat()
+    core_session_path.write_text(json.dumps(core_session), encoding="utf-8")
 
     result = run_interactive_compile_loop(
         compile_run,
@@ -569,7 +575,7 @@ def test_interactive_compile_loop_reads_resumed_start_time_from_core_record(
     core_session["started_at"] = (utcnow() - timedelta(seconds=2)).isoformat()
     journal_session_path.write_text(json.dumps(journal_session), encoding="utf-8")
     core_session_path.write_text(json.dumps(core_session), encoding="utf-8")
-    resumed_handle = replace(handle, started_at=None)
+    resumed_handle = replace(handle, started_at=utcnow() + timedelta(hours=1))
 
     result = run_interactive_compile_loop(
         compile_run,
