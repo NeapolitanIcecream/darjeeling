@@ -391,6 +391,23 @@ def _read_agent_usage_ledger(attempt: AgentAttempt) -> AgentUsageLedger:
     return AgentUsageLedger(events)
 
 
+def _fixed_compile_cost(reference_usage: Any, local_training_search_usage: Any) -> float:
+    compile_cost = getattr(reference_usage, "cost", 0.0)
+    if isinstance(local_training_search_usage, dict):
+        compile_cost += float(local_training_search_usage.get("cost", 0.0))
+    return float(compile_cost)
+
+
+def _live_compile_cost(
+    attempt: AgentAttempt, fixed_compile_cost: float, reported_compile_cost: float
+) -> float:
+    try:
+        agent_cost = _read_agent_usage_ledger(attempt).cost
+    except (OSError, TypeError, ValueError):
+        return reported_compile_cost
+    return max(reported_compile_cost, fixed_compile_cost + agent_cost)
+
+
 def _safe_failure_feedback(submission_id: str, exc: Exception) -> AgentFeedback:
     message = str(exc).strip()
     if not message or any(term in message.lower() for term in ["secret", "token", "password"]):
@@ -609,6 +626,16 @@ def run_interactive_compile_loop(
     handle = agent_handle
     options = dict(evaluation_options)
     options.setdefault("contract", contract)
+    fixed_compile_cost = _fixed_compile_cost(
+        reference_usage, options.get("local_training_search_usage")
+    )
+
+    def refresh_total_compile_cost() -> float:
+        nonlocal total_candidate_cost
+        total_candidate_cost = _live_compile_cost(
+            attempt, fixed_compile_cost, total_candidate_cost
+        )
+        return total_candidate_cost
 
     def drain_ready_submissions() -> str | None:
         nonlocal evaluated_count, feedback_count, failed_count, total_candidate_cost
@@ -684,7 +711,7 @@ def run_interactive_compile_loop(
                 return "candidate_limit"
             if (
                 compile_run.budget.max_cost is not None
-                and total_candidate_cost >= compile_run.budget.max_cost
+                and refresh_total_compile_cost() >= compile_run.budget.max_cost
             ):
                 return "budget_exhausted"
         return None
@@ -706,7 +733,7 @@ def run_interactive_compile_loop(
             break
         if (
             compile_run.budget.max_cost is not None
-            and total_candidate_cost >= compile_run.budget.max_cost
+            and refresh_total_compile_cost() >= compile_run.budget.max_cost
         ):
             stop_reason = "budget_exhausted"
             break
@@ -721,6 +748,7 @@ def run_interactive_compile_loop(
         time.sleep(poll_interval_seconds)
 
     elapsed_seconds = time.monotonic() - started
+    total_candidate_cost = refresh_total_compile_cost()
     close_reason = stop_reason or "ready_for_test"
     closed_attempt: ClosedAgentAttempt = close_agent_attempt(attempt, close_reason)
     return {

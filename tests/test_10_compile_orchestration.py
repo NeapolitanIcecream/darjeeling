@@ -349,6 +349,55 @@ def test_interactive_compile_loop_honors_agent_timeout_before_compile_budget(
     assert session["timeout_seconds"] == 1
 
 
+def test_interactive_compile_loop_honors_live_agent_usage_cost_budget(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=10, max_candidates=3, max_cost=2.0),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import time",
+                    "Path('journal').mkdir(exist_ok=True)",
+                    "Path('journal/agent_usage.json').write_text(",
+                    """    '[{"kind":"agent","cost":3.0,"metadata":{}}]\\n',""",
+                    "    encoding='utf-8',",
+                    ")",
+                    "time.sleep(30)",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 0
+    assert result["stop_reason"] == "budget_exhausted"
+    assert result["closed_attempt_status"] == "closed"
+    assert result["total_candidate_cost"] == 3.0
+    assert result["elapsed_seconds"] < 5
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["status"] == "stopped"
+    assert session["stop_reason"] == "budget_exhausted"
+
+
 def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(
     target_dir: Path, tmp_path: Path, now
 ) -> None:
