@@ -130,6 +130,8 @@ def _write_session_record(
 
 
 def candidate_submission_ready(path: Path) -> bool:
+    if path.is_symlink() or not path.is_dir():
+        return False
     artifacts = path / "artifacts"
     return (path / _SUBMISSION_READY_MARKER).is_file() and any(
         (artifacts / layer / "artifact.yaml").exists() for layer in ["l1", "l2", "l3"]
@@ -1246,6 +1248,8 @@ def receive_candidate_submission(
 ) -> CandidateSubmission:
     if (attempt.workspace_path / "journal" / "closed.json").exists():
         raise WorkspaceError("candidate submissions are closed for this attempt")
+    if submission_path.is_symlink():
+        raise WorkspaceError("candidate submission path must not be a symlink")
     submissions_root = attempt.workspace_path / "submissions"
     try:
         submission_path.resolve().relative_to(attempt.workspace_path.resolve())
@@ -1290,7 +1294,13 @@ def provide_validation_feedback(
         }
     )
     path = attempt.workspace_path / "journal" / f"feedback-{feedback.candidate_id}.json"
-    write_json(path, asdict(feedback))
+    tmp_path = path.with_name(f".{path.name}.{new_id('feedback')}.tmp")
+    try:
+        write_json(tmp_path, asdict(feedback))
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
     return FeedbackDeliveryRecord(attempt_id=attempt.attempt_id, path=path, delivered_at=utcnow())
 
 

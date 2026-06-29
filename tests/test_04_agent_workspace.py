@@ -13,6 +13,7 @@ from conftest import PrefixBroker, write_artifact
 from darjeeling import agent_workspace as agent_workspace_module
 from darjeeling.agent_workspace import (
     advance_target_workspace_baseline,
+    candidate_submission_ready,
     close_agent_attempt,
     create_agent_workspace,
     create_compile_run,
@@ -199,7 +200,9 @@ def _accepted_release_from_attempt(
     return closed, validation["candidate"], compiled_release, visible
 
 
-def test_agent_mount_contains_train_only_inputs(target_dir: Path, tmp_path: Path, now) -> None:
+def test_agent_mount_contains_train_only_inputs(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
     definition, contract, check = load_checked_target(target_dir)
     snapshot = build_snapshot(
         definition,
@@ -407,6 +410,31 @@ def test_agent_mount_contains_train_only_inputs(target_dir: Path, tmp_path: Path
                 raw_rows_included=False,
             ),
         )
+    feedback_path = attempt.workspace_path / "journal" / "feedback-atomic.json"
+    original_write_json = agent_workspace_module.write_json
+
+    def fail_after_partial_write(path: Path, value) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{", encoding="utf-8")
+        raise RuntimeError("partial feedback write")
+
+    monkeypatch.setattr(agent_workspace_module, "write_json", fail_after_partial_write)
+    with pytest.raises(RuntimeError, match="partial feedback write"):
+        provide_validation_feedback(
+            attempt,
+            AgentFeedback(
+                candidate_id="atomic",
+                summary={},
+                requirement_results=[],
+                metrics={},
+                safe_slice_summaries=[],
+                latency_cost_summary={},
+                raw_rows_included=False,
+            ),
+        )
+    assert not feedback_path.exists()
+    assert not list(feedback_path.parent.glob(".feedback-atomic.json.*.tmp"))
+    monkeypatch.setattr(agent_workspace_module, "write_json", original_write_json)
     with pytest.raises(WorkspaceError, match="holdout reconstruction"):
         mount_readonly_inputs(
             attempt,
@@ -457,6 +485,20 @@ def test_agent_mount_contains_train_only_inputs(target_dir: Path, tmp_path: Path
     )
     with pytest.raises(WorkspaceError, match="submissions"):
         receive_candidate_submission(attempt, attempt.workspace_path / "runtime" / "prototype")
+
+    outside_submission = tmp_path / "outside-submission"
+    write_artifact(
+        outside_submission / "artifacts" / "l1",
+        definition.contract_hash,
+        accept_prefixes=["a"],
+    )
+    (outside_submission / "READY").write_text("ready\n", encoding="utf-8")
+    linked_submission = attempt.workspace_path / "submissions" / "linked"
+    linked_submission.symlink_to(outside_submission, target_is_directory=True)
+    assert not candidate_submission_ready(linked_submission)
+    with pytest.raises(WorkspaceError, match="symlink"):
+        receive_candidate_submission(attempt, linked_submission)
+    linked_submission.unlink()
 
     write_artifact(
         attempt.workspace_path / "submissions" / "loop" / "artifacts" / "l1",

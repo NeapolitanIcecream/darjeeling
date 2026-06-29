@@ -180,6 +180,59 @@ def test_submission_content_digest_includes_symlink_target(tmp_path: Path) -> No
     assert _submission_content_digest(submission) != first_digest
 
 
+def test_interactive_compile_loop_skips_symlink_submission_root_before_hashing(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "raise SystemExit(0)",
+        )
+    )
+    outside_submission = tmp_path / "outside-submission"
+    write_artifact(
+        outside_submission / "artifacts" / "l1",
+        definition.contract_hash,
+        accept_prefixes=["a"],
+    )
+    (outside_submission / "READY").write_text("ready\n", encoding="utf-8")
+    linked_submission = attempt.workspace_path / "submissions" / "linked"
+    linked_submission.symlink_to(outside_submission, target_is_directory=True)
+
+    def fail_if_symlink_root_is_hashed(path: Path) -> str:
+        if path.is_symlink():
+            raise AssertionError("symlink submission root was hashed")
+        return _submission_content_digest(path)
+
+    monkeypatch.setattr(
+        compile_orchestration_module,
+        "_submission_content_digest",
+        fail_if_symlink_root_is_hashed,
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 0
+    assert result["feedback_count"] == 0
+    assert result["failed_submission_count"] == 0
+
+
 def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     target_dir: Path, tmp_path: Path, now
 ) -> None:
