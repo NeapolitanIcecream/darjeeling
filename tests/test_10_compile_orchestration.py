@@ -555,6 +555,66 @@ def test_interactive_compile_loop_redacts_validation_exception_text(
     assert "raw validation row" not in feedback_text
 
 
+def test_interactive_compile_loop_turns_digest_failure_into_safe_feedback(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "\n".join(
+                [
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('digestbad', ['a'])",
+                ]
+            ),
+        )
+    )
+
+    def fail_digest(path: Path) -> str:
+        raise RuntimeError("expected_output token=secret while hashing")
+
+    monkeypatch.setattr(
+        "darjeeling.compile_orchestration._submission_content_digest",
+        fail_digest,
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["failed_submission_count"] == 1
+    assert result["stop_reason"] == "candidate_limit"
+    assert result["closed_attempt_status"] == "closed"
+    feedback = json.loads(
+        (attempt.workspace_path / "journal" / "feedback-digestbad.json").read_text()
+    )
+    assert feedback["summary"]["safe_error_message"] == "The request failed at runtime."
+    ledger = json.loads(
+        (attempt.workspace_path / "journal" / "evaluated_submissions.json").read_text()
+    )
+    assert ledger[0]["submission_digest"].startswith("digest_failed:")
+    feedback_text = json.dumps(feedback)
+    assert "expected_output" not in feedback_text
+    assert "secret" not in feedback_text
+
+
 def test_interactive_compile_loop_waits_for_ready_marker_before_evaluating(
     target_dir: Path, tmp_path: Path, now
 ) -> None:

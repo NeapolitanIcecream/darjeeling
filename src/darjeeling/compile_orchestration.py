@@ -334,6 +334,10 @@ def _submission_content_digest(path: Path) -> str:
     return stable_hash(entries)
 
 
+def _submission_digest_failure_marker(submission_id: str) -> str:
+    return f"digest_failed:{stable_hash(submission_id)}"
+
+
 def _ledger_path(attempt: AgentAttempt) -> Path:
     return attempt.workspace_path / "journal" / "evaluated_submissions.json"
 
@@ -647,13 +651,14 @@ def run_interactive_compile_loop(
             for path in submissions_dir.iterdir()
             if path.is_dir() and _submission_ready(path)
         ):
-            submission_digest = _submission_content_digest(submission_path)
-            if _ledger_contains(ledger, submission_path.name, submission_digest):
-                continue
             if evaluated_count >= compile_run.budget.max_candidates:
                 return "candidate_limit"
             candidate_cost: float | None = None
+            submission_digest: str | None = None
             try:
+                submission_digest = _submission_content_digest(submission_path)
+                if _ledger_contains(ledger, submission_path.name, submission_digest):
+                    continue
                 submission = receive_candidate_submission(attempt, submission_path)
                 evaluation = evaluate_candidate_on_validation(
                     submission,
@@ -689,6 +694,10 @@ def run_interactive_compile_loop(
                 )
                 feedback_count += 1
             except Exception as exc:
+                if submission_digest is None:
+                    submission_digest = _submission_digest_failure_marker(submission_path.name)
+                if _ledger_contains(ledger, submission_path.name, submission_digest):
+                    continue
                 feedback = _safe_failure_feedback(submission_path.name, exc)
                 feedback_record = provide_validation_feedback(attempt, feedback)
                 ledger.append(
