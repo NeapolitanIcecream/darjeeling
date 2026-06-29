@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from darjeeling.agent_workspace import (
+    _read_session_record_for_handle,
     candidate_submission_ready,
     close_agent_attempt,
     core_attempt_state_dir,
@@ -518,11 +519,7 @@ def _agent_session_elapsed_seconds(
 ) -> float:
     started_at = handle.started_at
     if started_at is None and handle.session_record_path is not None:
-        record = (
-            read_json(handle.session_record_path)
-            if handle.session_record_path.exists()
-            else {}
-        )
+        record = _read_session_record_for_handle(handle)
         raw_started = record.get("started_at")
         if isinstance(raw_started, str):
             try:
