@@ -18,6 +18,7 @@ from darjeeling.agent_workspace import (
 )
 from darjeeling.artifact_worker import build_protocol_docs
 from darjeeling.compile_orchestration import (
+    _submission_content_digest,
     plan_compile_launch,
     run_interactive_compile_loop,
     start_compile_launch,
@@ -158,6 +159,23 @@ def _launch_interactive_agent(
         },
     )
     return definition, contract, release, snapshot, compile_run, attempt, handle
+
+
+def test_submission_content_digest_includes_symlink_target(tmp_path: Path) -> None:
+    submission = tmp_path / "submission"
+    layer = submission / "artifacts" / "l1"
+    layer.mkdir(parents=True)
+    (layer / "artifact.yaml").write_text("api_version: v1\nlayer: L1\n", encoding="utf-8")
+    (layer / "v1.py").write_text("print('v1')\n", encoding="utf-8")
+    (layer / "v2.py").write_text("print('v2')\n", encoding="utf-8")
+    worker = layer / "worker.py"
+    worker.symlink_to("v1.py")
+
+    first_digest = _submission_content_digest(submission)
+    worker.unlink()
+    worker.symlink_to("v2.py")
+
+    assert _submission_content_digest(submission) != first_digest
 
 
 def test_interactive_compile_loop_writes_feedback_while_agent_is_running(

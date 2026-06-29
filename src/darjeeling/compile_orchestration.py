@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import replace
 from datetime import datetime
@@ -329,7 +330,7 @@ def _submission_content_digest(path: Path) -> str:
         if item.is_file() and not item.is_symlink():
             entries.append((rel, file_digest(item)))
         elif item.is_symlink():
-            entries.append((rel, "symlink"))
+            entries.append((rel, f"symlink:{os.readlink(item)}"))
     return stable_hash(entries)
 
 
