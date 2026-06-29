@@ -409,15 +409,12 @@ def _live_compile_cost(
 
 
 def _safe_failure_feedback(submission_id: str, exc: Exception) -> AgentFeedback:
-    message = str(exc).strip()
-    if not message or any(term in message.lower() for term in ["secret", "token", "password"]):
-        message = safe_public_error("runtime_error")
     return AgentFeedback(
         candidate_id=submission_id,
         summary={
             "status": "evaluation_failed",
             "error_class": exc.__class__.__name__,
-            "safe_error_message": message[:300],
+            "safe_error_message": safe_public_error("runtime_error"),
         },
         requirement_results=[],
         metrics={},
@@ -724,7 +721,7 @@ def run_interactive_compile_loop(
             break
         if (
             compile_run.budget.max_agent_seconds > 0
-            and elapsed >= compile_run.budget.max_agent_seconds
+            and agent_elapsed >= compile_run.budget.max_agent_seconds
         ):
             stop_reason = "time_limit"
             break

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -311,6 +312,43 @@ def test_interactive_compile_loop_stops_running_agent_at_time_limit(
     assert session["status"] == "timed_out"
 
 
+def test_interactive_compile_loop_counts_compile_budget_from_agent_start(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=1, max_candidates=1),
+            "import time; time.sleep(30)",
+        )
+    )
+    handle = replace(handle, started_at=utcnow() - timedelta(seconds=2))
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 0
+    assert result["stop_reason"] == "time_limit"
+    assert result["closed_attempt_status"] == "closed"
+    assert result["elapsed_seconds"] < 0.5
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["status"] == "timed_out"
+
+
 def test_interactive_compile_loop_honors_agent_timeout_before_compile_budget(
     target_dir: Path, tmp_path: Path, now
 ) -> None:
@@ -444,6 +482,59 @@ def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(
     feedback_text = json.dumps(feedback)
     assert "r2" not in feedback_text
     assert "expected_output" not in feedback_text
+
+
+def test_interactive_compile_loop_redacts_validation_exception_text(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "\n".join(
+                [
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('leaky', ['a'])",
+                ]
+            ),
+        )
+    )
+
+    def fail_validation(*args, **kwargs):
+        raise RuntimeError("expected_output r2 token=secret raw validation row")
+
+    monkeypatch.setattr(
+        "darjeeling.compile_orchestration.evaluate_candidate_on_validation",
+        fail_validation,
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["failed_submission_count"] == 1
+    feedback = json.loads((attempt.workspace_path / "journal" / "feedback-leaky.json").read_text())
+    assert feedback["summary"]["safe_error_message"] == "The request failed at runtime."
+    feedback_text = json.dumps(feedback)
+    assert "expected_output" not in feedback_text
+    assert "secret" not in feedback_text
+    assert "raw validation row" not in feedback_text
 
 
 def test_interactive_compile_loop_waits_for_ready_marker_before_evaluating(
