@@ -11,8 +11,8 @@ body:
   - type: textarea
     id: workload
     attributes:
-      label: What repeated LLM work would you try?
-      description: Describe the request shape, output shape, and why it repeats.
+      label: What LLM capability or workflow would you try?
+      description: Describe the request shape, output shape, and reliability boundary.
     validations:
       required: true
   - type: textarea

@@ -77,13 +77,15 @@ gh repo view NeapolitanIcecream/darjeeling --json hasIssuesEnabled
 Status: manual.
 
 Upload `docs/assets/social-preview.png`. GitHub recommends PNG, JPG, or GIF
-under 1 MB; this PNG is 1280x640 and about 46 KB. The source SVG lives at
-`docs/assets/social-preview.svg`. The design uses the launch text:
+under 1 MB; this PNG is 1280x640. The design uses this copy:
 
 Reference: `https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview`
 
 ```text
-Local when safe. Fallback when needed.
+Darjeeling
+Turn LLM capabilities into local paths
+Code and small models answer when safe.
+The main LLM handles the rest.
 ```
 
 Manual steps:

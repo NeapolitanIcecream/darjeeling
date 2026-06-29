@@ -1,7 +1,7 @@
 # Darjeeling
 
-Darjeeling helps LLM apps get faster and cheaper by safely moving repeatable
-work out of the main model and into local code or small models.
+Darjeeling helps LLM apps get faster and cheaper by turning well-bounded model
+capabilities into local code and small models.
 
 Local artifacts answer only when they are inside a checked reliability boundary.
 Hard or unfamiliar requests still fall back to the main LLM, so the runtime can
@@ -23,10 +23,10 @@ estimated saving. It uses toy data and does not spend API credits.
 
 ## Why This Exists
 
-Many LLM products contain repeated structured work. Some requests become stable
-enough to handle locally; others still need a strong model. Darjeeling provides
-the runtime and evaluation loop for moving stable behavior into local artifacts
-while keeping fallback, validation, tracing, and recompile paths explicit.
+Many LLM products contain structured behavior that can become reliable outside
+the main model. Darjeeling provides the runtime and evaluation loop for moving
+that behavior into local artifacts while keeping fallback, validation, tracing,
+and recompile paths explicit.
 
 Darjeeling is not a cache. A cache can reuse an exact previous answer.
 Darjeeling can route a new request to a local artifact when that artifact has
@@ -46,8 +46,8 @@ Current non-goals:
 - replacing hosted LLMs;
 - broad claims about arbitrary open-ended chat workloads.
 
-The clearest initial fit is repeated structured LLM work where local artifacts
-can safely accept some requests and fall back on the rest.
+The clearest initial fit is structured LLM workflows where local artifacts can
+safely accept some requests and fall back on the rest.
 
 ## Install
 

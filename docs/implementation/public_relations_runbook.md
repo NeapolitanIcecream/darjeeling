@@ -9,10 +9,10 @@ level.
 
 Use this as the public-facing one-line narrative:
 
-> Darjeeling is a runtime for LLM applications that moves stable, repeated work
-> into fast local artifacts, such as deterministic code, compact neural
-> networks, and small local models, while falling back to an LLM when the local
-> path is not reliable.
+> Darjeeling is a runtime for LLM applications that turns well-bounded model
+> capabilities into fast local artifacts, such as deterministic code, compact
+> neural networks, and small local models, while falling back to an LLM when the
+> local path is not reliable.
 
 The first-screen narrative should avoid internal layer names such as L1, L2,
 L3, or L4. Those names are useful implementation language, but they are not how
@@ -20,13 +20,13 @@ new users should first understand the project.
 
 Recommended short version:
 
-> Darjeeling helps LLM apps get faster and cheaper by safely moving repeatable
-> work out of the main model and into local code or small models.
+> Darjeeling helps LLM apps get faster and cheaper by turning well-bounded model
+> capabilities into local code and small models.
 
 Recommended longer version:
 
-> Darjeeling is a runtime for LLM applications with repeated structured work. It
-> identifies cases that are stable enough to handle locally, turns them into
+> Darjeeling is a runtime for LLM applications with structured behavior that can
+> become reliable outside the main model. It turns those capabilities into
 > deterministic code, compact neural networks, or small local models, and uses
 > those artifacts only when they are reliable. Hard or unfamiliar requests still
 > go to the main LLM, so the system can reduce latency and inference cost
@@ -81,20 +81,20 @@ Suggested structure:
 ```md
 # Darjeeling
 
-Darjeeling is a runtime for LLM applications that moves stable, repeated work
-into fast local artifacts, such as deterministic code, compact neural networks,
-and small local models, while falling back to an LLM when the local path is not
-reliable.
+Darjeeling is a runtime for LLM applications that turns well-bounded model
+capabilities into fast local artifacts, such as deterministic code, compact
+neural networks, and small local models, while falling back to an LLM when the
+local path is not reliable.
 
 Local artifacts answer only when they are inside a checked reliability boundary.
 Otherwise, Darjeeling falls back to the main LLM.
 
 ## Why This Exists
 
-Many LLM products have repeated structured work. Some requests become stable
-enough to handle locally; others still need a strong model. Darjeeling provides
-the runtime and evaluation loop for moving stable behavior into local artifacts
-while keeping fallback, validation, tracing, and recompile paths explicit.
+Many LLM products contain structured behavior that can become reliable outside
+the main model. Darjeeling provides the runtime and evaluation loop for moving
+that behavior into local artifacts while keeping fallback, validation, tracing,
+and recompile paths explicit.
 ```
 
 The README can introduce internal layers later under "How it works".
@@ -166,9 +166,9 @@ agentic-ai
 ```
 
 Add a social preview image with a simple request-to-local-artifact-to-fallback
-diagram. Keep the text short:
+diagram. Keep the text short. The current preview uses:
 
-> Local when safe. Fallback when needed.
+> Turn LLM capabilities into local paths
 
 ### 5. Add Minimum Project Trust Files
 
@@ -202,8 +202,9 @@ The release notes should say:
 
 Use this order in posts, articles, and README sections:
 
-1. Repeated LLM work creates latency and inference-cost pressure.
-2. Some behavior becomes stable enough to run locally.
+1. LLM capabilities that could run locally still create latency and
+   inference-cost pressure.
+2. Some behavior becomes bounded and reliable enough for local artifacts.
 3. Darjeeling turns that behavior into local artifacts.
 4. Local artifacts can refuse, so unfamiliar requests fall back.
 5. The system measures precision, coverage, latency, fallback share, and cost.
@@ -249,14 +250,14 @@ After the README and demo are stable:
 
 Potential launch headline:
 
-> Darjeeling: a runtime for moving repeated LLM work into local artifacts with
+> Darjeeling: a runtime for turning LLM capabilities into local artifacts with
 > safe fallback
 
 Potential short post:
 
-> I released Darjeeling, an alpha runtime for LLM applications that moves
-> stable, repeated work into deterministic code, compact neural networks, and
-> small local models.
+> I released Darjeeling, an alpha runtime for LLM applications that turns
+> well-bounded model capabilities into deterministic code, compact neural
+> networks, and small local models.
 >
 > Local artifacts answer only inside a checked reliability boundary. Everything
 > else falls back to the main LLM. The goal is lower latency and lower inference
@@ -291,14 +292,14 @@ Do not claim:
 - zero-cost inference.
 
 Do not make broad claims about arbitrary open-ended chat workloads. The clearest
-initial fit is repeated structured LLM work where local artifacts can safely
-accept some requests and fall back on the rest.
+initial fit is structured LLM workflows where local artifacts can safely accept
+some requests and fall back on the rest.
 
 ## Done Criteria
 
 The public launch preparation is complete when:
 
-- README first screen explains moving stable repeated LLM work into local
+- README first screen explains turning well-bounded LLM capabilities into local
   artifacts with fallback;
 - packaging and command names are consistent;
 - a five-minute demo exists and passes from a clean checkout;
