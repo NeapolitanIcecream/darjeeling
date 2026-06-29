@@ -1121,14 +1121,21 @@ def _recorded_agent_process_matches(
     return True
 
 
-def _stop_recorded_agent_process(record: dict[str, Any], timeout_seconds: float) -> None:
-    if not _recorded_agent_process_matches(record, require_start_token=True):
+def _stop_recorded_agent_process(
+    record: dict[str, Any],
+    timeout_seconds: float,
+    *,
+    require_process_match: bool = True,
+) -> None:
+    if require_process_match and not _recorded_agent_process_matches(
+        record, require_start_token=True
+    ):
         return
     pid = _session_record_pid(record)
-    if pid is None:
-        return
     process_group_id = record.get("process_group_id")
     if not isinstance(process_group_id, int) or process_group_id <= 0:
+        if pid is None:
+            return
         process_group_id = _process_group_id(pid)
     if process_group_id is not None:
         _stop_process_group(process_group_id, timeout_seconds)
@@ -1155,6 +1162,10 @@ def stop_agent_session(
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+    elif process is not None and recorded_pid == process.pid:
+        _stop_recorded_agent_process(
+            record, timeout_seconds, require_process_match=False
+        )
     elif process is None and pid is not None:
         _stop_recorded_agent_process(record, timeout_seconds)
     returncode = process.returncode if process is not None else None

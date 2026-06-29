@@ -830,9 +830,9 @@ def test_close_agent_attempt_stops_persisted_async_pid_when_process_map_is_empty
         agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
 
 
-def test_stop_agent_session_kills_agent_process_group_children(
-    target_dir: Path, tmp_path: Path, now
-) -> None:
+def _launch_process_test_agent(
+    target_dir: Path, tmp_path: Path, now, agent_code: str
+):
     definition, contract, check = load_checked_target(target_dir)
     registry = __import__("darjeeling.model").model.ReleaseRegistry()
     release = create_release_without_artifacts(
@@ -875,6 +875,17 @@ def test_stop_agent_session_kills_agent_process_group_children(
         attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
     )
     brief = write_agent_brief(attempt, compile_run, manifest, {})
+    handle = launch_target_adaptation_agent_async(
+        attempt,
+        brief,
+        {"command": ["/usr/bin/python3", "-c", agent_code]},
+    )
+    return attempt, handle
+
+
+def test_stop_agent_session_kills_agent_process_group_children(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
     agent_code = "\n".join(
         [
             "from pathlib import Path",
@@ -892,15 +903,46 @@ def test_stop_agent_session_kills_agent_process_group_children(
             "time.sleep(30)",
         ]
     )
-    handle = launch_target_adaptation_agent_async(
-        attempt,
-        brief,
-        {"command": ["/usr/bin/python3", "-c", agent_code]},
-    )
+    attempt, handle = _launch_process_test_agent(target_dir, tmp_path, now, agent_code)
     child_pid_path = attempt.workspace_path / "journal" / "child.pid"
     _wait_for_path(child_pid_path)
     child_pid = int(child_pid_path.read_text(encoding="utf-8"))
     try:
+        stop_agent_session(handle, reason="time_limit", timeout_seconds=0.2)
+        time.sleep(1.2)
+        assert not (attempt.workspace_path / "journal" / "child-survived.txt").exists()
+    finally:
+        if _process_alive(child_pid):
+            subprocess.run(["kill", "-9", str(child_pid)], check=False)
+        agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
+
+
+def test_stop_agent_session_kills_recorded_group_after_agent_parent_exits(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    agent_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import os",
+            "import signal",
+            "import time",
+            "pid = os.fork()",
+            "if pid == 0:",
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            "    time.sleep(1.0)",
+            "    Path('journal/child-survived.txt').write_text('survived', encoding='utf-8')",
+            "    time.sleep(30)",
+            "    os._exit(0)",
+            "Path('journal/child.pid').write_text(str(pid), encoding='utf-8')",
+        ]
+    )
+    attempt, handle = _launch_process_test_agent(target_dir, tmp_path, now, agent_code)
+    child_pid_path = attempt.workspace_path / "journal" / "child.pid"
+    _wait_for_path(child_pid_path)
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    process = agent_workspace_module._LIVE_AGENT_PROCESSES[attempt.attempt_id]
+    try:
+        process.wait(timeout=2.0)
         stop_agent_session(handle, reason="time_limit", timeout_seconds=0.2)
         time.sleep(1.2)
         assert not (attempt.workspace_path / "journal" / "child-survived.txt").exists()

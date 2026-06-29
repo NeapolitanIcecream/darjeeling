@@ -776,6 +776,7 @@ def run_interactive_compile_loop(
                     reason = current_stop_reason()
                     if reason is not None:
                         stop_running_agent(reason)
+                        raise TimeoutError(f"validation stopped after {reason}")
                     if status == "ok":
                         return payload
                     if status == "error":
