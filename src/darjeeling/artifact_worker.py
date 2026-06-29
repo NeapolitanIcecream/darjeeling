@@ -37,6 +37,7 @@ from darjeeling.model import (
     WorkerResponse,
     WorkerStopResult,
 )
+from darjeeling.portable_sandbox import build_python_sandbox_command, is_python_command
 from darjeeling.util import bounded_code, file_digest, new_id, stable_hash, tree_digest, write_json
 
 _PACKAGE_METADATA_NAME = ".darjeeling-package.json"
@@ -355,8 +356,6 @@ def _worker_sandbox_command(
     command: list[str] | None = None,
 ) -> list[str]:
     sandbox_exec = shutil.which("sandbox-exec")
-    if sandbox_exec is None:
-        raise ArtifactError("sandbox-exec is required for artifact worker isolation")
     package_path = runtime_package_path
     repo_root = Path(__file__).resolve().parents[2]
     protected: list[Path] = []
@@ -379,14 +378,6 @@ def _worker_sandbox_command(
         ):
             if not _path_contains(path, package_path) and not _path_contains(path, scratch_path):
                 _append_protected_path(protected, path)
-    profile_path = scratch_path / _SANDBOX_PROFILE_NAME
-    lines = ["(version 1)", "(allow default)", "(deny network*)"]
-    lines.append(f"(deny file-write* (subpath {_sandbox_path(package_path)}))")
-    for path in protected:
-        if path.exists():
-            lines.append(f"(deny file-read* (subpath {_sandbox_path(path)}))")
-            lines.append(f"(deny file-write* (subpath {_sandbox_path(path)}))")
-    profile_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     sandboxed_command = list(command or worker.package.manifest.start_command)
     executable = (
         "/usr/bin/python3"
@@ -395,6 +386,28 @@ def _worker_sandbox_command(
     )
     if executable:
         sandboxed_command[0] = executable
+    if sandbox_exec is None:
+        if not is_python_command(sandboxed_command):
+            raise ArtifactError(
+                "sandbox-exec or a Python artifact command is required for worker isolation"
+            )
+        return build_python_sandbox_command(
+            sandboxed_command,
+            cwd=package_path,
+            config_path=scratch_path / "python_sandbox.json",
+            allowed_read_roots=[package_path, scratch_path],
+            allowed_write_roots=[scratch_path],
+            denied_read_roots=protected,
+            denied_write_roots=[package_path, *protected],
+        )
+    profile_path = scratch_path / _SANDBOX_PROFILE_NAME
+    lines = ["(version 1)", "(allow default)", "(deny network*)"]
+    lines.append(f"(deny file-write* (subpath {_sandbox_path(package_path)}))")
+    for path in protected:
+        if path.exists():
+            lines.append(f"(deny file-read* (subpath {_sandbox_path(path)}))")
+            lines.append(f"(deny file-write* (subpath {_sandbox_path(path)}))")
+    profile_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return [sandbox_exec, "-f", str(profile_path), *sandboxed_command]
 
 
