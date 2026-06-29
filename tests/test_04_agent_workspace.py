@@ -19,6 +19,7 @@ from darjeeling.agent_workspace import (
     launch_target_adaptation_agent_async,
     load_target_workspace,
     mount_readonly_inputs,
+    poll_agent_session,
     provide_validation_feedback,
     receive_candidate_submission,
     run_compile_loop,
@@ -36,6 +37,7 @@ from darjeeling.errors import WorkspaceError
 from darjeeling.model import (
     AgentAttemptOptions,
     AgentFeedback,
+    AgentSessionHandle,
     AgentUsageLedger,
     AgentVisibleTelemetrySummary,
     ApprovalRecord,
@@ -760,6 +762,43 @@ def test_close_agent_attempt_stops_persisted_async_pid_when_process_map_is_empty
             process.kill()
             process.wait()
         agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
+
+
+def test_poll_agent_session_marks_missing_persisted_pid_failed(tmp_path: Path) -> None:
+    attempt_id = "attempt-missing-pid"
+    attempt_path = tmp_path / "attempt"
+    journal_session = attempt_path / "journal" / "agent_session.json"
+    core_session = attempt_path.parent / "_core" / attempt_id / "agent_session.json"
+    log_path = attempt_path / "journal" / "agent.log"
+    record = {
+        "attempt_id": attempt_id,
+        "command": ["/usr/bin/python3", "-c", "raise SystemExit(0)"],
+        "sandbox_profile": None,
+        "sandbox_mode": "portable_python",
+        "status": "running",
+        "pid": 999999999,
+        "started_at": utcnow(),
+        "log_path": log_path,
+        "timeout_seconds": 10,
+    }
+    write_json(journal_session, record)
+    write_json(core_session, record)
+    handle = AgentSessionHandle(
+        attempt_id=attempt_id,
+        status="running",
+        pid=999999999,
+        session_record_path=journal_session,
+        timeout_seconds=10,
+    )
+
+    updated = poll_agent_session(handle)
+
+    session = json.loads(journal_session.read_text())
+    core_record = json.loads(core_session.read_text())
+    assert updated.status == "failed"
+    assert session["status"] == "failed"
+    assert core_record["status"] == "failed"
+    assert session["returncode"] is None
 
 
 def test_baseline_advances_only_with_accepted_release_or_explicit_carry_forward(

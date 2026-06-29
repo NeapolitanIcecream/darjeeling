@@ -931,6 +931,30 @@ def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
             record = _read_session_record_for_handle(handle)
             if not record:
                 return handle
+            recorded_pid = _session_record_pid(record)
+            if record.get("status") == "running" and recorded_pid is not None:
+                if not _pid_exists(recorded_pid):
+                    _write_completed_session_record(
+                        attempt_id=handle.attempt_id,
+                        command=list(record.get("command", handle.command)),
+                        sandbox_profile=Path(record["sandbox_profile"])
+                        if record.get("sandbox_profile")
+                        else None,
+                        sandbox_mode=record.get("sandbox_mode")
+                        or handle.sandbox_mode
+                        or "unknown",
+                        started_at=record.get("started_at") or handle.started_at or utcnow(),
+                        session_record=handle.session_record_path,
+                        log_path=Path(record.get("log_path") or handle.log_path or ""),
+                        status="failed",
+                        returncode=None,
+                        timeout_seconds=(
+                            handle.timeout_seconds
+                            if handle.timeout_seconds is not None
+                            else record.get("timeout_seconds")
+                        ),
+                    )
+                    return replace(handle, status="failed", pid=recorded_pid)
             return replace(
                 handle,
                 status=record.get("status", handle.status),
