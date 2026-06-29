@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import time
 from dataclasses import replace
 from datetime import timedelta
@@ -94,6 +96,16 @@ allowed_reason_codes:
 ''', encoding="utf-8")
     (Path("submissions") / candidate / "READY").write_text("ready\\n", encoding="utf-8")
 """
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _launch_interactive_agent(
@@ -624,6 +636,57 @@ def test_interactive_compile_loop_honors_agent_timeout_before_compile_budget(
     assert session["timeout_seconds"] == 1
 
 
+def test_interactive_compile_loop_reads_resumed_timeout_from_core_record(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=30, max_candidates=1),
+            "import time; time.sleep(30)",
+            agent_timeout_seconds=5,
+        )
+    )
+    journal_session_path = attempt.workspace_path / "journal" / "agent_session.json"
+    core_session_path = (
+        attempt.workspace_path.parent / "_core" / attempt.attempt_id / "agent_session.json"
+    )
+    journal_session = json.loads(journal_session_path.read_text())
+    core_session = json.loads(core_session_path.read_text())
+    journal_session["started_at"] = (utcnow() + timedelta(hours=1)).isoformat()
+    journal_session["timeout_seconds"] = 1000
+    core_session["started_at"] = (utcnow() - timedelta(seconds=10)).isoformat()
+    core_session["timeout_seconds"] = 5
+    journal_session_path.write_text(json.dumps(journal_session), encoding="utf-8")
+    core_session_path.write_text(json.dumps(core_session), encoding="utf-8")
+    resumed_handle = replace(handle, started_at=None, timeout_seconds=None)
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        resumed_handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 0
+    assert result["stop_reason"] == "time_limit"
+    assert result["closed_attempt_status"] == "closed"
+    assert result["elapsed_seconds"] < 0.5
+    session = json.loads(journal_session_path.read_text())
+    assert session["status"] == "timed_out"
+    assert session["timeout_seconds"] == 5
+
+
 def test_interactive_compile_loop_stops_agent_when_timeout_expires_during_validation(
     target_dir: Path, tmp_path: Path, now, monkeypatch
 ) -> None:
@@ -686,6 +749,98 @@ def test_interactive_compile_loop_stops_agent_when_timeout_expires_during_valida
     session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
     assert session["status"] == "timed_out"
     assert session["stop_reason"] == "time_limit"
+
+
+def test_interactive_compile_loop_stops_validation_process_group_children(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=10, max_candidates=2, max_cost=2.0),
+            "\n".join(
+                [
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('hangvalid', ['a'])",
+                    "time.sleep(30)",
+                ]
+            ),
+        )
+    )
+    child_pid_path = attempt.workspace_path / "journal" / "validation-grandchild.pid"
+    child_ready_path = attempt.workspace_path / "journal" / "validation-grandchild.ready"
+    survived_path = attempt.workspace_path / "journal" / "validation-grandchild-survived.txt"
+    original_evaluate = compile_orchestration_module.evaluate_candidate_on_validation
+
+    def hanging_validation(*args, **kwargs):
+        pid = os.fork()
+        if pid == 0:
+            try:
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                child_ready_path.write_text(str(os.getpid()), encoding="utf-8")
+                time.sleep(1.0)
+                survived_path.write_text("survived\n", encoding="utf-8")
+                time.sleep(30)
+            finally:
+                os._exit(0)
+        child_pid_path.write_text(str(pid), encoding="utf-8")
+        deadline = time.monotonic() + 1.0
+        while not child_ready_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        (attempt.workspace_path / "journal" / "agent_usage.json").write_text(
+            '[{"kind":"agent","cost":3.0,"metadata":{}}]\n',
+            encoding="utf-8",
+        )
+        time.sleep(30)
+        return original_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "darjeeling.compile_orchestration.evaluate_candidate_on_validation",
+        hanging_validation,
+    )
+
+    try:
+        result = run_interactive_compile_loop(
+            compile_run,
+            attempt,
+            handle,
+            definition,
+            contract,
+            snapshot.snapshot,
+            release,
+            snapshot.reference_qualification,
+            snapshot.reference_usage,
+            {"serving_l4_cost": 1.0},
+            {"artifact_store": tmp_path / "artifacts"},
+            poll_interval_seconds=0.02,
+        )
+
+        assert result["evaluated_submission_count"] == 1
+        assert result["feedback_count"] == 0
+        assert result["failed_submission_count"] == 1
+        assert result["stop_reason"] == "budget_exhausted"
+        assert result["closed_attempt_status"] == "closed"
+        assert result["total_candidate_cost"] == 3.0
+        assert child_ready_path.exists()
+        time.sleep(1.2)
+        assert not survived_path.exists()
+        feedback = json.loads(
+            (attempt.workspace_path / "journal" / "feedback-hangvalid.json").read_text()
+        )
+        assert feedback["summary"]["status"] == "evaluation_failed"
+    finally:
+        if child_pid_path.exists():
+            pid = int(child_pid_path.read_text())
+            if _pid_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 def test_interactive_compile_loop_honors_live_agent_usage_cost_budget(

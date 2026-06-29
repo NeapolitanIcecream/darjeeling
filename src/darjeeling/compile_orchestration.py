@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import signal
 import time
 from dataclasses import asdict, replace
 from datetime import datetime
@@ -511,6 +512,11 @@ def _agent_session_timeout_seconds(handle: AgentSessionHandle) -> float | None:
     timeout_seconds = handle.timeout_seconds
     if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
         return float(timeout_seconds)
+    if handle.session_record_path is not None:
+        record = _read_session_record_for_handle(handle)
+        timeout_seconds = record.get("timeout_seconds")
+        if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
+            return float(timeout_seconds)
     return None
 
 
@@ -535,10 +541,77 @@ class ValidationProcessError(RuntimeError):
     pass
 
 
+def _enter_validation_process_group() -> int | None:
+    try:
+        os.setsid()
+    except (AttributeError, OSError):
+        return None
+    try:
+        process_group_id = os.getpgrp()
+    except (AttributeError, OSError):
+        return None
+    return process_group_id if process_group_id == os.getpid() else None
+
+
+def _validation_process_group_id(process: mp.Process) -> int | None:
+    pid = process.pid
+    if pid is None:
+        return None
+    try:
+        process_group_id = os.getpgid(pid)
+    except (AttributeError, ProcessLookupError, OSError):
+        return None
+    if process_group_id != pid:
+        return None
+    return process_group_id
+
+
+def _signal_validation_process_group(
+    process_group_id: int, sig: signal.Signals
+) -> bool:
+    try:
+        os.killpg(process_group_id, sig)
+        return True
+    except (AttributeError, ProcessLookupError, OSError):
+        return False
+
+
+def _stop_validation_process(
+    process: mp.Process,
+    process_group_id: int | None = None,
+    timeout_seconds: float = 0.2,
+) -> None:
+    if process_group_id is None and process.is_alive():
+        process_group_id = _validation_process_group_id(process)
+    if not process.is_alive():
+        process.join(timeout=0)
+        if process_group_id is not None:
+            _signal_validation_process_group(process_group_id, signal.SIGKILL)
+        return
+    signaled_process_group = process_group_id is not None and _signal_validation_process_group(
+        process_group_id, signal.SIGTERM
+    )
+    if not signaled_process_group:
+        process.terminate()
+    process.join(timeout=timeout_seconds)
+    if signaled_process_group and process_group_id is not None:
+        _signal_validation_process_group(process_group_id, signal.SIGKILL)
+        process.join(timeout=timeout_seconds)
+    if not process.is_alive():
+        return
+    if process_group_id is None or not _signal_validation_process_group(
+        process_group_id, signal.SIGKILL
+    ):
+        process.kill()
+    process.join()
+
+
 def _validation_process_main(
     connection: Any,
     args: tuple[Any, ...],
 ) -> None:
+    process_group_id = _enter_validation_process_group()
+    connection.send(("process_group", process_group_id))
     try:
         connection.send(("ok", evaluate_candidate_on_validation(*args)))
     except BaseException as exc:
@@ -765,13 +838,19 @@ def run_interactive_compile_loop(
         )
         process.start()
         child_connection.close()
+        validation_process_group_id: int | None = None
         try:
             while True:
                 if parent_connection.poll(poll_interval_seconds):
                     status, payload = parent_connection.recv()
+                    if status == "process_group":
+                        if isinstance(payload, int) and payload > 0:
+                            validation_process_group_id = payload
+                        continue
                     process.join(timeout=1.0)
                     reason = current_stop_reason()
                     if reason is not None:
+                        _stop_validation_process(process, validation_process_group_id)
                         stop_running_agent(reason)
                         raise TimeoutError(f"validation stopped after {reason}")
                     if status == "ok":
@@ -782,22 +861,12 @@ def run_interactive_compile_loop(
                 reason = current_stop_reason()
                 if reason is None:
                     continue
+                _stop_validation_process(process, validation_process_group_id)
                 stop_running_agent(reason)
-                if process.is_alive():
-                    process.terminate()
-                    process.join(timeout=1.0)
-                if process.is_alive():
-                    process.kill()
-                    process.join()
                 raise TimeoutError(f"validation stopped after {reason}")
         finally:
             parent_connection.close()
-            if process.is_alive():
-                process.terminate()
-                process.join(timeout=1.0)
-            if process.is_alive():
-                process.kill()
-                process.join()
+            _stop_validation_process(process, validation_process_group_id)
 
     def drain_ready_submissions() -> str | None:
         nonlocal evaluated_count, feedback_count, failed_count, total_candidate_cost
