@@ -18,6 +18,7 @@ from darjeeling.agent_workspace import (
     launch_target_adaptation_agent_async,
     load_target_workspace,
     mount_readonly_inputs,
+    stop_agent_session,
     write_agent_brief,
 )
 from darjeeling.artifact_worker import build_protocol_docs
@@ -1167,6 +1168,44 @@ def test_interactive_compile_loop_overwrites_stale_evaluation_contract(
     assert result["evaluated_submission_count"] == 1
     assert result["feedback_count"] == 1
     assert seen_contract_path.read_text(encoding="utf-8") == "True"
+
+
+def test_interactive_compile_loop_rejects_stale_snapshot_scope(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=1),
+            "raise SystemExit(0)",
+        )
+    )
+    stale_snapshot = replace(
+        snapshot.snapshot,
+        snapshot_id="stale-snapshot",
+        snapshot_digest="stale-digest",
+    )
+
+    try:
+        with pytest.raises(CompileLaunchError, match="scope mismatch"):
+            run_interactive_compile_loop(
+                compile_run,
+                attempt,
+                handle,
+                definition,
+                contract,
+                stale_snapshot,
+                release,
+                snapshot.reference_qualification,
+                snapshot.reference_usage,
+                {"serving_l4_cost": 1.0},
+                {"artifact_store": tmp_path / "artifacts"},
+                poll_interval_seconds=0.02,
+            )
+    finally:
+        stop_agent_session(handle, reason="stopped", timeout_seconds=0.2)
 
 
 def test_interactive_compile_loop_turns_broken_candidate_into_safe_feedback(

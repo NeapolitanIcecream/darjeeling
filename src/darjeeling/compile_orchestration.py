@@ -510,6 +510,37 @@ def _close_reason_for_agent_status(status: str) -> str:
     return "ready_for_test"
 
 
+def _check_interactive_loop_scope(
+    compile_run: CompileRun,
+    attempt: AgentAttempt,
+    agent_handle: AgentSessionHandle,
+    definition: TargetDefinition,
+    contract: TargetRuntimeContract,
+    snapshot: Any,
+    base_release: Release,
+    reference_qualification: Any,
+) -> None:
+    if attempt.compile_id != compile_run.compile_id:
+        raise CompileLaunchError("agent attempt does not match compile run")
+    if agent_handle.attempt_id != attempt.attempt_id:
+        raise CompileLaunchError("agent handle does not match agent attempt")
+    if (
+        compile_run.target_name != definition.name
+        or compile_run.contract_hash != definition.contract_hash
+        or contract.contract_hash != definition.contract_hash
+        or snapshot.target_name != definition.name
+        or snapshot.contract_hash != definition.contract_hash
+        or compile_run.snapshot_id != snapshot.snapshot_id
+        or compile_run.snapshot_digest != snapshot.snapshot_digest
+        or base_release.release_id != compile_run.base_release_id
+        or base_release.target_name != definition.name
+        or base_release.contract_hash != definition.contract_hash
+        or reference_qualification.target_name != definition.name
+        or reference_qualification.contract_hash != definition.contract_hash
+    ):
+        raise CompileLaunchError("interactive compile scope mismatch")
+
+
 def _agent_session_timeout_seconds(handle: AgentSessionHandle) -> float | None:
     if handle.session_record_path is not None:
         record = _read_session_record_for_handle(handle)
@@ -747,10 +778,16 @@ def run_interactive_compile_loop(
     *,
     poll_interval_seconds: float = 0.05,
 ) -> dict[str, Any]:
-    if attempt.compile_id != compile_run.compile_id:
-        raise CompileLaunchError("agent attempt does not match compile run")
-    if agent_handle.attempt_id != attempt.attempt_id:
-        raise CompileLaunchError("agent handle does not match agent attempt")
+    _check_interactive_loop_scope(
+        compile_run,
+        attempt,
+        agent_handle,
+        definition,
+        contract,
+        snapshot,
+        base_release,
+        reference_qualification,
+    )
     if poll_interval_seconds <= 0:
         raise CompileLaunchError("poll interval must be positive")
     ledger = _load_submission_ledger(attempt)

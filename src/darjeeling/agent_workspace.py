@@ -1207,8 +1207,13 @@ def stop_agent_session(
     record = _read_session_record_for_handle(handle)
     recorded_pid = _session_record_pid(record)
     pid = process.pid if process is not None else handle.pid or recorded_pid
-    status = "timed_out" if reason == "time_limit" else "stopped"
-    if process is not None and process.poll() is None:
+    existing_returncode = process.poll() if process is not None else None
+    process_already_exited = existing_returncode is not None
+    if process_already_exited:
+        status = "completed" if existing_returncode == 0 else "failed"
+    else:
+        status = "timed_out" if reason == "time_limit" else "stopped"
+    if process is not None and not process_already_exited:
         process_group_id = _process_group_id(process.pid)
         if process_group_id is not None:
             _stop_process_group(process_group_id, timeout_seconds)
@@ -1226,7 +1231,13 @@ def stop_agent_session(
     elif process is None and pid is not None:
         _stop_recorded_agent_process(record, timeout_seconds)
         _stop_orphaned_recorded_process_group(record, timeout_seconds)
-    returncode = process.returncode if process is not None else None
+    returncode = (
+        existing_returncode
+        if process_already_exited
+        else process.returncode
+        if process is not None
+        else None
+    )
     _LIVE_AGENT_PROCESSES.pop(handle.attempt_id, None)
     if handle.session_record_path is not None:
         log_path = Path(record.get("log_path") or handle.log_path or "")
@@ -1247,7 +1258,7 @@ def stop_agent_session(
                 if record.get("timeout_seconds") is not None
                 else handle.timeout_seconds
             ),
-            stop_reason=reason,
+            stop_reason=None if process_already_exited else reason,
         )
     return replace(handle, status=status, pid=pid)
 

@@ -1082,6 +1082,35 @@ def test_stop_agent_session_kills_recorded_group_after_agent_parent_exits(
         agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
 
 
+def test_stop_agent_session_preserves_exited_agent_status(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    attempt, handle = _launch_process_test_agent(
+        target_dir,
+        tmp_path,
+        now,
+        "raise SystemExit(3)",
+    )
+    process = agent_workspace_module._LIVE_AGENT_PROCESSES[attempt.attempt_id]
+
+    try:
+        process.wait(timeout=2.0)
+        updated = stop_agent_session(handle, reason="time_limit", timeout_seconds=0.2)
+
+        session = json.loads(
+            (attempt.workspace_path / "journal" / "agent_session.json").read_text()
+        )
+        assert updated.status == "failed"
+        assert session["status"] == "failed"
+        assert session["returncode"] == 3
+        assert "stop_reason" not in session
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id, None)
+
+
 def test_stop_agent_session_does_not_signal_mismatched_persisted_pid(
     tmp_path: Path,
 ) -> None:
