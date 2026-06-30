@@ -252,7 +252,7 @@ def _child_config_matches_policy(
     return child_config.get("command") == child_command
 
 
-def _is_sandboxed_child_popen(
+def _child_popen_matches_policy(
     args,
     _allow_dependency_install=allow_dependency_install,
     _runner_path=runner_path,
@@ -284,60 +284,6 @@ def _is_sandboxed_child_popen(
     except json.JSONDecodeError:
         return False
     return _child_config_matches_policy(child_config)
-
-
-def _audit(
-    event,
-    args,
-    _allow_network=allow_network,
-    _resolve_path=_resolve_path,
-    _is_write=_is_write,
-    _check_write=_check_write,
-    _check_read=_check_read,
-    _is_sandboxed_child_popen=_is_sandboxed_child_popen,
-):
-    if event == "open":
-        path = _resolve_path(args[0] if args else None)
-        mode = args[1] if len(args) > 1 else None
-        flags = args[2] if len(args) > 2 else None
-        if _is_write(mode, flags):
-            _check_write(path)
-        else:
-            _check_read(path)
-        return
-    if event in {"os.listdir", "os.scandir", "os.stat", "os.lstat"}:
-        _check_read(_resolve_path(args[0] if args else None))
-        return
-    if event in {
-        "os.mkdir",
-        "os.rmdir",
-        "os.remove",
-        "os.unlink",
-        "os.rename",
-        "os.replace",
-        "os.symlink",
-        "os.link",
-        "os.chmod",
-        "os.chown",
-    }:
-        for value in args[:2]:
-            _check_write(_resolve_path(value))
-        return
-    if event.startswith("socket.") and not _allow_network:
-        raise PermissionError(f"{event} denied by Darjeeling sandbox")
-    if event == "subprocess.Popen":
-        if _is_sandboxed_child_popen(args):
-            return
-        raise PermissionError(f"{event} denied by Darjeeling sandbox")
-    if event in {
-        "os.system",
-        "os.exec",
-        "os.posix_spawn",
-    }:
-        raise PermissionError(f"{event} denied by Darjeeling sandbox")
-
-
-sys.addaudithook(_audit)
 
 
 def _resolve_child_cwd(value, _cwd=cwd):
@@ -468,6 +414,75 @@ subprocess.Popen = _make_sandboxed_popen(
     _child_env,
     runner_path,
 )
+_sandboxed_popen_call_code = type(subprocess.Popen).__call__.__code__
+
+
+def _is_sandboxed_child_popen(
+    args,
+    _popen_call_code=_sandboxed_popen_call_code,
+    _child_popen_matches_policy=_child_popen_matches_policy,
+    _getframe=sys._getframe,
+):
+    frame = _getframe()
+    while frame is not None:
+        if frame.f_code is _popen_call_code:
+            return _child_popen_matches_policy(args)
+        frame = frame.f_back
+    return False
+
+
+def _audit(
+    event,
+    args,
+    _allow_network=allow_network,
+    _resolve_path=_resolve_path,
+    _is_write=_is_write,
+    _check_write=_check_write,
+    _check_read=_check_read,
+    _is_sandboxed_child_popen=_is_sandboxed_child_popen,
+):
+    if event == "open":
+        path = _resolve_path(args[0] if args else None)
+        mode = args[1] if len(args) > 1 else None
+        flags = args[2] if len(args) > 2 else None
+        if _is_write(mode, flags):
+            _check_write(path)
+        else:
+            _check_read(path)
+        return
+    if event in {"os.listdir", "os.scandir", "os.stat", "os.lstat"}:
+        _check_read(_resolve_path(args[0] if args else None))
+        return
+    if event in {
+        "os.mkdir",
+        "os.rmdir",
+        "os.remove",
+        "os.unlink",
+        "os.rename",
+        "os.replace",
+        "os.symlink",
+        "os.link",
+        "os.chmod",
+        "os.chown",
+    }:
+        for value in args[:2]:
+            _check_write(_resolve_path(value))
+        return
+    if event.startswith("socket.") and not _allow_network:
+        raise PermissionError(f"{event} denied by Darjeeling sandbox")
+    if event == "subprocess.Popen":
+        if _is_sandboxed_child_popen(args):
+            return
+        raise PermissionError(f"{event} denied by Darjeeling sandbox")
+    if event in {
+        "os.system",
+        "os.exec",
+        "os.posix_spawn",
+    }:
+        raise PermissionError(f"{event} denied by Darjeeling sandbox")
+
+
+sys.addaudithook(_audit)
 os.chdir(cwd)
 
 args = command[1:]
@@ -501,6 +516,8 @@ for _policy_name in [
     "_resolve_executable",
     "_normalize_subprocess_command",
     "_child_config_matches_policy",
+    "_child_popen_matches_policy",
+    "_sandboxed_popen_call_code",
     "_is_sandboxed_child_popen",
     "_audit",
     "_resolve_child_cwd",

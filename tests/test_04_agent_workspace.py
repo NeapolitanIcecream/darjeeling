@@ -618,6 +618,64 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         / "process-group-override-used.txt"
     ).exists()
 
+    closure_process_group_attempt, closure_process_group_brief = create_brief()
+    closure_process_group_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import subprocess",
+            "import sys",
+            "call_func = getattr(",
+            "    getattr(subprocess.Popen, '__call__', None), '__func__', None",
+            ")",
+            "cells = dict(zip(",
+            "    call_func.__code__.co_freevars, call_func.__closure__ or ()",
+            "))",
+            "original_popen = cells['original_popen'].cell_contents",
+            "child_config_factory = cells['child_config_factory'].cell_contents",
+            "child_env_factory = cells['child_env_factory'].cell_contents",
+            "child_runner_path = cells['child_runner_path'].cell_contents",
+            "child_command = [",
+            "    sys.executable,",
+            "    '-c',",
+            "    \"from pathlib import Path; \"",
+            "    \"Path('journal/closure-process-group-override-used.txt')\"",
+            "    \".write_text('bad')\",",
+            "]",
+            "config_json = child_config_factory(child_command, Path('.').resolve())",
+            "env = child_env_factory({}, config_json)",
+            "try:",
+            "    original_popen(",
+            "        [sys.executable, '-I', str(child_runner_path), '--config-env'],",
+            "        cwd='.',",
+            "        env=env,",
+            "        start_new_session=True,",
+            "    ).wait()",
+            "    raise SystemExit(49)",
+            "except PermissionError as exc:",
+            "    assert 'subprocess.Popen' in str(exc)",
+            "Path('journal/closure-process-group-override-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        closure_process_group_attempt,
+        closure_process_group_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", closure_process_group_code],
+            "permissions": permissions,
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        closure_process_group_attempt.workspace_path
+        / "journal"
+        / "closure-process-group-override-blocked.txt"
+    ).exists()
+    assert not (
+        closure_process_group_attempt.workspace_path
+        / "journal"
+        / "closure-process-group-override-used.txt"
+    ).exists()
+
     startup_env_attempt, startup_env_brief = create_brief()
     startup_sitecustomize = (
         "from pathlib import Path\n"
