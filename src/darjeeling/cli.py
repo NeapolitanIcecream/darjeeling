@@ -279,6 +279,11 @@ def _run_compile_command(
         snapshot_options,
     )
     compile_reference_usage = _compile_reference_usage(broker, snapshot_result)
+    if max_cost is not None and compile_reference_usage.cost >= max_cost:
+        raise RuntimeError(
+            "compile reference cost exhausted --max-cost before agent launch; "
+            "agent was not started"
+        )
     workspace_store = WorkspaceStore(workspace_store_root)
     compile_options = CompileOptions(
         objective={

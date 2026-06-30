@@ -373,6 +373,67 @@ def test_compile_run_rejects_budget_exhausted_before_final_test(
         )
 
 
+def test_compile_run_rejects_exhausted_reference_budget_before_agent_launch(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    definition = SimpleNamespace(
+        name="thin",
+        contract_hash="contract-hash",
+        data_config=SimpleNamespace(),
+        requirements={},
+    )
+    snapshot_result = SimpleNamespace(
+        snapshot=SimpleNamespace(snapshot_id="snapshot-id"),
+        reference_qualification=SimpleNamespace(cost={}, latency={}),
+        reference_usage=ReferenceUsageLedger(call_count=1, cost=1.25, errors={}),
+    )
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "darjeeling.cli.load_checked_target",
+        lambda target_path, require_reference=False: (
+            definition,
+            SimpleNamespace(),
+            SimpleNamespace(),
+        ),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config",
+        lambda path: SimpleNamespace(reference_version="reference"),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.create_release_without_artifacts",
+        lambda *args, **kwargs: SimpleNamespace(release_id="cold"),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.build_snapshot", lambda *args, **kwargs: snapshot_result
+    )
+
+    def fail_agent_setup(*args, **kwargs):
+        raise AssertionError("agent workspace should not be prepared after budget exhaustion")
+
+    monkeypatch.setattr("darjeeling.cli.load_target_workspace", fail_agent_setup)
+    monkeypatch.setattr("darjeeling.cli.create_agent_workspace", fail_agent_setup)
+    monkeypatch.setattr("darjeeling.cli.launch_target_adaptation_agent_async", fail_agent_setup)
+
+    with pytest.raises(RuntimeError, match="before agent launch"):
+        _run_compile_command(
+            target_path=target_dir,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=2,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
 @pytest.mark.parametrize(
     ("run_root_name", "workspace_root_name"),
     [
