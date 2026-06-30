@@ -190,6 +190,9 @@ Responsibilities:
 - Prevent validation/test and registry credentials from entering the workspace.
   User-enabled network research or workspace-local dependency installation does
   not change the hidden holdout boundary.
+- Run target-adaptation agents through the macOS `sandbox-exec` launch path for
+  now; platforms without `sandbox-exec` need a future external runner/container
+  design instead of a Python-level sandbox fallback.
 - Close the agent session before test evaluation.
 
 ### Artifact Worker Module

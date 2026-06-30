@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -38,6 +40,7 @@ from darjeeling.candidate_evaluation import (
 )
 from darjeeling.errors import WorkspaceError
 from darjeeling.model import (
+    AgentAttempt,
     AgentAttemptOptions,
     AgentFeedback,
     AgentSearchGuidance,
@@ -113,6 +116,31 @@ def _poll_until_status(
     raise AssertionError(
         f"timed out waiting for {expected_status!r}; last status was {updated.status!r}"
     )
+
+
+@contextmanager
+def _fake_agent_sandbox_exec(tmp_path: Path):
+    bin_dir = tmp_path / "fake-sandbox-exec-bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "sandbox-exec"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-f\" ]; then\n"
+        "  shift 2\n"
+        "fi\n"
+        "exec \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    old_path = os.environ.get("PATH")
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{old_path or ''}"
+    try:
+        yield fake
+    finally:
+        if old_path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = old_path
 
 
 def _process_alive(pid: int) -> bool:
@@ -281,17 +309,18 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     assert "- Network research: disabled." in default_text
     assert "- Workspace-local dependency installation: disabled." in default_text
 
-    launch_target_adaptation_agent(
-        default_attempt,
-        default_brief,
-        {
-            "command": [
-                "/usr/bin/python3",
-                "-c",
-                "from pathlib import Path; Path('journal/default.txt').write_text('ok')",
-            ]
-        },
-    )
+    with _fake_agent_sandbox_exec(tmp_path):
+        launch_target_adaptation_agent(
+            default_attempt,
+            default_brief,
+            {
+                "command": [
+                    "/usr/bin/python3",
+                    "-c",
+                    "from pathlib import Path; Path('journal/default.txt').write_text('ok')",
+                ]
+            },
+        )
     default_session = json.loads(
         (default_attempt.workspace_path / "journal" / "agent_session.json").read_text()
     )
@@ -299,17 +328,10 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
         "network_access": False,
         "dependency_install": False,
     }
-    default_sandbox_config = (
-        agent_workspace_module.core_attempt_state_dir(default_attempt)
-        / "agent_python_sandbox.json"
-    )
-    if default_sandbox_config.exists():
-        sandbox_config = json.loads(default_sandbox_config.read_text())
-        assert sandbox_config["allow_network"] is False
-        assert sandbox_config["allow_dependency_install"] is False
-        assert "allow_subprocess" not in sandbox_config
-    elif default_session["sandbox_profile"] is not None:
-        assert "(deny network*)" in Path(default_session["sandbox_profile"]).read_text()
+    assert default_session["sandbox_mode"] == "sandbox_exec"
+    assert default_session["sandbox_profile"] is not None
+    default_profile = Path(default_session["sandbox_profile"]).read_text()
+    assert "(deny network*)" in default_profile
 
     research_attempt, research_manifest = create_mounted_attempt()
     guidance = AgentSearchGuidance(
@@ -335,18 +357,19 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     assert "- Workspace-local dependency installation: allowed." in research_text
     assert "Use only Core-written feedback files" in research_text
 
-    launch_target_adaptation_agent(
-        research_attempt,
-        research_brief,
-        {
-            "command": [
-                "/usr/bin/python3",
-                "-c",
-                "from pathlib import Path; Path('journal/research.txt').write_text('ok')",
-            ],
-            "permissions": permissions,
-        },
-    )
+    with _fake_agent_sandbox_exec(tmp_path):
+        launch_target_adaptation_agent(
+            research_attempt,
+            research_brief,
+            {
+                "command": [
+                    "/usr/bin/python3",
+                    "-c",
+                    "from pathlib import Path; Path('journal/research.txt').write_text('ok')",
+                ],
+                "permissions": permissions,
+            },
+        )
     research_session = json.loads(
         (research_attempt.workspace_path / "journal" / "agent_session.json").read_text()
     )
@@ -354,68 +377,35 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
         "network_access": True,
         "dependency_install": True,
     }
-    research_sandbox_config = (
-        agent_workspace_module.core_attempt_state_dir(research_attempt)
-        / "agent_python_sandbox.json"
-    )
-    if research_sandbox_config.exists():
-        sandbox_config = json.loads(research_sandbox_config.read_text())
-        assert sandbox_config["allow_network"] is True
-        assert sandbox_config["allow_dependency_install"] is True
-        assert "allow_subprocess" not in sandbox_config
-    elif research_session["sandbox_profile"] is not None:
-        assert "(deny network*)" not in Path(research_session["sandbox_profile"]).read_text()
+    assert research_session["sandbox_mode"] == "sandbox_exec_research"
+    assert research_session["sandbox_profile"] is not None
+    research_profile = Path(research_session["sandbox_profile"]).read_text()
+    assert "(deny network*)" not in research_profile
 
 
-def test_portable_research_mode_keeps_filesystem_isolation(
-    target_dir: Path, tmp_path: Path, now, monkeypatch
+def test_agent_launch_without_sandbox_exec_fails_clearly(
+    tmp_path: Path, monkeypatch
 ) -> None:
-    definition, contract, check = load_checked_target(target_dir)
-    snapshot = build_snapshot(
-        definition,
-        contract,
-        definition.data_config,
-        None,
-        [],
-        PrefixBroker(),
-        now,
-        SnapshotOptions(storage_root=tmp_path / "snapshots"),
-    )
-    registry = __import__("darjeeling.model").model.ReleaseRegistry()
-    release = create_release_without_artifacts(
-        definition, contract, check, PrefixBroker(), RoutingSettings(), registry
-    )
-    workspace = load_target_workspace(
-        definition.name, definition.contract_hash, WorkspaceStore(tmp_path / "workspaces")
-    )
-    compile_run = create_compile_run(
-        definition,
-        check,
-        snapshot.snapshot,
-        release,
-        CompileBudget(),
-        workspace,
-        snapshot.reference_qualification,
-        CompileOptions(),
+    attempt_path = tmp_path / "attempt"
+    (attempt_path / "journal").mkdir(parents=True)
+    brief = attempt_path / "AGENT_BRIEF.md"
+    brief.write_text("# brief\n", encoding="utf-8")
+    attempt = AgentAttempt(
+        attempt_id="attempt-no-sandbox",
+        compile_id="compile-no-sandbox",
+        target_name="target",
+        contract_hash="contract",
+        snapshot_id="snapshot",
+        snapshot_digest="snapshot-digest",
+        workspace_path=attempt_path,
+        source_workspace_commit="baseline",
+        initial_commit=None,
+        final_commit=None,
+        agent_model="manual",
+        status="running",
     )
 
-    def create_brief():
-        attempt = create_agent_workspace(compile_run, workspace, AgentAttemptOptions())
-        target_view = export_agent_readonly_target_view(
-            definition, attempt.workspace_path / "target_view"
-        )
-        train_view = export_train_view_for_agent(
-            snapshot.snapshot,
-            contract,
-            __import__("darjeeling.model").model.AgentViewOptions(),
-            attempt.workspace_path / "train_view",
-        )
-        manifest = mount_readonly_inputs(
-            attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
-        )
-        return attempt, write_agent_brief(attempt, compile_run, manifest, {})
-
-    original_which = agent_workspace_module.shutil.which
+    original_which = shutil.which
 
     def no_sandbox_exec(name: str):
         if name == "sandbox-exec":
@@ -423,758 +413,21 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         return original_which(name)
 
     monkeypatch.setattr(agent_workspace_module.shutil, "which", no_sandbox_exec)
-    permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
-    outside_secret = tmp_path / "outside-child-secret.txt"
-    outside_secret.write_text("secret\n", encoding="utf-8")
-    protected_inside_attempt, protected_inside_brief = create_brief()
-    protected_inside_path = (
-        protected_inside_attempt.workspace_path / "journal" / "workspace-protected.txt"
-    )
-    protected_inside_path.write_text("workspace secret\n", encoding="utf-8")
-    protected_inside_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "try:",
-            "    Path('journal/workspace-protected.txt').read_text()",
-            "    raise SystemExit(50)",
-            "except PermissionError:",
-            "    pass",
-            "Path('journal/workspace-protected-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        protected_inside_attempt,
-        protected_inside_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", protected_inside_code],
-            "permissions": permissions,
-            "protected_paths": [str(protected_inside_path)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        protected_inside_attempt.workspace_path
-        / "journal"
-        / "workspace-protected-blocked.txt"
-    ).exists()
 
-    chdir_attempt, chdir_brief = create_brief()
-    protected_chdir_dir = tmp_path / "protected-chdir"
-    protected_chdir_dir.mkdir()
-    protected_chdir_secret = protected_chdir_dir / "secret.txt"
-    protected_chdir_secret.write_text("protected\n", encoding="utf-8")
-    chdir_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import os",
-            f"protected_dir = {str(protected_chdir_dir)!r}",
-            "try:",
-            "    os.chdir(protected_dir)",
-            "    Path('secret.txt').read_text()",
-            "    raise SystemExit(59)",
-            "except PermissionError as exc:",
-            "    assert 'os.chdir' in str(exc)",
-            "Path('journal/chdir-protected-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        chdir_attempt,
-        chdir_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", chdir_code],
-            "permissions": permissions,
-            "protected_paths": [str(protected_chdir_dir)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        chdir_attempt.workspace_path / "journal" / "chdir-protected-blocked.txt"
-    ).exists()
-
-    truncate_attempt, truncate_brief = create_brief()
-    protected_truncate_dir = tmp_path / "protected-truncate"
-    protected_truncate_dir.mkdir()
-    protected_truncate_secret = protected_truncate_dir / "secret.txt"
-    protected_truncate_secret.write_text("protected\n", encoding="utf-8")
-    truncate_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import os",
-            f"protected_file = {str(protected_truncate_secret)!r}",
-            "try:",
-            "    os.truncate(protected_file, 0)",
-            "    raise SystemExit(60)",
-            "except PermissionError as exc:",
-            "    assert 'write denied' in str(exc)",
-            "Path('journal/truncate-protected-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        truncate_attempt,
-        truncate_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", truncate_code],
-            "permissions": permissions,
-            "protected_paths": [str(protected_truncate_dir)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        truncate_attempt.workspace_path
-        / "journal"
-        / "truncate-protected-blocked.txt"
-    ).exists()
-    assert protected_truncate_secret.read_text(encoding="utf-8") == "protected\n"
-
-    native_ffi_attempt, native_ffi_brief = create_brief()
-    native_ffi_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "try:",
-            "    import ctypes",
-            "    ctypes.CDLL(None)",
-            "    raise SystemExit(51)",
-            "except PermissionError as exc:",
-            "    assert 'ctypes' in str(exc) or 'native extension' in str(exc)",
-            "Path('journal/native-ffi-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        native_ffi_attempt,
-        native_ffi_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", native_ffi_code],
-            "permissions": permissions,
-            "protected_paths": [str(outside_secret)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        native_ffi_attempt.workspace_path / "journal" / "native-ffi-blocked.txt"
-    ).exists()
-
-    gc_introspection_attempt, gc_introspection_brief = create_brief()
-    gc_introspection_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "try:",
-            "    import gc",
-            "    gc.get_objects()",
-            "    raise SystemExit(52)",
-            "except PermissionError as exc:",
-            "    assert 'gc.' in str(exc)",
-            "Path('journal/gc-introspection-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        gc_introspection_attempt,
-        gc_introspection_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", gc_introspection_code],
-            "permissions": permissions,
-            "protected_paths": [str(outside_secret)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        gc_introspection_attempt.workspace_path
-        / "journal"
-        / "gc-introspection-blocked.txt"
-    ).exists()
-
-    traceback_attempt, traceback_brief = create_brief()
-    traceback_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "outside = Path(" + repr(str(outside_secret)) + ")",
-            "try:",
-            "    outside.read_text()",
-            "    raise SystemExit(57)",
-            "except PermissionError as exc:",
-            "    tb = exc.__traceback__",
-            "    saw_audit_frame = False",
-            "    sensitive_names = [",
-            "        '_resolve_path',",
-            "        '_check_read',",
-            "        '_check_write',",
-            "        '_is_native_extension_path',",
-            "        '_is_sandboxed_child_popen',",
-            "        '_child_popen_matches_policy',",
-            "        '_child_config_matches_policy',",
-            "    ]",
-            "    while tb is not None:",
-            "        frame = tb.tb_frame",
-            "        if frame.f_code.co_name == '_audit':",
-            "            saw_audit_frame = True",
-            "            for name in sensitive_names:",
-            "                assert name not in frame.f_locals, name",
-            "            frame.f_locals['_allowed_read_roots'] = (Path('/'),)",
-            "            frame.f_locals['_denied_read_roots'] = ()",
-            "        tb = tb.tb_next",
-            "    assert saw_audit_frame",
-            "try:",
-            "    outside.read_text()",
-            "    raise SystemExit(58)",
-            "except PermissionError:",
-            "    pass",
-            "Path('journal/traceback-policy-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        traceback_attempt,
-        traceback_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", traceback_code],
-            "permissions": AgentWorkspacePermissions(),
-            "protected_paths": [str(outside_secret)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        traceback_attempt.workspace_path / "journal" / "traceback-policy-blocked.txt"
-    ).exists()
-
-    sqlite_attempt, sqlite_brief = create_brief()
-    sqlite_denied_dir = tmp_path / "sqlite-denied"
-    sqlite_denied_dir.mkdir()
-    sqlite_denied_db = sqlite_denied_dir / "blocked.db"
-    sqlite_code = "\n".join(
-        [
-            "from pathlib import Path",
-            f"db_path = {str(sqlite_denied_db)!r}",
-            "try:",
-            "    import sqlite3",
-            "    sqlite3.connect(db_path).close()",
-            "    raise SystemExit(53)",
-            "except PermissionError as exc:",
-            "    assert (",
-            "        'native extension' in str(exc)",
-            "        or 'write denied' in str(exc)",
-            "    )",
-            "Path('journal/sqlite-native-write-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        sqlite_attempt,
-        sqlite_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", sqlite_code],
-            "permissions": permissions,
-            "protected_paths": [str(sqlite_denied_dir)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        sqlite_attempt.workspace_path
-        / "journal"
-        / "sqlite-native-write-blocked.txt"
-    ).exists()
-    assert not sqlite_denied_db.exists()
-
-    dbm_attempt, dbm_brief = create_brief()
-    dbm_denied_dir = tmp_path / "dbm-denied"
-    dbm_denied_dir.mkdir()
-    dbm_path = dbm_denied_dir / "blocked"
-    dbm_code = "\n".join(
-        [
-            "from pathlib import Path",
-            f"db_path = {str(dbm_path)!r}",
-            "try:",
-            "    import dbm",
-            "    database = dbm.open(db_path, 'c')",
-            "    database.close()",
-            "    raise SystemExit(54)",
-            "except PermissionError as exc:",
-            "    assert (",
-            "        'native extension' in str(exc)",
-            "        or 'write denied' in str(exc)",
-            "    )",
-            "Path('journal/dbm-native-write-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        dbm_attempt,
-        dbm_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", dbm_code],
-            "permissions": permissions,
-            "protected_paths": [str(dbm_denied_dir)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        dbm_attempt.workspace_path / "journal" / "dbm-native-write-blocked.txt"
-    ).exists()
-    assert not any(dbm_denied_dir.iterdir())
-
-    native_import_attempt, native_import_brief = create_brief()
-    native_import_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import importlib.util",
-            "module_path = Path('journal/workspace_extension.so')",
-            "module_path.write_bytes(b'not a real extension')",
-            "spec = importlib.util.spec_from_file_location(",
-            "    'workspace_extension', module_path",
-            ")",
-            "try:",
-            "    module = importlib.util.module_from_spec(spec)",
-            "    spec.loader.exec_module(module)",
-            "    raise SystemExit(55)",
-            "except PermissionError as exc:",
-            "    assert 'native extension' in str(exc)",
-            "Path('journal/native-extension-import-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        native_import_attempt,
-        native_import_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", native_import_code],
-            "permissions": permissions,
-            "protected_paths": [str(outside_secret)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        native_import_attempt.workspace_path
-        / "journal"
-        / "native-extension-import-blocked.txt"
-    ).exists()
-
-    runner_tamper_attempt, runner_tamper_brief = create_brief()
-    runner_tamper_child_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "Path('journal/real-child-runner-ok.txt').write_text('ok')",
-        ]
-    )
-    runner_tamper_agent_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import subprocess",
-            "Path('journal/agent_python_sandbox_runner.py').write_text(",
-            "    \"from pathlib import Path\\n\"",
-            "    \"Path('journal/malicious-runner-used.txt').write_text('bad')\\n\"",
-            ")",
-            "subprocess.run(['/usr/bin/python3', '-c', "
-            + repr(runner_tamper_child_code)
-            + "], check=True)",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        runner_tamper_attempt,
-        runner_tamper_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", runner_tamper_agent_code],
-            "permissions": permissions,
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        runner_tamper_attempt.workspace_path / "journal" / "real-child-runner-ok.txt"
-    ).exists()
-    assert not (
-        runner_tamper_attempt.workspace_path / "journal" / "malicious-runner-used.txt"
-    ).exists()
-    tamper_sandbox_config = json.loads(
-        (
-            agent_workspace_module.core_attempt_state_dir(runner_tamper_attempt)
-            / "agent_python_sandbox.json"
-        ).read_text()
-    )
-    runner_path = Path(tamper_sandbox_config["runner_path"]).resolve()
-    assert not runner_path.is_relative_to(runner_tamper_attempt.workspace_path.resolve())
-
-    executable_override_attempt, executable_override_brief = create_brief()
-    executable_override_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import subprocess",
-            "helper = Path('journal/executable-helper.py')",
-            "helper.write_text(",
-            "    '#!/usr/bin/python3\\n'",
-            "    'from pathlib import Path\\n'",
-            "    \"Path('journal/executable-override-used.txt').write_text('bad')\\n\"",
-            ")",
-            "helper.chmod(0o755)",
-            "try:",
-            "    subprocess.run(",
-            "        ['/usr/bin/python3', '-c', 'print(1)'],",
-            "        executable=str(helper),",
-            "        check=True,",
-            "    )",
-            "    raise SystemExit(43)",
-            "except PermissionError as exc:",
-            "    assert 'executable overrides' in str(exc)",
-            "Path('journal/executable-override-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        executable_override_attempt,
-        executable_override_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", executable_override_code],
-            "permissions": permissions,
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        executable_override_attempt.workspace_path
-        / "journal"
-        / "executable-override-blocked.txt"
-    ).exists()
-    assert not (
-        executable_override_attempt.workspace_path
-        / "journal"
-        / "executable-override-used.txt"
-    ).exists()
-
-    audit_bypass_attempt, audit_bypass_brief = create_brief()
-    audit_bypass_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import subprocess",
-            "outside = Path(" + repr(str(outside_secret)) + ")",
-            "globals_obj = getattr(subprocess.Popen, '__globals__', {})",
-            "call_method = getattr(subprocess.Popen, '__call__', None)",
-            "call_globals = getattr(call_method, '__globals__', {})",
-            "call_func_globals = getattr(",
-            "    getattr(call_method, '__func__', None), '__globals__', {}",
-            ")",
-            "type_call_globals = getattr(",
-            "    getattr(type(subprocess.Popen), '__call__', None), '__globals__', {}",
-            ")",
-            "sensitive_names = [",
-            "    '_subprocess_guard',",
-            "    '_original_popen',",
-            "    '_check_read',",
-            "    '_check_write',",
-            "    '_audit',",
-            "    '_is_sandboxed_child_popen',",
-            "    '_child_config_matches_policy',",
-            "    'allowed_read_roots',",
-            "    'denied_read_roots',",
-            "    'allow_network',",
-            "]",
-            "for exposed_globals in [",
-            "    globals_obj,",
-            "    call_globals,",
-            "    call_func_globals,",
-            "    type_call_globals,",
-            "]:",
-            "    for name in sensitive_names:",
-            "        assert name not in exposed_globals, name",
-            "try:",
-            "    globals_obj['_original_popen'](",
-            "        ['/usr/bin/python3', '-c',",
-            "         \"from pathlib import Path; \"",
-            "         \"Path('journal/audit-bypass-used.txt').write_text('bad')\"],",
-            "        cwd='.',",
-            "    ).wait()",
-            "    raise SystemExit(44)",
-            "except (AttributeError, KeyError, PermissionError):",
-            "    pass",
-            "Path('journal/audit-bypass-blocked.txt').write_text('ok')",
-            "for exposed_globals in [",
-            "    globals_obj,",
-            "    call_globals,",
-            "    call_func_globals,",
-            "    type_call_globals,",
-            "]:",
-            "    exposed_globals['_check_read'] = lambda path: None",
-            "    exposed_globals['allowed_read_roots'] = (Path('/'),)",
-            "try:",
-            "    outside.read_text()",
-            "    raise SystemExit(47)",
-            "except PermissionError:",
-            "    pass",
-            "Path('journal/policy-globals-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        audit_bypass_attempt,
-        audit_bypass_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", audit_bypass_code],
-            "permissions": permissions,
-            "protected_paths": [str(outside_secret)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        audit_bypass_attempt.workspace_path / "journal" / "audit-bypass-blocked.txt"
-    ).exists()
-    assert not (
-        audit_bypass_attempt.workspace_path / "journal" / "audit-bypass-used.txt"
-    ).exists()
-    assert (
-        audit_bypass_attempt.workspace_path / "journal" / "policy-globals-blocked.txt"
-    ).exists()
-
-    process_group_attempt, process_group_brief = create_brief()
-    process_group_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import subprocess",
-            "try:",
-            "    subprocess.run(",
-            "        ['/usr/bin/python3', '-c',",
-            "         \"from pathlib import Path; \"",
-            "         \"Path('journal/process-group-override-used.txt').write_text('bad')\"],",
-            "        start_new_session=True,",
-            "        check=True,",
-            "    )",
-            "    raise SystemExit(46)",
-            "except PermissionError as exc:",
-            "    assert 'process group overrides' in str(exc)",
-            "Path('journal/process-group-override-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        process_group_attempt,
-        process_group_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", process_group_code],
-            "permissions": permissions,
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        process_group_attempt.workspace_path
-        / "journal"
-        / "process-group-override-blocked.txt"
-    ).exists()
-    assert not (
-        process_group_attempt.workspace_path
-        / "journal"
-        / "process-group-override-used.txt"
-    ).exists()
-
-    closure_process_group_attempt, closure_process_group_brief = create_brief()
-    closure_process_group_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import subprocess",
-            "import sys",
-            "call_func = getattr(",
-            "    getattr(subprocess.Popen, '__call__', None), '__func__', None",
-            ")",
-            "cells = dict(zip(",
-            "    call_func.__code__.co_freevars, call_func.__closure__ or ()",
-            "))",
-            "original_popen = cells['original_popen'].cell_contents",
-            "child_config_factory = cells['child_config_factory'].cell_contents",
-            "child_env_factory = cells['child_env_factory'].cell_contents",
-            "child_runner_path = cells['child_runner_path'].cell_contents",
-            "child_command = [",
-            "    sys.executable,",
-            "    '-c',",
-            "    \"from pathlib import Path; \"",
-            "    \"Path('journal/closure-process-group-override-used.txt')\"",
-            "    \".write_text('bad')\",",
-            "]",
-            "config_json = child_config_factory(child_command, Path('.').resolve())",
-            "env = child_env_factory({}, config_json)",
-            "try:",
-            "    original_popen(",
-            "        [sys.executable, '-I', str(child_runner_path), '--config-env'],",
-            "        cwd='.',",
-            "        env=env,",
-            "        start_new_session=True,",
-            "    ).wait()",
-            "    raise SystemExit(49)",
-            "except PermissionError as exc:",
-            "    assert 'subprocess.Popen' in str(exc)",
-            "Path('journal/closure-process-group-override-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        closure_process_group_attempt,
-        closure_process_group_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", closure_process_group_code],
-            "permissions": permissions,
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        closure_process_group_attempt.workspace_path
-        / "journal"
-        / "closure-process-group-override-blocked.txt"
-    ).exists()
-    assert not (
-        closure_process_group_attempt.workspace_path
-        / "journal"
-        / "closure-process-group-override-used.txt"
-    ).exists()
-
-    env_tamper_attempt, env_tamper_brief = create_brief()
-    env_tamper_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import subprocess",
-            "call_func = getattr(",
-            "    getattr(subprocess.Popen, '__call__', None), '__func__', None",
-            ")",
-            "cells = dict(zip(",
-            "    call_func.__code__.co_freevars, call_func.__closure__ or ()",
-            "))",
-            "original_env_factory = cells['child_env_factory'].cell_contents",
-            "def poisoned_env(existing_env, config_json):",
-            "    env = original_env_factory(existing_env, config_json)",
-            "    env['LD_PRELOAD'] = str(Path('journal/preload.so').resolve())",
-            "    return env",
-            "cells['child_env_factory'].cell_contents = poisoned_env",
-            "Path('journal/preload.so').write_bytes(b'not a real library')",
-            "try:",
-            "    subprocess.run(",
-            "        ['/usr/bin/python3', '-c',",
-            "         \"from pathlib import Path; \"",
-            "         \"Path('journal/env-tamper-used.txt').write_text('bad')\"],",
-            "        check=True,",
-            "    )",
-            "    raise SystemExit(56)",
-            "except PermissionError as exc:",
-            "    assert 'subprocess.Popen' in str(exc)",
-            "Path('journal/env-tamper-blocked.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        env_tamper_attempt,
-        env_tamper_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", env_tamper_code],
-            "permissions": permissions,
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        env_tamper_attempt.workspace_path / "journal" / "env-tamper-blocked.txt"
-    ).exists()
-    assert not (
-        env_tamper_attempt.workspace_path / "journal" / "env-tamper-used.txt"
-    ).exists()
-
-    startup_env_attempt, startup_env_brief = create_brief()
-    startup_sitecustomize = (
-        "from pathlib import Path\n"
-        f"Path('journal/startup-env-used.txt').write_text("
-        f"Path({str(outside_secret)!r}).read_text())\n"
-    )
-    startup_env_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "import subprocess",
-            "site_dir = Path('journal/startup_site')",
-            "site_dir.mkdir()",
-            f"site_dir.joinpath('sitecustomize.py').write_text({startup_sitecustomize!r})",
-            "subprocess.run(",
-            "    ['/usr/bin/python3', '-c',",
-            "     \"from pathlib import Path; \"",
-            "     \"Path('journal/startup-env-sanitized-ok.txt').write_text('ok')\"],",
-            "    env={'PYTHONPATH': str(site_dir)},",
-            "    check=True,",
-            ")",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        startup_env_attempt,
-        startup_env_brief,
-        {
-            "command": ["/usr/bin/python3", "-c", startup_env_code],
-            "permissions": permissions,
-            "protected_paths": [str(outside_secret)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        startup_env_attempt.workspace_path
-        / "journal"
-        / "startup-env-sanitized-ok.txt"
-    ).exists()
-    assert not (
-        startup_env_attempt.workspace_path / "journal" / "startup-env-used.txt"
-    ).exists()
-
-    python_child_attempt, python_child_brief = create_brief()
-    child_code = "\n".join(
-        [
-            "from pathlib import Path",
-            "outside = Path(" + repr(str(outside_secret)) + ")",
-            "try:",
-            "    outside.read_text()",
-            "    raise SystemExit(41)",
-            "except PermissionError:",
-            "    pass",
-            "try:",
-            "    Path('readonly_inputs/train.json').write_text('bad')",
-            "    raise SystemExit(42)",
-            "except PermissionError:",
-            "    pass",
-            "Path('journal/child-sandbox-ok.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        python_child_attempt,
-        python_child_brief,
-        {
-            "command": [
-                "/usr/bin/python3",
-                "-c",
-                "import subprocess; subprocess.run(['/usr/bin/python3', '-c', "
-                + repr(child_code)
-                + "], check=True)",
-            ],
-            "permissions": permissions,
-            "protected_paths": [str(outside_secret)],
-        },
-    )
-    assert handle.status == "completed"
-    assert (
-        python_child_attempt.workspace_path / "journal" / "child-sandbox-ok.txt"
-    ).exists()
-    sandbox_config = json.loads(
-        (
-            agent_workspace_module.core_attempt_state_dir(python_child_attempt)
-            / "agent_python_sandbox.json"
-        ).read_text()
-    )
-    assert sandbox_config["allow_network"] is True
-    assert sandbox_config["allow_dependency_install"] is True
-    assert "allow_subprocess" not in sandbox_config
-    assert "bad" not in (
-        python_child_attempt.workspace_path / "readonly_inputs" / "train.json"
-    ).read_text()
-
-    subprocess_attempt, subprocess_brief = create_brief()
-    with pytest.raises(WorkspaceError, match="agent runtime command failed"):
+    with pytest.raises(WorkspaceError, match="requires macOS sandbox-exec"):
         launch_target_adaptation_agent(
-            subprocess_attempt,
-            subprocess_brief,
+            attempt,
+            brief,
             {
-                "command": [
-                    "/usr/bin/python3",
-                    "-c",
-                    "import subprocess; subprocess.run(['/bin/sh', '-c', 'echo bad'])",
-                ],
-                "permissions": permissions,
+                "command": ["/usr/bin/python3", "-c", "raise SystemExit(0)"],
+                "permissions": {
+                    "network_access": True,
+                    "dependency_install": True,
+                },
             },
         )
-    assert "only allows sandboxed Python subprocesses" in (
-        subprocess_attempt.workspace_path / "journal" / "agent.log"
-    ).read_text()
+    assert not (attempt_path / "journal" / "agent_session.json").exists()
 
-    shell_attempt, shell_brief = create_brief()
-    with pytest.raises(WorkspaceError, match="Python agent command"):
-        launch_target_adaptation_agent(
-            shell_attempt,
-            shell_brief,
-            {
-                "command": ["/bin/sh", "-c", "echo unsandboxed"],
-                "permissions": permissions,
-            },
-        )
 
 
 def test_agent_mount_contains_train_only_inputs(
@@ -1332,33 +585,23 @@ def test_agent_mount_contains_train_only_inputs(
 
     outside_secret = tmp_path / "outside-secret.txt"
     outside_secret.write_text("secret\n", encoding="utf-8")
-    sandbox_check = "\n".join(
-        [
-            "from pathlib import Path",
-            "outside = Path(" + repr(str(outside_secret)) + ")",
-            "try:",
-            "    Path('readonly_inputs/train.json').write_text('bad')",
-            "    raise SystemExit(11)",
-            "except PermissionError:",
-            "    pass",
-            "try:",
-            "    outside.read_text()",
-            "    raise SystemExit(12)",
-            "except PermissionError:",
-            "    pass",
-            "Path('journal/sandbox-ok.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        attempt,
-        brief,
-        {
-            "command": ["/usr/bin/python3", "-c", sandbox_check],
-            "protected_paths": [str(outside_secret)],
-        },
-    )
+    sandbox_check = "from pathlib import Path; Path('journal/sandbox-ok.txt').write_text('ok')"
+    with _fake_agent_sandbox_exec(tmp_path):
+        handle = launch_target_adaptation_agent(
+            attempt,
+            brief,
+            {
+                "command": ["/usr/bin/python3", "-c", sandbox_check],
+                "protected_paths": [str(outside_secret)],
+            },
+        )
     assert handle.status == "completed"
     assert (attempt.workspace_path / "journal" / "sandbox-ok.txt").exists()
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    profile_text = Path(session["sandbox_profile"]).read_text()
+    assert "(deny network*)" in profile_text
+    assert str(outside_secret) in profile_text
+    assert "readonly_inputs" in profile_text
     assert "bad" not in (manifest.mount_path / "train.json").read_text()
 
     with pytest.raises(WorkspaceError, match="holdout reconstruction"):
@@ -1809,11 +1052,12 @@ def test_close_agent_attempt_stops_persisted_async_pid_when_process_map_is_empty
         attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
     )
     brief = write_agent_brief(attempt, compile_run, manifest, {})
-    launch_target_adaptation_agent_async(
-        attempt,
-        brief,
-        {"command": ["/usr/bin/python3", "-c", "import time; time.sleep(30)"]},
-    )
+    with _fake_agent_sandbox_exec(tmp_path):
+        launch_target_adaptation_agent_async(
+            attempt,
+            brief,
+            {"command": ["/usr/bin/python3", "-c", "import time; time.sleep(30)"]},
+        )
     process = agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id)
     journal_session = attempt.workspace_path / "journal" / "agent_session.json"
     tampered_session = json.loads(journal_session.read_text())
@@ -1881,11 +1125,12 @@ def _launch_process_test_agent(
         attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
     )
     brief = write_agent_brief(attempt, compile_run, manifest, {})
-    handle = launch_target_adaptation_agent_async(
-        attempt,
-        brief,
-        {"command": ["/usr/bin/python3", "-c", agent_code]},
-    )
+    with _fake_agent_sandbox_exec(tmp_path):
+        handle = launch_target_adaptation_agent_async(
+            attempt,
+            brief,
+            {"command": ["/usr/bin/python3", "-c", agent_code]},
+        )
     return attempt, handle
 
 
@@ -2442,25 +1687,23 @@ def test_agent_launch_protects_core_paths_for_in_repo_workspace(
         )
         brief = write_agent_brief(attempt, compile_run, manifest, {})
         core_file = repo_root / "pyproject.toml"
-        sandbox_check = "\n".join(
-            [
-                "from pathlib import Path",
-                "core_file = Path(" + repr(str(core_file)) + ")",
-                "try:",
-                "    core_file.read_text()",
-                "    raise SystemExit(21)",
-                "except PermissionError:",
-                "    pass",
-                "Path('journal/repo-sandbox-ok.txt').write_text('ok')",
-            ]
+        sandbox_check = (
+            "from pathlib import Path; "
+            "Path('journal/repo-sandbox-ok.txt').write_text('ok')"
         )
-        handle = launch_target_adaptation_agent(
-            attempt,
-            brief,
-            {"command": ["/usr/bin/python3", "-c", sandbox_check]},
-        )
+        with _fake_agent_sandbox_exec(workspace_root):
+            handle = launch_target_adaptation_agent(
+                attempt,
+                brief,
+                {"command": ["/usr/bin/python3", "-c", sandbox_check]},
+            )
         assert handle.status == "completed"
         assert (attempt.workspace_path / "journal" / "repo-sandbox-ok.txt").exists()
+        session = json.loads(
+            (attempt.workspace_path / "journal" / "agent_session.json").read_text()
+        )
+        profile_text = Path(session["sandbox_profile"]).read_text()
+        assert str(core_file) in profile_text
     finally:
         _remove_tree_with_write_permissions(workspace_root)
         if workspace_root.parent.exists() and not any(workspace_root.parent.iterdir()):

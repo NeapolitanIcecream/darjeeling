@@ -152,6 +152,11 @@ dependency installation. When a user explicitly enables either permission, the
 agent launch policy records that choice and relaxes the matching runtime
 restriction for the attempt workspace.
 
+Current target-adaptation agent execution support is the macOS
+`sandbox-exec` launch path. If `sandbox-exec` is unavailable, Core fails the
+agent launch clearly instead of falling back to a Python-level sandbox; portable
+or non-macOS execution needs a future external runner/container design.
+
 ### `AgentAttemptOptions`
 
 Fields:
@@ -382,7 +387,10 @@ Purpose:
 - Stream logs and command events to the compile run store.
 - Apply time, filesystem, network, process, and API broker restrictions. Network
   and workspace-local dependency installation remain disabled by default and are
-  enabled only when the attempt permissions explicitly allow them.
+  enabled only when the attempt permissions explicitly allow them. In the macOS
+  profile, network access is allowed by omitting `(deny network*)`; workspace
+  dependency installation is allowed only within the existing attempt workspace
+  write surface.
 
 Used by:
 

@@ -44,7 +44,6 @@ from darjeeling.model import (
     WorkspaceMountManifest,
     WorkspaceStore,
 )
-from darjeeling.portable_sandbox import build_python_sandbox_command, is_python_command
 from darjeeling.util import (
     file_digest,
     new_id,
@@ -87,6 +86,11 @@ _FORBIDDEN_REPORT_KEYS = {
     "test_rows",
 }
 _LIVE_AGENT_PROCESSES: dict[str, subprocess.Popen[str]] = {}
+_UNSUPPORTED_AGENT_EXECUTION_MESSAGE = (
+    "agent execution requires macOS sandbox-exec; sandbox-exec was not found. "
+    "This platform does not support target-adaptation agent execution yet. "
+    "Future support needs an external runner/container design."
+)
 
 
 def _ensure_workspace_layout(path: Path, *, include_submissions: bool = True) -> None:
@@ -290,7 +294,7 @@ def _write_agent_sandbox_profile(
 ) -> Path:
     sandbox_exec = shutil.which("sandbox-exec")
     if sandbox_exec is None:
-        raise WorkspaceError("sandbox-exec is required for agent runtime isolation")
+        raise WorkspaceError(_UNSUPPORTED_AGENT_EXECUTION_MESSAGE)
     profile_path = attempt_path / "journal" / "agent_sandbox.sb"
     all_protected = _default_protected_paths(attempt_path, command)
     for path in protected_paths:
@@ -315,43 +319,6 @@ def _write_agent_sandbox_profile(
             lines.append(f"(deny file-write* (subpath {_sandbox_path(path)}))")
     profile_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return profile_path
-
-
-def _agent_portable_sandbox_command(
-    attempt_path: Path,
-    attempt_id: str,
-    command: list[str],
-    protected_paths: list[Path],
-    permissions: AgentWorkspacePermissions,
-) -> list[str]:
-    if not is_python_command(command):
-        raise WorkspaceError(
-            "sandbox-exec or a Python agent command is required for agent runtime isolation"
-        )
-    all_protected = _default_protected_paths(attempt_path, command)
-    for path in protected_paths:
-        if not _path_contains(path, attempt_path):
-            all_protected.append(path)
-    readonly_paths = [
-        attempt_path / "readonly_inputs",
-        attempt_path / "readonly_source",
-    ]
-    try:
-        core_state_path = _core_attempt_state_dir_for_path(attempt_path, attempt_id)
-        return build_python_sandbox_command(
-            command,
-            cwd=attempt_path,
-            config_path=core_state_path / "agent_python_sandbox.json",
-            allowed_read_roots=[attempt_path],
-            allowed_write_roots=[attempt_path],
-            denied_read_roots=all_protected,
-            denied_write_roots=[*readonly_paths, *all_protected],
-            allow_network=permissions.network_access,
-            allow_dependency_install=permissions.dependency_install,
-        )
-    except Exception as exc:
-        raise WorkspaceError(str(exc)) from exc
-
 
 def _expected_train_export_digest(train_view: TrainViewManifest) -> str:
     return stable_hash(
@@ -822,47 +789,25 @@ def _prepare_agent_launch(
         Path(path) for path in agent_runtime.get("protected_paths", []) if str(path)
     ]
     permissions = _coerce_workspace_permissions(agent_runtime.get("permissions"))
-    _make_readonly_tree(attempt.workspace_path / "readonly_inputs")
-    _make_readonly_tree(attempt.workspace_path / "readonly_source")
     sandbox_exec = shutil.which("sandbox-exec")
     if sandbox_exec is None:
-        sandbox_profile: Path | None = None
-        if is_python_command(command):
-            sandbox_mode = (
-                "portable_python_research"
-                if permissions.network_access or permissions.dependency_install
-                else "portable_python"
-            )
-            sandboxed_command = _agent_portable_sandbox_command(
-                attempt.workspace_path,
-                attempt.attempt_id,
-                command,
-                protected_paths,
-                permissions,
-            )
-        else:
-            sandboxed_command = _agent_portable_sandbox_command(
-                attempt.workspace_path,
-                attempt.attempt_id,
-                command,
-                protected_paths,
-                permissions,
-            )
-    else:
-        sandbox_profile = _write_agent_sandbox_profile(
-            attempt.workspace_path, command, protected_paths, permissions
-        )
-        sandbox_mode = (
-            "sandbox_exec_research"
-            if permissions.network_access or permissions.dependency_install
-            else "sandbox_exec"
-        )
-        sandboxed_command = [
-            sandbox_exec,
-            "-f",
-            str(sandbox_profile),
-            *command,
-        ]
+        raise WorkspaceError(_UNSUPPORTED_AGENT_EXECUTION_MESSAGE)
+    _make_readonly_tree(attempt.workspace_path / "readonly_inputs")
+    _make_readonly_tree(attempt.workspace_path / "readonly_source")
+    sandbox_profile = _write_agent_sandbox_profile(
+        attempt.workspace_path, command, protected_paths, permissions
+    )
+    sandbox_mode = (
+        "sandbox_exec_research"
+        if permissions.network_access or permissions.dependency_install
+        else "sandbox_exec"
+    )
+    sandboxed_command = [
+        sandbox_exec,
+        "-f",
+        str(sandbox_profile),
+        *command,
+    ]
     started_at = utcnow()
     env = {
         "PATH": os.environ.get("PATH", ""),

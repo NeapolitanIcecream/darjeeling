@@ -180,4 +180,6 @@ Used by:
 - It may pass user search guidance and workspace permissions through to Agent
   Workspace, but it does not turn those strings into target-specific optimizer
   behavior.
+- It relies on Agent Workspace for the current macOS `sandbox-exec` launch
+  support and does not introduce a portable Python sandbox or runner registry.
 - It may defer or reject a compile for budget, concurrency, policy, stale base Release, failed target checks, or failed reference qualification.
