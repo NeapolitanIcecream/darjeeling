@@ -154,7 +154,9 @@ provider-backed `ReferenceBroker`:
 
 Relative `cache_path` and `usage_ledger_path` values are resolved next to the
 config file. The usage ledger records provider calls, cache hits, and actual or
-estimated paid spend. Target-adaptation agent execution currently requires
+estimated paid spend. When the provider response has token usage but no cost
+header, the matching `price` fields are required so live calls cannot be
+reported as zero-cost. Target-adaptation agent execution currently requires
 macOS `sandbox-exec`; unsupported platforms fail clearly instead of using a
 custom Python sandbox as a security boundary.
 

@@ -177,6 +177,8 @@ Implementation notes:
 - Cost ledger entries must distinguish provider-reported cost from
   token-estimated cost. If no cost header is present, record
   `cost_status: "estimated-from-token-usage"`.
+- If a provider returns token usage without a cost header, require matching
+  token price fields in the config rather than reporting the call as zero-cost.
 - Do not under-count failed or timed-out calls if usage/cost is available.
 
 ### 3. Close the interactive loop handoff

@@ -169,9 +169,25 @@ class OpenAICompatibleReferenceBroker:
         latency_ms = (time.perf_counter() - started) * 1000.0
         usage = _usage_from_response(response)
         provider_cost = _provider_cost_from_response(response)
-        cost_usd, cost_status = _cost_from_usage(
-            usage, self.config.price, provider_cost
-        )
+        try:
+            cost_usd, cost_status = _cost_from_usage(
+                usage, self.config.price, provider_cost
+            )
+        except ValueError as exc:
+            self._write_usage_event(
+                {
+                    "status": "error",
+                    "cache_key": cache_key,
+                    "cost_usd": 0.0,
+                    "cost_status": "unknown-token-price",
+                    "usage": usage,
+                    "latency_ms": latency_ms,
+                    "purpose": context.purpose,
+                    "request_id": context.request_id,
+                    "error_class": exc.__class__.__name__,
+                }
+            )
+            raise
         finish_status = _finish_status(response)
         payload = _response_payload(response)
         record = {
@@ -379,9 +395,19 @@ def _cost_from_usage(
     output_tokens = int(
         usage.get("completion_tokens") or usage.get("output_tokens") or 0
     )
-    input_price = float(price.get("input_per_million", 0.0))
-    output_price = float(price.get("output_per_million", 0.0))
     if input_tokens or output_tokens:
+        missing = []
+        if input_tokens and "input_per_million" not in price:
+            missing.append("price.input_per_million")
+        if output_tokens and "output_per_million" not in price:
+            missing.append("price.output_per_million")
+        if missing:
+            raise ValueError(
+                "reference response reported token usage but reference config "
+                f"is missing token price fields: {', '.join(missing)}"
+            )
+        input_price = float(price.get("input_per_million", 0.0))
+        output_price = float(price.get("output_per_million", 0.0))
         cost = (
             input_tokens * input_price + output_tokens * output_price
         ) / 1_000_000

@@ -710,6 +710,72 @@ def test_openai_compatible_reference_config_writes_cache_and_usage_ledger(
     assert ledger["entries"][1]["cost_status"] == "cache-hit"
 
 
+def test_openai_compatible_reference_config_rejects_unknown_token_price(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "reference.json"
+    cache_path = tmp_path / "reference_cache.jsonl"
+    ledger_path = tmp_path / "reference_usage.json"
+    config_path.write_text(
+        __import__("json").dumps(
+            {
+                "provider": "openai_compatible",
+                "base_url_env": "TEST_OPENAI_BASE_URL",
+                "api_key_env": "TEST_OPENAI_API_KEY",
+                "model": "test-model",
+                "cache_path": cache_path.name,
+                "usage_ledger_path": ledger_path.name,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TEST_OPENAI_BASE_URL", "https://provider.example/v1")
+    monkeypatch.setenv("TEST_OPENAI_API_KEY", "secret")
+
+    class FakeResponse:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return __import__("json").dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {"content": '{"label": "a"}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+    broker = build_reference_broker_from_config(config_path)
+    context = ReferenceContext(
+        purpose="snapshot_label",
+        request_id="r1",
+        metadata={"contract_hash": "c1", "normalized_input": "n1"},
+    )
+
+    with pytest.raises(ValueError, match="missing token price fields"):
+        broker.call({"messages": [{"role": "user", "content": "x"}]}, context)
+
+    assert not cache_path.exists()
+    ledger = __import__("json").loads(ledger_path.read_text(encoding="utf-8"))
+    assert ledger["totals"]["provider_call_count"] == 0
+    assert ledger["entries"][0]["status"] == "error"
+    assert ledger["entries"][0]["cost_status"] == "unknown-token-price"
+    assert ledger["entries"][0]["usage"] == {
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+    }
+
+
 def test_openai_compatible_reference_config_defaults_openai_base_url(
     tmp_path: Path, monkeypatch
 ) -> None:
