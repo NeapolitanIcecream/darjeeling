@@ -454,10 +454,16 @@ def _validation_requirement_results(
 def _validation_gate_status(
     requirement_results: list[RequirementCheckResult],
 ) -> str:
+    deferred_transfer_names = {"precision_drop", "coverage_retention"}
+    has_deferred_transfer_result = any(
+        result.name in deferred_transfer_names and result.status != "pass"
+        for result in requirement_results
+    )
     gate_results = [
         result
         for result in requirement_results
-        if result.name not in {"precision_drop", "coverage_retention"}
+        if result.name not in deferred_transfer_names
+        and not (result.name == "generalization" and has_deferred_transfer_result)
     ]
     if any(result.status == "fail" for result in gate_results):
         return "fail"

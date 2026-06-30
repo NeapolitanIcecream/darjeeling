@@ -467,6 +467,7 @@ def test_validation_handoff_defers_transfer_only_checks() -> None:
                 RequirementCheckResult("precision_min", "pass", {}),
                 RequirementCheckResult("precision_drop", "insufficient", {}),
                 RequirementCheckResult("coverage_retention", "insufficient", {}),
+                RequirementCheckResult("generalization", "fail", {}),
             ]
         )
         == "pass"
@@ -476,6 +477,16 @@ def test_validation_handoff_defers_transfer_only_checks() -> None:
             [
                 RequirementCheckResult("precision_min", "fail", {}),
                 RequirementCheckResult("coverage_retention", "insufficient", {}),
+                RequirementCheckResult("generalization", "fail", {}),
+            ]
+        )
+        == "fail"
+    )
+    assert (
+        _validation_gate_status(
+            [
+                RequirementCheckResult("precision_min", "pass", {}),
+                RequirementCheckResult("generalization", "fail", {}),
             ]
         )
         == "fail"
