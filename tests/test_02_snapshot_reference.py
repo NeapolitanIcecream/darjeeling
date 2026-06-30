@@ -710,6 +710,29 @@ def test_openai_compatible_reference_config_writes_cache_and_usage_ledger(
     assert ledger["entries"][1]["cost_status"] == "cache-hit"
 
 
+def test_openai_compatible_reference_config_defaults_openai_base_url(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "reference.json"
+    config_path.write_text(
+        __import__("json").dumps(
+            {
+                "provider": "openai_compatible",
+                "base_url_env": "OPENAI_BASE_URL",
+                "api_key_env": "TEST_OPENAI_API_KEY",
+                "model": "test-model",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("TEST_OPENAI_API_KEY", "secret")
+
+    broker = build_reference_broker_from_config(config_path)
+
+    assert broker.base_url == "https://api.openai.com/v1"
+
+
 def test_path_backed_source_watermark_changes_with_file_contents(
     target_dir: Path,
     now,

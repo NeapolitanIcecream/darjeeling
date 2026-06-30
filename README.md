@@ -158,6 +158,10 @@ estimated paid spend. Target-adaptation agent execution currently requires
 macOS `sandbox-exec`; unsupported platforms fail clearly instead of using a
 custom Python sandbox as a security boundary.
 
+When `base_url_env` is `OPENAI_BASE_URL`, Darjeeling uses
+`https://api.openai.com/v1` if that environment variable is unset. Set
+`OPENAI_BASE_URL` only for a non-default OpenAI-compatible endpoint.
+
 ## How It Works
 
 At a high level, a Darjeeling target moves through this loop:

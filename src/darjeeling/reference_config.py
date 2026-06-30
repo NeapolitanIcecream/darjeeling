@@ -110,7 +110,7 @@ class OpenAICompatibleReferenceBroker:
     def __init__(self, config: ReferenceProviderConfig):
         self.config = config
         self.reference_version = config.model
-        self.base_url = _read_env(config.base_url_env).rstrip("/")
+        self.base_url = _read_base_url_env(config.base_url_env).rstrip("/")
         self.api_key = _read_env(config.api_key_env)
         self._cache: dict[str, dict[str, Any]] = {}
         if config.cache_path is not None and config.cache_path.exists():
@@ -326,6 +326,15 @@ def _read_env(name: str) -> str:
     if not value:
         raise ValueError(f"reference provider environment variable is not set: {name}")
     return value
+
+
+def _read_base_url_env(name: str) -> str:
+    value = os.environ.get(name)
+    if value:
+        return value
+    if name == "OPENAI_BASE_URL":
+        return "https://api.openai.com/v1"
+    raise ValueError(f"reference provider environment variable is not set: {name}")
 
 
 def _positive_int(value: Any, name: str) -> int:

@@ -162,6 +162,10 @@ Suggested config shape:
 }
 ```
 
+When `base_url_env` is `OPENAI_BASE_URL`, Darjeeling should default to
+`https://api.openai.com/v1` if that environment variable is unset. Users only
+need to set it for a non-default OpenAI-compatible endpoint.
+
 Implementation notes:
 
 - The provider config can live in a small module under Core if it remains
