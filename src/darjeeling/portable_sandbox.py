@@ -597,11 +597,14 @@ def _audit(
                         return
         raise PermissionError(f"read outside Darjeeling sandbox: {path}")
         return
+    if event == "os.chdir":
+        raise PermissionError("os.chdir denied by Darjeeling sandbox")
     if event in {
         "os.mkdir",
         "os.rmdir",
         "os.remove",
         "os.unlink",
+        "os.truncate",
         "os.rename",
         "os.replace",
         "os.symlink",
@@ -855,8 +858,8 @@ def _audit(
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
 
 
-sys.addaudithook(_audit)
 os.chdir(cwd)
+sys.addaudithook(_audit)
 
 args = command[1:]
 for _policy_name in [

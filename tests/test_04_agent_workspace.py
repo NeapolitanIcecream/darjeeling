@@ -458,6 +458,74 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         / "workspace-protected-blocked.txt"
     ).exists()
 
+    chdir_attempt, chdir_brief = create_brief()
+    protected_chdir_dir = tmp_path / "protected-chdir"
+    protected_chdir_dir.mkdir()
+    protected_chdir_secret = protected_chdir_dir / "secret.txt"
+    protected_chdir_secret.write_text("protected\n", encoding="utf-8")
+    chdir_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import os",
+            f"protected_dir = {str(protected_chdir_dir)!r}",
+            "try:",
+            "    os.chdir(protected_dir)",
+            "    Path('secret.txt').read_text()",
+            "    raise SystemExit(59)",
+            "except PermissionError as exc:",
+            "    assert 'os.chdir' in str(exc)",
+            "Path('journal/chdir-protected-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        chdir_attempt,
+        chdir_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", chdir_code],
+            "permissions": permissions,
+            "protected_paths": [str(protected_chdir_dir)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        chdir_attempt.workspace_path / "journal" / "chdir-protected-blocked.txt"
+    ).exists()
+
+    truncate_attempt, truncate_brief = create_brief()
+    protected_truncate_dir = tmp_path / "protected-truncate"
+    protected_truncate_dir.mkdir()
+    protected_truncate_secret = protected_truncate_dir / "secret.txt"
+    protected_truncate_secret.write_text("protected\n", encoding="utf-8")
+    truncate_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import os",
+            f"protected_file = {str(protected_truncate_secret)!r}",
+            "try:",
+            "    os.truncate(protected_file, 0)",
+            "    raise SystemExit(60)",
+            "except PermissionError as exc:",
+            "    assert 'write denied' in str(exc)",
+            "Path('journal/truncate-protected-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        truncate_attempt,
+        truncate_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", truncate_code],
+            "permissions": permissions,
+            "protected_paths": [str(protected_truncate_dir)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        truncate_attempt.workspace_path
+        / "journal"
+        / "truncate-protected-blocked.txt"
+    ).exists()
+    assert protected_truncate_secret.read_text(encoding="utf-8") == "protected\n"
+
     native_ffi_attempt, native_ffi_brief = create_brief()
     native_ffi_code = "\n".join(
         [
