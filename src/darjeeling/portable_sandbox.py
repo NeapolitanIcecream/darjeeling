@@ -50,6 +50,17 @@ allowed_write_roots = tuple(_roots(_allowed_write_root_values))
 denied_read_roots = tuple(_roots(_denied_read_root_values))
 denied_write_roots = tuple(_roots(_denied_write_root_values))
 allow_network = bool(config.get("allow_network", False))
+native_extension_suffixes = tuple(
+    suffix.lower()
+    for suffix in {
+        sysconfig.get_config_var("EXT_SUFFIX"),
+        ".dylib",
+        ".dll",
+        ".pyd",
+        ".so",
+    }
+    if suffix
+)
 
 system_roots = []
 for value in set(sys.path + [sys.prefix, sys.base_prefix, sys.exec_prefix]):
@@ -135,6 +146,18 @@ def _check_write(
     if _inside(path, _allowed_write_roots):
         return
     raise PermissionError(f"write outside Darjeeling sandbox: {path}")
+
+
+def _is_native_extension_path(
+    value,
+    _resolve_path=_resolve_path,
+    _native_extension_suffixes=native_extension_suffixes,
+):
+    path = _resolve_path(value)
+    if path is None:
+        return False
+    name = path.name.lower()
+    return any(name.endswith(suffix) for suffix in _native_extension_suffixes)
 
 
 def _command_parts(value):
@@ -252,6 +275,21 @@ def _child_config_matches_policy(
     return child_config.get("command") == child_command
 
 
+def _child_env_matches_policy(
+    env,
+    config_json,
+    _config_env_var=_CONFIG_ENV_VAR,
+    _path=os.environ.get("PATH", ""),
+    _python_unbuffered=os.environ.get("PYTHONUNBUFFERED"),
+):
+    if not isinstance(env, dict):
+        return False
+    expected = {"PATH": _path, _config_env_var: config_json}
+    if _python_unbuffered is not None:
+        expected["PYTHONUNBUFFERED"] = _python_unbuffered
+    return env == expected
+
+
 def _child_popen_matches_policy(
     args,
     _allow_dependency_install=allow_dependency_install,
@@ -260,6 +298,7 @@ def _child_popen_matches_policy(
     _command_parts=_command_parts,
     _same_path=_same_path,
     _child_config_matches_policy=_child_config_matches_policy,
+    _child_env_matches_policy=_child_env_matches_policy,
 ):
     if not _allow_dependency_install or len(args) < 4:
         return False
@@ -278,6 +317,8 @@ def _child_popen_matches_policy(
         return False
     config_json = env.get(_config_env_var)
     if not isinstance(config_json, str):
+        return False
+    if not _child_env_matches_policy(env, config_json):
         return False
     try:
         child_config = json.loads(config_json)
@@ -315,11 +356,16 @@ def _child_config(
     return json.dumps(child_config, sort_keys=True)
 
 
-def _child_env(_existing_env, config_json, _config_env_var=_CONFIG_ENV_VAR):
-    env = {"PATH": os.environ.get("PATH", "")}
-    python_unbuffered = os.environ.get("PYTHONUNBUFFERED")
-    if python_unbuffered is not None:
-        env["PYTHONUNBUFFERED"] = python_unbuffered
+def _child_env(
+    _existing_env,
+    config_json,
+    _config_env_var=_CONFIG_ENV_VAR,
+    _path=os.environ.get("PATH", ""),
+    _python_unbuffered=os.environ.get("PYTHONUNBUFFERED"),
+):
+    env = {"PATH": _path}
+    if _python_unbuffered is not None:
+        env["PYTHONUNBUFFERED"] = _python_unbuffered
     env[_config_env_var] = config_json
     return env
 
@@ -439,6 +485,7 @@ def _audit(
     _is_write=_is_write,
     _check_write=_check_write,
     _check_read=_check_read,
+    _is_native_extension_path=_is_native_extension_path,
     _is_sandboxed_child_popen=_is_sandboxed_child_popen,
 ):
     if event == "open":
@@ -474,6 +521,8 @@ def _audit(
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
     if event.startswith("ctypes."):
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
+    if event == "import" and len(args) > 1 and _is_native_extension_path(args[1]):
+        raise PermissionError("native extension imports denied by Darjeeling sandbox")
     if event == "sqlite3.connect":
         _check_write(_resolve_path(args[0] if args else None))
         return
@@ -507,6 +556,7 @@ for _policy_name in [
     "system_roots",
     "allow_network",
     "allow_dependency_install",
+    "native_extension_suffixes",
     "_original_popen",
     "_allowed_read_root_values",
     "_allowed_write_root_values",
@@ -519,12 +569,14 @@ for _policy_name in [
     "_is_write",
     "_check_read",
     "_check_write",
+    "_is_native_extension_path",
     "_command_parts",
     "_same_path",
     "_is_python_command",
     "_resolve_executable",
     "_normalize_subprocess_command",
     "_child_config_matches_policy",
+    "_child_env_matches_policy",
     "_child_popen_matches_policy",
     "_sandboxed_popen_call_code",
     "_is_sandboxed_child_popen",

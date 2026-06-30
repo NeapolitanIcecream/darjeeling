@@ -521,13 +521,16 @@ def test_portable_research_mode_keeps_filesystem_isolation(
     sqlite_code = "\n".join(
         [
             "from pathlib import Path",
-            "import sqlite3",
             f"db_path = {str(sqlite_denied_db)!r}",
             "try:",
+            "    import sqlite3",
             "    sqlite3.connect(db_path).close()",
             "    raise SystemExit(53)",
             "except PermissionError as exc:",
-            "    assert 'write denied' in str(exc)",
+            "    assert (",
+            "        'native extension' in str(exc)",
+            "        or 'write denied' in str(exc)",
+            "    )",
             "Path('journal/sqlite-native-write-blocked.txt').write_text('ok')",
         ]
     )
@@ -547,6 +550,77 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         / "sqlite-native-write-blocked.txt"
     ).exists()
     assert not sqlite_denied_db.exists()
+
+    dbm_attempt, dbm_brief = create_brief()
+    dbm_denied_dir = tmp_path / "dbm-denied"
+    dbm_denied_dir.mkdir()
+    dbm_path = dbm_denied_dir / "blocked"
+    dbm_code = "\n".join(
+        [
+            "from pathlib import Path",
+            f"db_path = {str(dbm_path)!r}",
+            "try:",
+            "    import dbm",
+            "    database = dbm.open(db_path, 'c')",
+            "    database.close()",
+            "    raise SystemExit(54)",
+            "except PermissionError as exc:",
+            "    assert (",
+            "        'native extension' in str(exc)",
+            "        or 'write denied' in str(exc)",
+            "    )",
+            "Path('journal/dbm-native-write-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        dbm_attempt,
+        dbm_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", dbm_code],
+            "permissions": permissions,
+            "protected_paths": [str(dbm_denied_dir)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        dbm_attempt.workspace_path / "journal" / "dbm-native-write-blocked.txt"
+    ).exists()
+    assert not any(dbm_denied_dir.iterdir())
+
+    native_import_attempt, native_import_brief = create_brief()
+    native_import_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import importlib.util",
+            "module_path = Path('journal/workspace_extension.so')",
+            "module_path.write_bytes(b'not a real extension')",
+            "spec = importlib.util.spec_from_file_location(",
+            "    'workspace_extension', module_path",
+            ")",
+            "try:",
+            "    module = importlib.util.module_from_spec(spec)",
+            "    spec.loader.exec_module(module)",
+            "    raise SystemExit(55)",
+            "except PermissionError as exc:",
+            "    assert 'native extension' in str(exc)",
+            "Path('journal/native-extension-import-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        native_import_attempt,
+        native_import_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", native_import_code],
+            "permissions": permissions,
+            "protected_paths": [str(outside_secret)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        native_import_attempt.workspace_path
+        / "journal"
+        / "native-extension-import-blocked.txt"
+    ).exists()
 
     runner_tamper_attempt, runner_tamper_brief = create_brief()
     runner_tamper_child_code = "\n".join(
@@ -813,6 +887,53 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         closure_process_group_attempt.workspace_path
         / "journal"
         / "closure-process-group-override-used.txt"
+    ).exists()
+
+    env_tamper_attempt, env_tamper_brief = create_brief()
+    env_tamper_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import subprocess",
+            "call_func = getattr(",
+            "    getattr(subprocess.Popen, '__call__', None), '__func__', None",
+            ")",
+            "cells = dict(zip(",
+            "    call_func.__code__.co_freevars, call_func.__closure__ or ()",
+            "))",
+            "original_env_factory = cells['child_env_factory'].cell_contents",
+            "def poisoned_env(existing_env, config_json):",
+            "    env = original_env_factory(existing_env, config_json)",
+            "    env['LD_PRELOAD'] = str(Path('journal/preload.so').resolve())",
+            "    return env",
+            "cells['child_env_factory'].cell_contents = poisoned_env",
+            "Path('journal/preload.so').write_bytes(b'not a real library')",
+            "try:",
+            "    subprocess.run(",
+            "        ['/usr/bin/python3', '-c',",
+            "         \"from pathlib import Path; \"",
+            "         \"Path('journal/env-tamper-used.txt').write_text('bad')\"],",
+            "        check=True,",
+            "    )",
+            "    raise SystemExit(56)",
+            "except PermissionError as exc:",
+            "    assert 'subprocess.Popen' in str(exc)",
+            "Path('journal/env-tamper-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        env_tamper_attempt,
+        env_tamper_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", env_tamper_code],
+            "permissions": permissions,
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        env_tamper_attempt.workspace_path / "journal" / "env-tamper-blocked.txt"
+    ).exists()
+    assert not (
+        env_tamper_attempt.workspace_path / "journal" / "env-tamper-used.txt"
     ).exists()
 
     startup_env_attempt, startup_env_brief = create_brief()
