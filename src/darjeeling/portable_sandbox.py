@@ -14,13 +14,19 @@ import os
 import runpy
 import socket
 import subprocess
+import shutil
 import sys
 import sysconfig
 from pathlib import Path
 
-config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+config_path = Path(sys.argv[1]).resolve()
+config = json.loads(config_path.read_text(encoding="utf-8"))
 command = config["command"]
 cwd = Path(config["cwd"]).resolve()
+runner_path = Path(config["runner_path"]).resolve()
+allow_dependency_install = bool(config.get("allow_dependency_install", False))
+_child_config_counter = 0
+_subprocess_guard = False
 
 
 def _roots(values):
@@ -115,6 +121,8 @@ def _check_write(path):
 
 
 def _audit(event, args):
+    if event == "subprocess.Popen" and _subprocess_guard:
+        return
     if event == "open":
         path = _resolve_path(args[0] if args else None)
         mode = args[1] if len(args) > 1 else None
@@ -149,6 +157,112 @@ def _audit(event, args):
 
 
 sys.addaudithook(_audit)
+
+
+def _is_python_command(value):
+    try:
+        executable = Path(os.fsdecode(value)).name.lower()
+    except TypeError:
+        return False
+    if executable in {"python", "python3"}:
+        return True
+    return executable.startswith("python3.") or executable.startswith("python.")
+
+
+def _resolve_executable(value):
+    if isinstance(value, bytes):
+        value = os.fsdecode(value)
+    if not isinstance(value, str) or not value:
+        return None
+    if Path(value).is_absolute():
+        return value
+    resolved = shutil.which(value)
+    return resolved or value
+
+
+def _normalize_subprocess_command(raw_command):
+    if isinstance(raw_command, tuple):
+        raw_command = list(raw_command)
+    if not isinstance(raw_command, list) or not raw_command:
+        raise PermissionError(
+            "portable dependency installation requires a Python command list"
+        )
+    command_parts = [
+        os.fsdecode(part) if isinstance(part, bytes) else part for part in raw_command
+    ]
+    if not all(isinstance(part, str) and part for part in command_parts):
+        raise PermissionError(
+            "portable dependency installation requires a Python command list"
+        )
+    executable = _resolve_executable(command_parts[0])
+    if executable is None or not _is_python_command(executable):
+        raise PermissionError(
+            "portable dependency installation only allows sandboxed Python subprocesses"
+        )
+    command_parts[0] = executable
+    return command_parts
+
+
+def _subprocess_cwd(value):
+    if value is None:
+        return cwd
+    path = _resolve_path(value)
+    _check_read(path)
+    return path
+
+
+def _write_child_config(child_command, child_cwd):
+    global _child_config_counter
+    _child_config_counter += 1
+    child_config = dict(config)
+    child_config["command"] = child_command
+    child_config["cwd"] = str(child_cwd)
+    child_config["runner_path"] = str(runner_path)
+    path = config_path.with_name(
+        f".{config_path.stem}.{os.getpid()}.{_child_config_counter}.json"
+    )
+    path.write_text(json.dumps(child_config, sort_keys=True), encoding="utf-8")
+    return path
+
+
+_original_popen = subprocess.Popen
+
+
+def _sandboxed_popen(*popen_args, **popen_kwargs):
+    global _subprocess_guard
+    if not allow_dependency_install:
+        raise PermissionError("subprocess.Popen denied by Darjeeling sandbox")
+    if popen_kwargs.get("shell"):
+        raise PermissionError(
+            "portable dependency installation does not allow shell subprocesses"
+        )
+    if popen_args:
+        raw_command = popen_args[0]
+        remaining_args = popen_args[1:]
+        command_in_kwargs = False
+    else:
+        raw_command = popen_kwargs.get("args")
+        remaining_args = ()
+        command_in_kwargs = "args" in popen_kwargs
+    child_command = _normalize_subprocess_command(raw_command)
+    child_cwd = _subprocess_cwd(popen_kwargs.get("cwd"))
+    child_config = _write_child_config(child_command, child_cwd)
+    wrapped_command = [sys.executable, str(runner_path), str(child_config)]
+    wrapped_kwargs = dict(popen_kwargs)
+    wrapped_kwargs.pop("shell", None)
+    if "cwd" in wrapped_kwargs:
+        wrapped_kwargs["cwd"] = str(child_cwd)
+    _subprocess_guard = True
+    try:
+        if command_in_kwargs:
+            wrapped_kwargs["args"] = wrapped_command
+            return _original_popen(*remaining_args, **wrapped_kwargs)
+        return _original_popen(wrapped_command, *remaining_args, **wrapped_kwargs)
+    finally:
+        _subprocess_guard = False
+
+
+subprocess.Popen = _sandboxed_popen
 os.chdir(cwd)
 
 args = command[1:]
@@ -200,18 +314,23 @@ def build_python_sandbox_command(
     denied_read_roots: list[Path],
     denied_write_roots: list[Path],
     allow_network: bool = False,
+    allow_dependency_install: bool = False,
 ) -> list[str]:
     resolved_command = resolve_python_command(command)
     config_path.parent.mkdir(parents=True, exist_ok=True)
+    runner = textwrap.dedent(_PYTHON_SANDBOX_RUNNER).strip()
+    runner_path = config_path.with_name(f"{config_path.stem}_runner.py")
+    runner_path.write_text(runner + "\n", encoding="utf-8")
     config = {
         "command": resolved_command,
         "cwd": str(cwd),
+        "runner_path": str(runner_path),
         "allowed_read_roots": [str(path) for path in allowed_read_roots],
         "allowed_write_roots": [str(path) for path in allowed_write_roots],
         "denied_read_roots": [str(path) for path in denied_read_roots],
         "denied_write_roots": [str(path) for path in denied_write_roots],
         "allow_network": allow_network,
+        "allow_dependency_install": allow_dependency_install,
     }
     config_path.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
-    runner = textwrap.dedent(_PYTHON_SANDBOX_RUNNER).strip()
-    return [sys.executable, "-c", runner, str(config_path)]
+    return [sys.executable, str(runner_path), str(config_path)]

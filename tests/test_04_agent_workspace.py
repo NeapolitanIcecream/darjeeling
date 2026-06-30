@@ -288,6 +288,7 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     if default_sandbox_config.exists():
         sandbox_config = json.loads(default_sandbox_config.read_text())
         assert sandbox_config["allow_network"] is False
+        assert sandbox_config["allow_dependency_install"] is False
         assert "allow_subprocess" not in sandbox_config
     elif default_session["sandbox_profile"] is not None:
         assert "(deny network*)" in Path(default_session["sandbox_profile"]).read_text()
@@ -341,6 +342,7 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     if research_sandbox_config.exists():
         sandbox_config = json.loads(research_sandbox_config.read_text())
         assert sandbox_config["allow_network"] is True
+        assert sandbox_config["allow_dependency_install"] is True
         assert "allow_subprocess" not in sandbox_config
     elif research_session["sandbox_profile"] is not None:
         assert "(deny network*)" not in Path(research_session["sandbox_profile"]).read_text()
@@ -403,6 +405,59 @@ def test_portable_research_mode_keeps_filesystem_isolation(
 
     monkeypatch.setattr(agent_workspace_module.shutil, "which", no_sandbox_exec)
     permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
+    outside_secret = tmp_path / "outside-child-secret.txt"
+    outside_secret.write_text("secret\n", encoding="utf-8")
+    python_child_attempt, python_child_brief = create_brief()
+    child_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "outside = Path(" + repr(str(outside_secret)) + ")",
+            "try:",
+            "    outside.read_text()",
+            "    raise SystemExit(41)",
+            "except PermissionError:",
+            "    pass",
+            "try:",
+            "    Path('readonly_inputs/train.json').write_text('bad')",
+            "    raise SystemExit(42)",
+            "except PermissionError:",
+            "    pass",
+            "Path('journal/child-sandbox-ok.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        python_child_attempt,
+        python_child_brief,
+        {
+            "command": [
+                "/usr/bin/python3",
+                "-c",
+                "import subprocess; subprocess.run(['/usr/bin/python3', '-c', "
+                + repr(child_code)
+                + "], check=True)",
+            ],
+            "permissions": permissions,
+            "protected_paths": [str(outside_secret)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        python_child_attempt.workspace_path / "journal" / "child-sandbox-ok.txt"
+    ).exists()
+    sandbox_config = json.loads(
+        (
+            python_child_attempt.workspace_path
+            / "journal"
+            / "agent_python_sandbox.json"
+        ).read_text()
+    )
+    assert sandbox_config["allow_network"] is True
+    assert sandbox_config["allow_dependency_install"] is True
+    assert "allow_subprocess" not in sandbox_config
+    assert "bad" not in (
+        python_child_attempt.workspace_path / "readonly_inputs" / "train.json"
+    ).read_text()
+
     subprocess_attempt, subprocess_brief = create_brief()
     with pytest.raises(WorkspaceError, match="agent runtime command failed"):
         launch_target_adaptation_agent(
@@ -412,21 +467,12 @@ def test_portable_research_mode_keeps_filesystem_isolation(
                 "command": [
                     "/usr/bin/python3",
                     "-c",
-                    "import subprocess; subprocess.run(['/usr/bin/python3', '-c', 'pass'])",
+                    "import subprocess; subprocess.run(['/bin/sh', '-c', 'echo bad'])",
                 ],
                 "permissions": permissions,
             },
         )
-    sandbox_config = json.loads(
-        (
-            subprocess_attempt.workspace_path
-            / "journal"
-            / "agent_python_sandbox.json"
-        ).read_text()
-    )
-    assert sandbox_config["allow_network"] is True
-    assert "allow_subprocess" not in sandbox_config
-    assert "subprocess.Popen denied by Darjeeling sandbox" in (
+    assert "only allows sandboxed Python subprocesses" in (
         subprocess_attempt.workspace_path / "journal" / "agent.log"
     ).read_text()
 

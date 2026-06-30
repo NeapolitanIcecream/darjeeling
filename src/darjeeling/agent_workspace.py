@@ -345,6 +345,7 @@ def _agent_portable_sandbox_command(
             denied_read_roots=all_protected,
             denied_write_roots=[*readonly_paths, *all_protected],
             allow_network=permissions.network_access,
+            allow_dependency_install=permissions.dependency_install,
         )
     except Exception as exc:
         raise WorkspaceError(str(exc)) from exc
