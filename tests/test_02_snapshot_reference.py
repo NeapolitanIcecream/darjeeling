@@ -710,6 +710,73 @@ def test_openai_compatible_reference_config_writes_cache_and_usage_ledger(
     assert ledger["entries"][1]["cost_status"] == "cache-hit"
 
 
+def test_openai_compatible_reference_config_overrides_request_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "reference.json"
+    config_path.write_text(
+        __import__("json").dumps(
+            {
+                "provider": "openai_compatible",
+                "base_url_env": "TEST_OPENAI_BASE_URL",
+                "api_key_env": "TEST_OPENAI_API_KEY",
+                "model": "configured-model",
+                "price": {
+                    "input_per_million": 1.0,
+                    "output_per_million": 1.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TEST_OPENAI_BASE_URL", "https://provider.example/v1")
+    monkeypatch.setenv("TEST_OPENAI_API_KEY", "secret")
+    bodies: list[dict] = []
+
+    class FakeResponse:
+        headers = {"openai-processing-ms": "1"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return __import__("json").dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {"content": '{"label": "a"}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        bodies.append(__import__("json").loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    broker = build_reference_broker_from_config(config_path)
+
+    broker.call(
+        {
+            "model": "target-request-model",
+            "messages": [{"role": "user", "content": "x"}],
+        },
+        ReferenceContext(
+            purpose="snapshot_label",
+            request_id="r1",
+            metadata={"contract_hash": "c1", "normalized_input": "n1"},
+        ),
+    )
+
+    assert bodies[0]["model"] == "configured-model"
+
+
 def test_openai_compatible_reference_config_rejects_unknown_token_price(
     tmp_path: Path, monkeypatch
 ) -> None:

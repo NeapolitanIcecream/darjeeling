@@ -122,7 +122,8 @@ class OpenAICompatibleReferenceBroker:
                     self._cache[record["cache_key"]] = record
 
     def call(self, request: dict[str, Any], context: ReferenceContext) -> ReferenceResponse:
-        cache_key = self._cache_key(request, context)
+        provider_request = self._provider_request(request)
+        cache_key = self._cache_key(provider_request, context)
         cached = self._cache.get(cache_key)
         if cached is not None:
             self._write_usage_event(
@@ -149,7 +150,7 @@ class OpenAICompatibleReferenceBroker:
             )
         started = time.perf_counter()
         try:
-            response = self._call_provider(request, context)
+            response = self._call_provider(provider_request, context)
         except Exception as exc:
             latency_ms = (time.perf_counter() - started) * 1000.0
             self._write_usage_event(
@@ -192,7 +193,7 @@ class OpenAICompatibleReferenceBroker:
         payload = _response_payload(response)
         record = {
             "cache_key": cache_key,
-            "request_hash": stable_hash(request),
+            "request_hash": stable_hash(provider_request),
             "payload": payload,
             "reference_version": self.reference_version,
             "usage": usage,
@@ -250,8 +251,7 @@ class OpenAICompatibleReferenceBroker:
     def _call_provider(
         self, request: dict[str, Any], context: ReferenceContext
     ) -> dict[str, Any]:
-        body = dict(request)
-        body.setdefault("model", self.config.model)
+        body = self._provider_request(request)
         if (
             self.config.max_completion_tokens is not None
             and "max_completion_tokens" not in body
@@ -293,6 +293,11 @@ class OpenAICompatibleReferenceBroker:
         except urllib.error.HTTPError as exc:
             text = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"reference provider HTTP {exc.code}: {text[:500]}") from exc
+
+    def _provider_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        body = dict(request)
+        body["model"] = self.config.model
+        return body
 
     def _append_cache_record(self, record: dict[str, Any]) -> None:
         self._cache[record["cache_key"]] = record

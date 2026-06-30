@@ -614,6 +614,4 @@ class _BudgetedReferenceBroker:
         response = self._broker.call(request, context)
         self.call_count += 1
         self.cost += max(float(response.cost), 0.0)
-        if self.max_cost is not None and self.cost > self.max_cost:
-            raise RuntimeError("reference cost budget exhausted after provider call")
         return response

@@ -470,6 +470,31 @@ def test_reference_budget_blocks_zero_cost_before_provider_call() -> None:
     assert broker.call_count == 0
 
 
+def test_reference_budget_keeps_response_that_crosses_budget() -> None:
+    class PaidBroker:
+        reference_version = "paid"
+
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def call(
+            self, request: dict[str, Any], context: ReferenceContext
+        ) -> ReferenceResponse:
+            self.call_count += 1
+            return ReferenceResponse(payload={"label": "a"}, cost=0.25)
+
+    broker = PaidBroker()
+    budgeted = _BudgetedReferenceBroker(broker, max_cost=0.1)
+
+    response = budgeted.call({}, ReferenceContext(purpose="snapshot_label"))
+
+    assert response.payload == {"label": "a"}
+    assert response.cost == 0.25
+    assert broker.call_count == 1
+    assert budgeted.call_count == 1
+    assert budgeted.cost == 0.25
+
+
 def test_compile_reference_usage_counts_prior_provider_spend() -> None:
     broker = SimpleNamespace(call_count=7, cost=9.0)
     snapshot_result = SimpleNamespace(
