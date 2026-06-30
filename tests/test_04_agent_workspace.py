@@ -307,7 +307,10 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     assert "- Preferred tools: none specified." in default_text
     assert "- Extra instructions: none specified." in default_text
     assert "- Network research: disabled." in default_text
-    assert "- Workspace-local dependency installation: disabled." in default_text
+    assert (
+        "- Workspace-local dependency installation authorization: not granted."
+        in default_text
+    )
 
     with _fake_agent_sandbox_exec(tmp_path):
         launch_target_adaptation_agent(
@@ -333,6 +336,51 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     default_profile = Path(default_session["sandbox_profile"]).read_text()
     assert "(deny network*)" in default_profile
 
+    dependency_attempt, dependency_manifest = create_mounted_attempt()
+    dependency_permissions = AgentWorkspacePermissions(
+        network_access=False,
+        dependency_install=True,
+    )
+    dependency_brief = write_agent_brief(
+        dependency_attempt,
+        compile_run,
+        dependency_manifest,
+        {},
+        workspace_permissions=dependency_permissions,
+    )
+    dependency_text = dependency_brief.read_text(encoding="utf-8")
+    assert (
+        "- Workspace-local dependency installation authorization: granted."
+        in dependency_text
+    )
+    assert "does not detect, intercept, or audit dependency installation commands" in (
+        dependency_text
+    )
+
+    with _fake_agent_sandbox_exec(tmp_path):
+        launch_target_adaptation_agent(
+            dependency_attempt,
+            dependency_brief,
+            {
+                "command": [
+                    "/usr/bin/python3",
+                    "-c",
+                    "from pathlib import Path; Path('journal/dependency.txt').write_text('ok')",
+                ],
+                "permissions": dependency_permissions,
+            },
+        )
+    dependency_session = json.loads(
+        (dependency_attempt.workspace_path / "journal" / "agent_session.json").read_text()
+    )
+    assert dependency_session["workspace_permissions"] == {
+        "network_access": False,
+        "dependency_install": True,
+    }
+    assert dependency_session["sandbox_mode"] == "sandbox_exec"
+    dependency_profile = Path(dependency_session["sandbox_profile"]).read_text()
+    assert "(deny network*)" in dependency_profile
+
     research_attempt, research_manifest = create_mounted_attempt()
     guidance = AgentSearchGuidance(
         preferred_strategies=["multi_round_local_search", "threshold_sweep"],
@@ -354,7 +402,10 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     assert "python, optuna" in research_text
     assert "Start with a simple baseline before tuning." in research_text
     assert "- Network research: allowed." in research_text
-    assert "- Workspace-local dependency installation: allowed." in research_text
+    assert (
+        "- Workspace-local dependency installation authorization: granted."
+        in research_text
+    )
     assert "Use only Core-written feedback files" in research_text
 
     with _fake_agent_sandbox_exec(tmp_path):

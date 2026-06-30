@@ -709,10 +709,13 @@ def write_agent_brief(
                 "Workspace permissions:",
                 "- Network research: "
                 f"{_permission_status(permissions.network_access)}.",
-                "- Workspace-local dependency installation: "
-                f"{_permission_status(permissions.dependency_install)}.",
-                "These are allowed capabilities, not required steps. Keep dependency "
-                "installs inside this attempt workspace when possible.",
+                "- Workspace-local dependency installation authorization: "
+                f"{_authorization_status(permissions.dependency_install)}.",
+                "Dependency installation authorization is guidance for the "
+                "target-adaptation agent. Core records it but does not detect, "
+                "intercept, or audit dependency installation commands.",
+                "Keep any dependency artifacts inside this attempt workspace. "
+                "Existing workspace, holdout, release, and L4 boundaries still apply.",
                 "Keep validation and test data out of local search. Use only "
                 "Core-written feedback files for official validation feedback.",
                 f"readonly_entries: {mount_manifest.entries}",
@@ -730,6 +733,10 @@ def _format_brief_list(values: list[str]) -> str:
 
 def _permission_status(value: bool) -> str:
     return "allowed" if value else "disabled"
+
+
+def _authorization_status(value: bool) -> str:
+    return "granted" if value else "not granted"
 
 
 def _coerce_workspace_permissions(value: Any) -> AgentWorkspacePermissions:
@@ -798,9 +805,7 @@ def _prepare_agent_launch(
         attempt.workspace_path, command, protected_paths, permissions
     )
     sandbox_mode = (
-        "sandbox_exec_research"
-        if permissions.network_access or permissions.dependency_install
-        else "sandbox_exec"
+        "sandbox_exec_research" if permissions.network_access else "sandbox_exec"
     )
     sandboxed_command = [
         sandbox_exec,

@@ -147,10 +147,11 @@ Fields:
 - `network_access: bool`
 - `dependency_install: bool`
 
-Defaults are conservative: no network research and no workspace-local
-dependency installation. When a user explicitly enables either permission, the
-agent launch policy records that choice and relaxes the matching runtime
-restriction for the attempt workspace.
+Defaults are conservative: no network research and no recorded authorization for
+workspace-local dependency installation. `dependency_install` is a user
+authorization and prompt hint for the target-adaptation agent. Core renders it
+in the brief and records it in session metadata; Core does not try to identify,
+intercept, or audit all dependency installation behavior.
 
 Current target-adaptation agent execution support is the macOS
 `sandbox-exec` launch path. If `sandbox-exec` is unavailable, Core fails the
@@ -359,8 +360,8 @@ Purpose:
 
 - Write a concise brief telling the agent the target, scorecard, budget, allowed files, forbidden actions, and candidate submission format.
 - Render the objective, preferred search strategies/tools, extra user
-  instructions, and whether network research or workspace-local dependency
-  installation is allowed.
+  instructions, whether network research is allowed, and whether the user
+  authorized workspace-local dependency installation.
 - Include that compile-time scaffolding and runtime source are both writable.
 - Include mounted telemetry summaries as aggregate context only, not as raw production examples.
 - Include that generated code must not launch another autonomous coding agent.
@@ -386,11 +387,11 @@ Purpose:
 - Start the single target adaptation agent for this attempt.
 - Stream logs and command events to the compile run store.
 - Apply time, filesystem, network, process, and API broker restrictions. Network
-  and workspace-local dependency installation remain disabled by default and are
-  enabled only when the attempt permissions explicitly allow them. In the macOS
-  profile, network access is allowed by omitting `(deny network*)`; workspace
-  dependency installation is allowed only within the existing attempt workspace
-  write surface.
+  access remains disabled by default and is allowed in the macOS profile by
+  omitting `(deny network*)`. `dependency_install` is recorded authorization and
+  agent guidance, not a dependency-install-specific sandbox or audit policy; the
+  existing attempt workspace, readonly mount, protected path, holdout, release,
+  and L4 boundaries still apply.
 
 Used by:
 
@@ -556,8 +557,8 @@ Used by:
 - Only accepted Release work or explicit carry-forward can become the next workspace baseline.
 - The agent can edit `scaffolding/` and `runtime/`, but not active target definition, evaluator, snapshot, registry, or telemetry.
 - Generated scaffolding may call trainers, tuners, compilers, and Core brokers, but not another autonomous coding agent.
-- User-enabled network research or workspace-local dependency installation does
-  not grant validation/test rows, release authority, evaluator authority,
-  registry credentials, production credentials, or direct reference/L4 broker
-  access.
+- User-enabled network research or workspace-local dependency installation
+  authorization does not grant validation/test rows, release authority,
+  evaluator authority, registry credentials, production credentials, or direct
+  reference/L4 broker access.
 - Test evaluation starts only after the relevant agent attempt is closed.

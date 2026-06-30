@@ -1651,7 +1651,8 @@ def test_first_compile_after_cold_start_uses_recompile_request_path(
     assert "python, web_search" in brief
     assert "Try one simple baseline before broader search." in brief
     assert "- Network research: allowed." in brief
-    assert "- Workspace-local dependency installation: allowed." in brief
+    assert "- Workspace-local dependency installation authorization: granted." in brief
+    assert "does not detect, intercept, or audit dependency installation commands" in brief
     session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
     assert session["workspace_permissions"] == {
         "network_access": True,
