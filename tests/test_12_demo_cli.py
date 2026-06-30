@@ -182,7 +182,7 @@ def test_compile_run_requires_target_reference_before_provider_setup(
         )
 
 
-def test_compile_run_protects_source_target_path_before_agent_launch(
+def test_compile_run_protects_snapshots_and_resolves_agent_command_before_launch(
     target_dir, tmp_path, monkeypatch
 ) -> None:
     class StopAfterLaunch(Exception):
@@ -202,10 +202,23 @@ def test_compile_run_protects_source_target_path_before_agent_launch(
     )
     attempt = SimpleNamespace(
         attempt_id="attempt-id",
-        workspace_path=tmp_path / "workspaces" / "attempt-id",
+        workspace_path=tmp_path / "external-workspaces" / "attempt-id",
     )
+    agent_dir = tmp_path.parent / f"{tmp_path.name}-agent-bin"
+    agent_dir.mkdir()
+    relative_agent = agent_dir / "agent.sh"
+    relative_agent.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    relative_agent.chmod(0o755)
 
-    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    original_which = shutil.which
+
+    def fake_which(name: str) -> str | None:
+        if name == "sandbox-exec":
+            return "/usr/bin/sandbox-exec"
+        return original_which(name)
+
+    monkeypatch.chdir(agent_dir)
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
     monkeypatch.setattr(
         "darjeeling.cli.load_checked_target",
         lambda target_path, require_reference=False: (
@@ -259,8 +272,8 @@ def test_compile_run_protects_source_target_path_before_agent_launch(
             target_path=target_dir,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "reference.json",
-            agent_command='["python3", "-c", "pass"]',
-            workspace_root=None,
+            agent_command='["./agent.sh"]',
+            workspace_root=tmp_path / "external-workspaces",
             max_candidates=1,
             max_agent_seconds=1,
             max_cost=1.0,
@@ -271,7 +284,11 @@ def test_compile_run_protects_source_target_path_before_agent_launch(
             allow_insufficient_reference=False,
         )
 
-    assert captured_runtime["protected_paths"] == [str(target_dir.resolve())]
+    assert captured_runtime["command"] == [str(relative_agent.resolve())]
+    assert captured_runtime["protected_paths"] == [
+        str(target_dir.resolve()),
+        str((tmp_path / "run" / "snapshots").resolve()),
+    ]
 
 
 def test_compile_run_rejects_budget_exhausted_before_final_test(

@@ -230,7 +230,7 @@ def _run_compile_command(
     if max_cost == 0:
         raise ValueError("--max-cost 0 leaves no budget for the required reference probe")
     _ensure_agent_execution_supported()
-    _ensure_agent_command_supported(command)
+    command = _resolve_agent_command(command)
     definition, contract, target_check = load_checked_target(
         target_path, require_reference=True
     )
@@ -364,7 +364,10 @@ def _run_compile_command(
             "command": command,
             "timeout_seconds": max_agent_seconds,
             "permissions": asdict(agent_options.permissions),
-            "protected_paths": [str(target_path.resolve())],
+            "protected_paths": [
+                str(target_path.resolve()),
+                str((run_root / "snapshots").resolve()),
+            ],
         },
     )
     loop_result = run_interactive_compile_loop(
@@ -528,12 +531,14 @@ def _ensure_agent_execution_supported() -> None:
         )
 
 
-def _ensure_agent_command_supported(command: list[str]) -> None:
-    if shutil.which(command[0]) is None:
+def _resolve_agent_command(command: list[str]) -> list[str]:
+    executable = shutil.which(command[0])
+    if executable is None:
         raise ValueError(
             f"agent command executable was not found: {command[0]}. "
             "No reference calls were made."
         )
+    return [str(Path(executable).expanduser().resolve()), *command[1:]]
 
 
 def _ensure_agent_command_outside_protected_paths(
