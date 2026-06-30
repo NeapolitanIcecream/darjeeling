@@ -171,7 +171,8 @@ Inputs:
 - Current `Release` and historical `AgentVisibleReport` summaries from Release Runtime/Candidate Evaluation.
 - Agent-visible telemetry summaries from Runtime Feedback.
 - Runtime protocol docs from Artifact Worker.
-- Compile budget and launch decision from Compile Orchestration.
+- Compile budget, launch decision, user search guidance, and workspace
+  permission policy from Compile Orchestration.
 
 Outputs:
 
@@ -187,6 +188,11 @@ Responsibilities:
 - Launch exactly one target adaptation agent per attempt.
 - Let the agent write compile-time scaffolding and L1/L2/L3 runtime source.
 - Prevent validation/test and registry credentials from entering the workspace.
+  User-enabled network research or workspace-local dependency installation
+  authorization does not change the hidden holdout boundary.
+- Run target-adaptation agents through the macOS `sandbox-exec` launch path for
+  now; platforms without `sandbox-exec` need a future external runner/container
+  design instead of a Python-level sandbox fallback.
 - Close the agent session before test evaluation.
 
 ### Artifact Worker Module

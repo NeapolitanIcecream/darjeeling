@@ -460,8 +460,16 @@ class CompileBudget:
 
 
 @dataclass(frozen=True)
+class AgentSearchGuidance:
+    preferred_strategies: list[str] = field(default_factory=list)
+    preferred_tools: list[str] = field(default_factory=list)
+    extra_instructions: str | None = None
+
+
+@dataclass(frozen=True)
 class CompileOptions:
     objective: dict[str, Any] = field(default_factory=dict)
+    agent_guidance: AgentSearchGuidance = field(default_factory=AgentSearchGuidance)
     allow_insufficient_reference_qualification: bool = False
 
 
@@ -563,10 +571,17 @@ class WorkspaceStore:
 
 
 @dataclass(frozen=True)
+class AgentWorkspacePermissions:
+    network_access: bool = False
+    dependency_install: bool = False
+
+
+@dataclass(frozen=True)
 class AgentAttemptOptions:
     agent_model: str = "manual"
     agent_command: list[str] = field(default_factory=list)
     agent_timeout_seconds: int | None = None
+    permissions: AgentWorkspacePermissions = field(default_factory=AgentWorkspacePermissions)
 
 
 @dataclass(frozen=True)

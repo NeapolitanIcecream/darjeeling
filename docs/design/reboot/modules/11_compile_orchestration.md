@@ -20,6 +20,8 @@ Inputs:
 - Optional `TelemetryDataSource` carried by a `RecompileRequest`.
 - Existing `ConsumedRowsManifest` values from Snapshot And Reference and Candidate Evaluation.
 - `ReferenceBroker` settings, `CompileBudget`, `CompileOptions`, and `SchedulerPolicy` from CLI/config.
+- Optional user agent guidance in `CompileOptions` and workspace permissions in
+  `AgentAttemptOptions`.
 - Current active compile jobs from the compile run store.
 
 Outputs:
@@ -155,6 +157,9 @@ Purpose:
   launch options explicitly approve insufficient reference evidence for this
   run.
 - Load the target workspace, create a `CompileRun`, create an isolated `AgentAttempt`, mount allowed inputs, write the agent brief, and launch the single target adaptation agent.
+- Pass `compile_options.agent_guidance` to the agent brief and
+  `agent_options.permissions` to both the brief and launch runtime metadata.
+  Compile Orchestration does not interpret preferred strategy or tool strings.
 - Pass selected historical `AgentVisibleReport` summaries and
   `AgentVisibleTelemetrySummary` values through to Agent Workspace mounting.
 - Record the compile launch in the compile run store.
@@ -172,4 +177,9 @@ Used by:
 - It never evaluates Candidate quality; Candidate Evaluation owns that.
 - It never creates or approves a Release; Release Runtime owns that.
 - It never turns runtime traces into Snapshot rows; Telemetry Evidence And Recompile and Snapshot And Reference own that path.
+- It may pass user search guidance and workspace permissions through to Agent
+  Workspace, but it does not turn those strings into target-specific optimizer
+  behavior.
+- It relies on Agent Workspace for the current macOS `sandbox-exec` launch
+  support and does not introduce a portable Python sandbox or runner registry.
 - It may defer or reject a compile for budget, concurrency, policy, stale base Release, failed target checks, or failed reference qualification.

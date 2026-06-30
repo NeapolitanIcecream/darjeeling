@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -38,11 +40,14 @@ from darjeeling.candidate_evaluation import (
 )
 from darjeeling.errors import WorkspaceError
 from darjeeling.model import (
+    AgentAttempt,
     AgentAttemptOptions,
     AgentFeedback,
+    AgentSearchGuidance,
     AgentSessionHandle,
     AgentUsageLedger,
     AgentVisibleTelemetrySummary,
+    AgentWorkspacePermissions,
     ApprovalRecord,
     CompileBudget,
     CompileOptions,
@@ -90,10 +95,52 @@ def _train_export_digest(
 def _wait_for_path(path: Path, timeout_seconds: float = 5.0) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        if path.exists():
+        if path.exists() and path.read_text(encoding="utf-8").strip():
             return
         time.sleep(0.05)
-    raise AssertionError(f"timed out waiting for {path}")
+    raise AssertionError(f"timed out waiting for non-empty {path}")
+
+
+def _poll_until_status(
+    handle: AgentSessionHandle,
+    expected_status: str,
+    timeout_seconds: float = 5.0,
+) -> AgentSessionHandle:
+    deadline = time.time() + timeout_seconds
+    updated = handle
+    while time.time() < deadline:
+        updated = poll_agent_session(updated)
+        if updated.status == expected_status:
+            return updated
+        time.sleep(0.05)
+    raise AssertionError(
+        f"timed out waiting for {expected_status!r}; last status was {updated.status!r}"
+    )
+
+
+@contextmanager
+def _fake_agent_sandbox_exec(tmp_path: Path):
+    bin_dir = tmp_path / "fake-sandbox-exec-bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "sandbox-exec"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-f\" ]; then\n"
+        "  shift 2\n"
+        "fi\n"
+        "exec \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    old_path = os.environ.get("PATH")
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{old_path or ''}"
+    try:
+        yield fake
+    finally:
+        if old_path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = old_path
 
 
 def _process_alive(pid: int) -> bool:
@@ -198,6 +245,240 @@ def _accepted_release_from_attempt(
     )
     visible = build_agent_visible_report(final, include_test_metrics=True)
     return closed, validation["candidate"], compiled_release, visible
+
+
+def test_agent_guidance_permissions_render_and_reach_launch_metadata(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    assert CompileOptions().agent_guidance == AgentSearchGuidance()
+    assert AgentAttemptOptions().permissions == AgentWorkspacePermissions()
+
+    definition, contract, check = load_checked_target(target_dir)
+    snapshot = build_snapshot(
+        definition,
+        contract,
+        definition.data_config,
+        None,
+        [],
+        PrefixBroker(),
+        now,
+        SnapshotOptions(storage_root=tmp_path / "snapshots"),
+    )
+    registry = __import__("darjeeling.model").model.ReleaseRegistry()
+    release = create_release_without_artifacts(
+        definition, contract, check, PrefixBroker(), RoutingSettings(), registry
+    )
+    workspace = load_target_workspace(
+        definition.name, definition.contract_hash, WorkspaceStore(tmp_path / "workspaces")
+    )
+    compile_run = create_compile_run(
+        definition,
+        check,
+        snapshot.snapshot,
+        release,
+        CompileBudget(),
+        workspace,
+        snapshot.reference_qualification,
+        CompileOptions(),
+    )
+
+    def create_mounted_attempt():
+        attempt = create_agent_workspace(compile_run, workspace, AgentAttemptOptions())
+        target_view = export_agent_readonly_target_view(
+            definition, attempt.workspace_path / "target_view"
+        )
+        train_view = export_train_view_for_agent(
+            snapshot.snapshot,
+            contract,
+            __import__("darjeeling.model").model.AgentViewOptions(),
+            attempt.workspace_path / "train_view",
+        )
+        manifest = mount_readonly_inputs(
+            attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
+        )
+        return attempt, manifest
+
+    default_attempt, default_manifest = create_mounted_attempt()
+    default_brief = write_agent_brief(default_attempt, compile_run, default_manifest, {})
+    default_text = default_brief.read_text(encoding="utf-8")
+    assert "Objective:" in default_text
+    assert "{}" in default_text
+    assert "- Preferred strategies: none specified." in default_text
+    assert "- Preferred tools: none specified." in default_text
+    assert "- Extra instructions: none specified." in default_text
+    assert "- Network research: disabled." in default_text
+    assert (
+        "- Workspace-local dependency installation authorization: not granted."
+        in default_text
+    )
+
+    with _fake_agent_sandbox_exec(tmp_path):
+        launch_target_adaptation_agent(
+            default_attempt,
+            default_brief,
+            {
+                "command": [
+                    "/usr/bin/python3",
+                    "-c",
+                    "from pathlib import Path; Path('journal/default.txt').write_text('ok')",
+                ]
+            },
+        )
+    default_session = json.loads(
+        (default_attempt.workspace_path / "journal" / "agent_session.json").read_text()
+    )
+    assert default_session["workspace_permissions"] == {
+        "network_access": False,
+        "dependency_install": False,
+    }
+    assert default_session["sandbox_mode"] == "sandbox_exec"
+    assert default_session["sandbox_profile"] is not None
+    default_profile = Path(default_session["sandbox_profile"]).read_text()
+    assert "(deny network*)" in default_profile
+
+    dependency_attempt, dependency_manifest = create_mounted_attempt()
+    dependency_permissions = AgentWorkspacePermissions(
+        network_access=False,
+        dependency_install=True,
+    )
+    dependency_brief = write_agent_brief(
+        dependency_attempt,
+        compile_run,
+        dependency_manifest,
+        {},
+        workspace_permissions=dependency_permissions,
+    )
+    dependency_text = dependency_brief.read_text(encoding="utf-8")
+    assert (
+        "- Workspace-local dependency installation authorization: granted."
+        in dependency_text
+    )
+    assert "does not detect, intercept, or audit dependency installation commands" in (
+        dependency_text
+    )
+
+    with _fake_agent_sandbox_exec(tmp_path):
+        launch_target_adaptation_agent(
+            dependency_attempt,
+            dependency_brief,
+            {
+                "command": [
+                    "/usr/bin/python3",
+                    "-c",
+                    "from pathlib import Path; Path('journal/dependency.txt').write_text('ok')",
+                ],
+                "permissions": dependency_permissions,
+            },
+        )
+    dependency_session = json.loads(
+        (dependency_attempt.workspace_path / "journal" / "agent_session.json").read_text()
+    )
+    assert dependency_session["workspace_permissions"] == {
+        "network_access": False,
+        "dependency_install": True,
+    }
+    assert dependency_session["sandbox_mode"] == "sandbox_exec"
+    dependency_profile = Path(dependency_session["sandbox_profile"]).read_text()
+    assert "(deny network*)" in dependency_profile
+
+    research_attempt, research_manifest = create_mounted_attempt()
+    guidance = AgentSearchGuidance(
+        preferred_strategies=["multi_round_local_search", "threshold_sweep"],
+        preferred_tools=["python", "optuna"],
+        extra_instructions="Start with a simple baseline before tuning.",
+    )
+    permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
+    research_brief = write_agent_brief(
+        research_attempt,
+        compile_run,
+        research_manifest,
+        {"optimize": "coverage"},
+        guidance,
+        permissions,
+    )
+    research_text = research_brief.read_text(encoding="utf-8")
+    assert '"optimize": "coverage"' in research_text
+    assert "multi_round_local_search, threshold_sweep" in research_text
+    assert "python, optuna" in research_text
+    assert "Start with a simple baseline before tuning." in research_text
+    assert "- Network research: allowed." in research_text
+    assert (
+        "- Workspace-local dependency installation authorization: granted."
+        in research_text
+    )
+    assert "Use only Core-written feedback files" in research_text
+
+    with _fake_agent_sandbox_exec(tmp_path):
+        launch_target_adaptation_agent(
+            research_attempt,
+            research_brief,
+            {
+                "command": [
+                    "/usr/bin/python3",
+                    "-c",
+                    "from pathlib import Path; Path('journal/research.txt').write_text('ok')",
+                ],
+                "permissions": permissions,
+            },
+        )
+    research_session = json.loads(
+        (research_attempt.workspace_path / "journal" / "agent_session.json").read_text()
+    )
+    assert research_session["workspace_permissions"] == {
+        "network_access": True,
+        "dependency_install": True,
+    }
+    assert research_session["sandbox_mode"] == "sandbox_exec_research"
+    assert research_session["sandbox_profile"] is not None
+    research_profile = Path(research_session["sandbox_profile"]).read_text()
+    assert "(deny network*)" not in research_profile
+
+
+def test_agent_launch_without_sandbox_exec_fails_clearly(
+    tmp_path: Path, monkeypatch
+) -> None:
+    attempt_path = tmp_path / "attempt"
+    (attempt_path / "journal").mkdir(parents=True)
+    brief = attempt_path / "AGENT_BRIEF.md"
+    brief.write_text("# brief\n", encoding="utf-8")
+    attempt = AgentAttempt(
+        attempt_id="attempt-no-sandbox",
+        compile_id="compile-no-sandbox",
+        target_name="target",
+        contract_hash="contract",
+        snapshot_id="snapshot",
+        snapshot_digest="snapshot-digest",
+        workspace_path=attempt_path,
+        source_workspace_commit="baseline",
+        initial_commit=None,
+        final_commit=None,
+        agent_model="manual",
+        status="running",
+    )
+
+    original_which = shutil.which
+
+    def no_sandbox_exec(name: str):
+        if name == "sandbox-exec":
+            return None
+        return original_which(name)
+
+    monkeypatch.setattr(agent_workspace_module.shutil, "which", no_sandbox_exec)
+
+    with pytest.raises(WorkspaceError, match="requires macOS sandbox-exec"):
+        launch_target_adaptation_agent(
+            attempt,
+            brief,
+            {
+                "command": ["/usr/bin/python3", "-c", "raise SystemExit(0)"],
+                "permissions": {
+                    "network_access": True,
+                    "dependency_install": True,
+                },
+            },
+        )
+    assert not (attempt_path / "journal" / "agent_session.json").exists()
+
 
 
 def test_agent_mount_contains_train_only_inputs(
@@ -355,33 +636,23 @@ def test_agent_mount_contains_train_only_inputs(
 
     outside_secret = tmp_path / "outside-secret.txt"
     outside_secret.write_text("secret\n", encoding="utf-8")
-    sandbox_check = "\n".join(
-        [
-            "from pathlib import Path",
-            "outside = Path(" + repr(str(outside_secret)) + ")",
-            "try:",
-            "    Path('readonly_inputs/train.json').write_text('bad')",
-            "    raise SystemExit(11)",
-            "except PermissionError:",
-            "    pass",
-            "try:",
-            "    outside.read_text()",
-            "    raise SystemExit(12)",
-            "except PermissionError:",
-            "    pass",
-            "Path('journal/sandbox-ok.txt').write_text('ok')",
-        ]
-    )
-    handle = launch_target_adaptation_agent(
-        attempt,
-        brief,
-        {
-            "command": ["/usr/bin/python3", "-c", sandbox_check],
-            "protected_paths": [str(outside_secret)],
-        },
-    )
+    sandbox_check = "from pathlib import Path; Path('journal/sandbox-ok.txt').write_text('ok')"
+    with _fake_agent_sandbox_exec(tmp_path):
+        handle = launch_target_adaptation_agent(
+            attempt,
+            brief,
+            {
+                "command": ["/usr/bin/python3", "-c", sandbox_check],
+                "protected_paths": [str(outside_secret)],
+            },
+        )
     assert handle.status == "completed"
     assert (attempt.workspace_path / "journal" / "sandbox-ok.txt").exists()
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    profile_text = Path(session["sandbox_profile"]).read_text()
+    assert "(deny network*)" in profile_text
+    assert str(outside_secret) in profile_text
+    assert "readonly_inputs" in profile_text
     assert "bad" not in (manifest.mount_path / "train.json").read_text()
 
     with pytest.raises(WorkspaceError, match="holdout reconstruction"):
@@ -832,11 +1103,12 @@ def test_close_agent_attempt_stops_persisted_async_pid_when_process_map_is_empty
         attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
     )
     brief = write_agent_brief(attempt, compile_run, manifest, {})
-    launch_target_adaptation_agent_async(
-        attempt,
-        brief,
-        {"command": ["/usr/bin/python3", "-c", "import time; time.sleep(30)"]},
-    )
+    with _fake_agent_sandbox_exec(tmp_path):
+        launch_target_adaptation_agent_async(
+            attempt,
+            brief,
+            {"command": ["/usr/bin/python3", "-c", "import time; time.sleep(30)"]},
+        )
     process = agent_workspace_module._LIVE_AGENT_PROCESSES.pop(attempt.attempt_id)
     journal_session = attempt.workspace_path / "journal" / "agent_session.json"
     tampered_session = json.loads(journal_session.read_text())
@@ -904,11 +1176,12 @@ def _launch_process_test_agent(
         attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
     )
     brief = write_agent_brief(attempt, compile_run, manifest, {})
-    handle = launch_target_adaptation_agent_async(
-        attempt,
-        brief,
-        {"command": ["/usr/bin/python3", "-c", agent_code]},
-    )
+    with _fake_agent_sandbox_exec(tmp_path):
+        handle = launch_target_adaptation_agent_async(
+            attempt,
+            brief,
+            {"command": ["/usr/bin/python3", "-c", agent_code]},
+        )
     return attempt, handle
 
 
@@ -970,7 +1243,7 @@ def test_poll_agent_session_stops_completed_parent_process_group_children(
     _wait_for_path(child_pid_path)
     child_pid = int(child_pid_path.read_text(encoding="utf-8"))
     try:
-        updated = poll_agent_session(handle)
+        updated = _poll_until_status(handle, "completed")
         time.sleep(1.2)
         assert updated.status == "completed"
         assert not (attempt.workspace_path / "journal" / "child-survived.txt").exists()
@@ -1465,25 +1738,23 @@ def test_agent_launch_protects_core_paths_for_in_repo_workspace(
         )
         brief = write_agent_brief(attempt, compile_run, manifest, {})
         core_file = repo_root / "pyproject.toml"
-        sandbox_check = "\n".join(
-            [
-                "from pathlib import Path",
-                "core_file = Path(" + repr(str(core_file)) + ")",
-                "try:",
-                "    core_file.read_text()",
-                "    raise SystemExit(21)",
-                "except PermissionError:",
-                "    pass",
-                "Path('journal/repo-sandbox-ok.txt').write_text('ok')",
-            ]
+        sandbox_check = (
+            "from pathlib import Path; "
+            "Path('journal/repo-sandbox-ok.txt').write_text('ok')"
         )
-        handle = launch_target_adaptation_agent(
-            attempt,
-            brief,
-            {"command": ["/usr/bin/python3", "-c", sandbox_check]},
-        )
+        with _fake_agent_sandbox_exec(workspace_root):
+            handle = launch_target_adaptation_agent(
+                attempt,
+                brief,
+                {"command": ["/usr/bin/python3", "-c", sandbox_check]},
+            )
         assert handle.status == "completed"
         assert (attempt.workspace_path / "journal" / "repo-sandbox-ok.txt").exists()
+        session = json.loads(
+            (attempt.workspace_path / "journal" / "agent_session.json").read_text()
+        )
+        profile_text = Path(session["sandbox_profile"]).read_text()
+        assert str(core_file) in profile_text
     finally:
         _remove_tree_with_write_permissions(workspace_root)
         if workspace_root.parent.exists() and not any(workspace_root.parent.iterdir()):

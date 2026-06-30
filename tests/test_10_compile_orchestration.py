@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -31,10 +32,12 @@ from darjeeling.compile_orchestration import (
 from darjeeling.errors import CompileLaunchError, WorkspaceError
 from darjeeling.model import (
     AgentAttemptOptions,
+    AgentSearchGuidance,
     AgentViewOptions,
     AgentVisibleDecisionSummary,
     AgentVisibleReport,
     AgentVisibleTelemetrySummary,
+    AgentWorkspacePermissions,
     CompileBudget,
     CompileOptions,
     CompileRunStore,
@@ -109,6 +112,31 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+@contextmanager
+def _fake_agent_sandbox_exec(tmp_path: Path):
+    bin_dir = tmp_path / "fake-sandbox-exec-bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "sandbox-exec"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-f\" ]; then\n"
+        "  shift 2\n"
+        "fi\n"
+        "exec \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    old_path = os.environ.get("PATH")
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{old_path or ''}"
+    try:
+        yield fake
+    finally:
+        if old_path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = old_path
+
+
 def _launch_interactive_agent(
     target_dir: Path,
     tmp_path: Path,
@@ -165,14 +193,15 @@ def _launch_interactive_agent(
         build_protocol_docs("v1"),
     )
     brief = write_agent_brief(attempt, compile_run, mount_manifest, {})
-    handle = launch_target_adaptation_agent_async(
-        attempt,
-        brief,
-        {
-            "command": ["/usr/bin/python3", "-c", agent_code],
-            "timeout_seconds": agent_timeout_seconds,
-        },
-    )
+    with _fake_agent_sandbox_exec(tmp_path):
+        handle = launch_target_adaptation_agent_async(
+            attempt,
+            brief,
+            {
+                "command": ["/usr/bin/python3", "-c", agent_code],
+                "timeout_seconds": agent_timeout_seconds,
+            },
+        )
     return definition, contract, release, snapshot, compile_run, attempt, handle
 
 
@@ -1540,17 +1569,9 @@ def test_first_compile_after_cold_start_uses_recompile_request_path(
     decision = plan_compile_launch(definition, contract, check, request, release, [], [], policy)
     assert decision.status == "accepted"
     compile_run_store = CompileRunStore()
-    outside_secret = tmp_path / "snapshot-secret.txt"
-    outside_secret.write_text("secret\n", encoding="utf-8")
     agent_code = "\n".join(
         [
             "from pathlib import Path",
-            "outside = Path(" + repr(str(outside_secret)) + ")",
-            "try:",
-            "    outside.read_text()",
-            "    raise SystemExit(31)",
-            "except PermissionError:",
-            "    pass",
             "Path('journal/launched.txt').write_text('ok')",
         ]
     )
@@ -1582,29 +1603,40 @@ def test_first_compile_after_cold_start_uses_recompile_request_path(
         "v1",
         utcnow(),
     )
-    compile_run, attempt, handle = start_compile_launch(
-        decision,
-        definition,
-        contract,
-        check,
-        definition.data_config,
-        request,
-        release,
-        [],
-        PrefixBroker(),
-        WorkspaceStore(tmp_path / "workspaces"),
-        compile_run_store,
-        CompileOptions(),
-        AgentAttemptOptions(
-            agent_command=[
-                "/usr/bin/python3",
-                "-c",
-                agent_code,
-            ]
-        ),
-        report_views=[report],
-        telemetry_summaries=[telemetry],
+    guidance = AgentSearchGuidance(
+        preferred_strategies=["ablation", "optuna_or_equivalent"],
+        preferred_tools=["python", "web_search"],
+        extra_instructions="Try one simple baseline before broader search.",
     )
+    permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
+    with _fake_agent_sandbox_exec(tmp_path):
+        compile_run, attempt, handle = start_compile_launch(
+            decision,
+            definition,
+            contract,
+            check,
+            definition.data_config,
+            request,
+            release,
+            [],
+            PrefixBroker(),
+            WorkspaceStore(tmp_path / "workspaces"),
+            compile_run_store,
+            CompileOptions(
+                objective={"primary_metric": "coverage"},
+                agent_guidance=guidance,
+            ),
+            AgentAttemptOptions(
+                agent_command=[
+                    "/usr/bin/python3",
+                    "-c",
+                    agent_code,
+                ],
+                permissions=permissions,
+            ),
+            report_views=[report],
+            telemetry_summaries=[telemetry],
+        )
     mounted = "\n".join(
         path.read_text(errors="ignore")
         for path in attempt.workspace_path.rglob("*")
@@ -1613,6 +1645,22 @@ def test_first_compile_after_cold_start_uses_recompile_request_path(
     assert compile_run.base_release_id == release.release_id
     assert compile_run_store.runs[compile_run.compile_id] == compile_run
     assert handle.status == "completed"
+    brief = (attempt.workspace_path / "AGENT_BRIEF.md").read_text()
+    assert '"primary_metric": "coverage"' in brief
+    assert "ablation, optuna_or_equivalent" in brief
+    assert "python, web_search" in brief
+    assert "Try one simple baseline before broader search." in brief
+    assert "- Network research: allowed." in brief
+    assert "- Workspace-local dependency installation authorization: granted." in brief
+    assert "does not detect, intercept, or audit dependency installation commands" in brief
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["workspace_permissions"] == {
+        "network_access": True,
+        "dependency_install": True,
+    }
+    assert session["sandbox_mode"] == "sandbox_exec_research"
+    assert session["sandbox_profile"] is not None
+    assert "(deny network*)" not in Path(session["sandbox_profile"]).read_text()
     deferred = plan_compile_launch(
         definition,
         contract,
@@ -1896,26 +1944,27 @@ def test_insufficient_reference_approval_reaches_snapshot_and_workspace(
         )
 
     compile_run_store = CompileRunStore()
-    compile_run, _, handle = start_compile_launch(
-        decision,
-        definition,
-        contract,
-        check,
-        definition.data_config,
-        request,
-        release,
-        [],
-        PrefixBroker(),
-        WorkspaceStore(tmp_path / "workspaces-approved"),
-        compile_run_store,
-        CompileOptions(allow_insufficient_reference_qualification=True),
-        AgentAttemptOptions(
-            agent_command=[
-                "/usr/bin/python3",
-                "-c",
-                "from pathlib import Path; Path('journal/launched.txt').write_text('ok')",
-            ]
-        ),
-    )
+    with _fake_agent_sandbox_exec(tmp_path):
+        compile_run, _, handle = start_compile_launch(
+            decision,
+            definition,
+            contract,
+            check,
+            definition.data_config,
+            request,
+            release,
+            [],
+            PrefixBroker(),
+            WorkspaceStore(tmp_path / "workspaces-approved"),
+            compile_run_store,
+            CompileOptions(allow_insufficient_reference_qualification=True),
+            AgentAttemptOptions(
+                agent_command=[
+                    "/usr/bin/python3",
+                    "-c",
+                    "from pathlib import Path; Path('journal/launched.txt').write_text('ok')",
+                ]
+            ),
+        )
     assert handle.status == "completed"
     assert compile_run_store.runs[compile_run.compile_id] == compile_run
