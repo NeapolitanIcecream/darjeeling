@@ -470,8 +470,15 @@ def _audit(
         return
     if event.startswith("socket.") and not _allow_network:
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
+    if event.startswith("gc."):
+        raise PermissionError(f"{event} denied by Darjeeling sandbox")
     if event.startswith("ctypes."):
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
+    if event == "sqlite3.connect":
+        _check_write(_resolve_path(args[0] if args else None))
+        return
+    if event == "sqlite3.connect/handle":
+        return
     if event == "subprocess.Popen":
         if _is_sandboxed_child_popen(args):
             return

@@ -485,6 +485,69 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         native_ffi_attempt.workspace_path / "journal" / "native-ffi-blocked.txt"
     ).exists()
 
+    gc_introspection_attempt, gc_introspection_brief = create_brief()
+    gc_introspection_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "try:",
+            "    import gc",
+            "    gc.get_objects()",
+            "    raise SystemExit(52)",
+            "except PermissionError as exc:",
+            "    assert 'gc.' in str(exc)",
+            "Path('journal/gc-introspection-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        gc_introspection_attempt,
+        gc_introspection_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", gc_introspection_code],
+            "permissions": permissions,
+            "protected_paths": [str(outside_secret)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        gc_introspection_attempt.workspace_path
+        / "journal"
+        / "gc-introspection-blocked.txt"
+    ).exists()
+
+    sqlite_attempt, sqlite_brief = create_brief()
+    sqlite_denied_dir = tmp_path / "sqlite-denied"
+    sqlite_denied_dir.mkdir()
+    sqlite_denied_db = sqlite_denied_dir / "blocked.db"
+    sqlite_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import sqlite3",
+            f"db_path = {str(sqlite_denied_db)!r}",
+            "try:",
+            "    sqlite3.connect(db_path).close()",
+            "    raise SystemExit(53)",
+            "except PermissionError as exc:",
+            "    assert 'write denied' in str(exc)",
+            "Path('journal/sqlite-native-write-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        sqlite_attempt,
+        sqlite_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", sqlite_code],
+            "permissions": permissions,
+            "protected_paths": [str(sqlite_denied_dir)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        sqlite_attempt.workspace_path
+        / "journal"
+        / "sqlite-native-write-blocked.txt"
+    ).exists()
+    assert not sqlite_denied_db.exists()
+
     runner_tamper_attempt, runner_tamper_brief = create_brief()
     runner_tamper_child_code = "\n".join(
         [
