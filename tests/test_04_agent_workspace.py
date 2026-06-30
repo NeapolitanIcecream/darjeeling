@@ -40,9 +40,11 @@ from darjeeling.errors import WorkspaceError
 from darjeeling.model import (
     AgentAttemptOptions,
     AgentFeedback,
+    AgentSearchGuidance,
     AgentSessionHandle,
     AgentUsageLedger,
     AgentVisibleTelemetrySummary,
+    AgentWorkspacePermissions,
     ApprovalRecord,
     CompileBudget,
     CompileOptions,
@@ -198,6 +200,150 @@ def _accepted_release_from_attempt(
     )
     visible = build_agent_visible_report(final, include_test_metrics=True)
     return closed, validation["candidate"], compiled_release, visible
+
+
+def test_agent_guidance_permissions_render_and_reach_launch_metadata(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    assert CompileOptions().agent_guidance == AgentSearchGuidance()
+    assert AgentAttemptOptions().permissions == AgentWorkspacePermissions()
+
+    definition, contract, check = load_checked_target(target_dir)
+    snapshot = build_snapshot(
+        definition,
+        contract,
+        definition.data_config,
+        None,
+        [],
+        PrefixBroker(),
+        now,
+        SnapshotOptions(storage_root=tmp_path / "snapshots"),
+    )
+    registry = __import__("darjeeling.model").model.ReleaseRegistry()
+    release = create_release_without_artifacts(
+        definition, contract, check, PrefixBroker(), RoutingSettings(), registry
+    )
+    workspace = load_target_workspace(
+        definition.name, definition.contract_hash, WorkspaceStore(tmp_path / "workspaces")
+    )
+    compile_run = create_compile_run(
+        definition,
+        check,
+        snapshot.snapshot,
+        release,
+        CompileBudget(),
+        workspace,
+        snapshot.reference_qualification,
+        CompileOptions(),
+    )
+
+    def create_mounted_attempt():
+        attempt = create_agent_workspace(compile_run, workspace, AgentAttemptOptions())
+        target_view = export_agent_readonly_target_view(
+            definition, attempt.workspace_path / "target_view"
+        )
+        train_view = export_train_view_for_agent(
+            snapshot.snapshot,
+            contract,
+            __import__("darjeeling.model").model.AgentViewOptions(),
+            attempt.workspace_path / "train_view",
+        )
+        manifest = mount_readonly_inputs(
+            attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
+        )
+        return attempt, manifest
+
+    default_attempt, default_manifest = create_mounted_attempt()
+    default_brief = write_agent_brief(default_attempt, compile_run, default_manifest, {})
+    default_text = default_brief.read_text(encoding="utf-8")
+    assert "Objective:" in default_text
+    assert "{}" in default_text
+    assert "- Preferred strategies: none specified." in default_text
+    assert "- Preferred tools: none specified." in default_text
+    assert "- Extra instructions: none specified." in default_text
+    assert "- Network research: disabled." in default_text
+    assert "- Workspace-local dependency installation: disabled." in default_text
+
+    launch_target_adaptation_agent(
+        default_attempt,
+        default_brief,
+        {
+            "command": [
+                "/usr/bin/python3",
+                "-c",
+                "from pathlib import Path; Path('journal/default.txt').write_text('ok')",
+            ]
+        },
+    )
+    default_session = json.loads(
+        (default_attempt.workspace_path / "journal" / "agent_session.json").read_text()
+    )
+    assert default_session["workspace_permissions"] == {
+        "network_access": False,
+        "dependency_install": False,
+    }
+    default_sandbox_config = default_attempt.workspace_path / "journal" / (
+        "agent_python_sandbox.json"
+    )
+    if default_sandbox_config.exists():
+        sandbox_config = json.loads(default_sandbox_config.read_text())
+        assert sandbox_config["allow_network"] is False
+        assert sandbox_config["allow_subprocess"] is False
+    elif default_session["sandbox_profile"] is not None:
+        assert "(deny network*)" in Path(default_session["sandbox_profile"]).read_text()
+
+    research_attempt, research_manifest = create_mounted_attempt()
+    guidance = AgentSearchGuidance(
+        preferred_strategies=["multi_round_local_search", "threshold_sweep"],
+        preferred_tools=["python", "optuna"],
+        extra_instructions="Start with a simple baseline before tuning.",
+    )
+    permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
+    research_brief = write_agent_brief(
+        research_attempt,
+        compile_run,
+        research_manifest,
+        {"optimize": "coverage"},
+        guidance,
+        permissions,
+    )
+    research_text = research_brief.read_text(encoding="utf-8")
+    assert '"optimize": "coverage"' in research_text
+    assert "multi_round_local_search, threshold_sweep" in research_text
+    assert "python, optuna" in research_text
+    assert "Start with a simple baseline before tuning." in research_text
+    assert "- Network research: allowed." in research_text
+    assert "- Workspace-local dependency installation: allowed." in research_text
+    assert "Use only Core-written feedback files" in research_text
+
+    launch_target_adaptation_agent(
+        research_attempt,
+        research_brief,
+        {
+            "command": [
+                "/usr/bin/python3",
+                "-c",
+                "from pathlib import Path; Path('journal/research.txt').write_text('ok')",
+            ],
+            "permissions": permissions,
+        },
+    )
+    research_session = json.loads(
+        (research_attempt.workspace_path / "journal" / "agent_session.json").read_text()
+    )
+    assert research_session["workspace_permissions"] == {
+        "network_access": True,
+        "dependency_install": True,
+    }
+    research_sandbox_config = research_attempt.workspace_path / "journal" / (
+        "agent_python_sandbox.json"
+    )
+    if research_sandbox_config.exists():
+        sandbox_config = json.loads(research_sandbox_config.read_text())
+        assert sandbox_config["allow_network"] is True
+        assert sandbox_config["allow_subprocess"] is True
+    elif research_session["sandbox_profile"] is not None:
+        assert "(deny network*)" not in Path(research_session["sandbox_profile"]).read_text()
 
 
 def test_agent_mount_contains_train_only_inputs(

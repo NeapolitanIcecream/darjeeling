@@ -31,10 +31,12 @@ from darjeeling.compile_orchestration import (
 from darjeeling.errors import CompileLaunchError, WorkspaceError
 from darjeeling.model import (
     AgentAttemptOptions,
+    AgentSearchGuidance,
     AgentViewOptions,
     AgentVisibleDecisionSummary,
     AgentVisibleReport,
     AgentVisibleTelemetrySummary,
+    AgentWorkspacePermissions,
     CompileBudget,
     CompileOptions,
     CompileRunStore,
@@ -1582,6 +1584,12 @@ def test_first_compile_after_cold_start_uses_recompile_request_path(
         "v1",
         utcnow(),
     )
+    guidance = AgentSearchGuidance(
+        preferred_strategies=["ablation", "optuna_or_equivalent"],
+        preferred_tools=["python", "web_search"],
+        extra_instructions="Try one simple baseline before broader search.",
+    )
+    permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
     compile_run, attempt, handle = start_compile_launch(
         decision,
         definition,
@@ -1594,13 +1602,17 @@ def test_first_compile_after_cold_start_uses_recompile_request_path(
         PrefixBroker(),
         WorkspaceStore(tmp_path / "workspaces"),
         compile_run_store,
-        CompileOptions(),
+        CompileOptions(
+            objective={"primary_metric": "coverage"},
+            agent_guidance=guidance,
+        ),
         AgentAttemptOptions(
             agent_command=[
                 "/usr/bin/python3",
                 "-c",
                 agent_code,
-            ]
+            ],
+            permissions=permissions,
         ),
         report_views=[report],
         telemetry_summaries=[telemetry],
@@ -1613,6 +1625,18 @@ def test_first_compile_after_cold_start_uses_recompile_request_path(
     assert compile_run.base_release_id == release.release_id
     assert compile_run_store.runs[compile_run.compile_id] == compile_run
     assert handle.status == "completed"
+    brief = (attempt.workspace_path / "AGENT_BRIEF.md").read_text()
+    assert '"primary_metric": "coverage"' in brief
+    assert "ablation, optuna_or_equivalent" in brief
+    assert "python, web_search" in brief
+    assert "Try one simple baseline before broader search." in brief
+    assert "- Network research: allowed." in brief
+    assert "- Workspace-local dependency installation: allowed." in brief
+    session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
+    assert session["workspace_permissions"] == {
+        "network_access": True,
+        "dependency_install": True,
+    }
     deferred = plan_compile_launch(
         definition,
         contract,

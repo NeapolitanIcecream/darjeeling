@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -15,11 +16,13 @@ from darjeeling.model import (
     AgentAttempt,
     AgentAttemptOptions,
     AgentFeedback,
+    AgentSearchGuidance,
     AgentSessionHandle,
     AgentUsageEvent,
     AgentUsageLedger,
     AgentVisibleReport,
     AgentVisibleTelemetrySummary,
+    AgentWorkspacePermissions,
     Candidate,
     CandidateSubmission,
     ClosedAgentAttempt,
@@ -280,7 +283,10 @@ def _default_protected_paths(attempt_path: Path, command: list[str]) -> list[Pat
 
 
 def _write_agent_sandbox_profile(
-    attempt_path: Path, command: list[str], protected_paths: list[Path]
+    attempt_path: Path,
+    command: list[str],
+    protected_paths: list[Path],
+    permissions: AgentWorkspacePermissions,
 ) -> Path:
     sandbox_exec = shutil.which("sandbox-exec")
     if sandbox_exec is None:
@@ -297,8 +303,9 @@ def _write_agent_sandbox_profile(
     lines = [
         "(version 1)",
         "(allow default)",
-        "(deny network*)",
     ]
+    if not permissions.network_access:
+        lines.append("(deny network*)")
     for path in readonly_paths:
         if path.exists():
             lines.append(f"(deny file-write* (subpath {_sandbox_path(path)}))")
@@ -311,7 +318,10 @@ def _write_agent_sandbox_profile(
 
 
 def _agent_portable_sandbox_command(
-    attempt_path: Path, command: list[str], protected_paths: list[Path]
+    attempt_path: Path,
+    command: list[str],
+    protected_paths: list[Path],
+    permissions: AgentWorkspacePermissions,
 ) -> list[str]:
     if not is_python_command(command):
         raise WorkspaceError(
@@ -334,6 +344,8 @@ def _agent_portable_sandbox_command(
             allowed_write_roots=[attempt_path],
             denied_read_roots=all_protected,
             denied_write_roots=[*readonly_paths, *all_protected],
+            allow_network=permissions.network_access,
+            allow_subprocess=permissions.dependency_install,
         )
     except Exception as exc:
         raise WorkspaceError(str(exc)) from exc
@@ -679,7 +691,11 @@ def write_agent_brief(
     compile_run: CompileRun,
     mount_manifest: WorkspaceMountManifest,
     objective: dict[str, Any],
+    agent_guidance: AgentSearchGuidance | None = None,
+    workspace_permissions: AgentWorkspacePermissions | None = None,
 ) -> Path:
+    guidance = agent_guidance or AgentSearchGuidance()
+    permissions = workspace_permissions or AgentWorkspacePermissions()
     brief = attempt.workspace_path / "AGENT_BRIEF.md"
     brief.write_text(
         "\n".join(
@@ -708,7 +724,28 @@ def write_agent_brief(
                 "Core may stop the session when time, candidate, cost, or user-stop "
                 "budgets are reached. Test evaluation and release decisions happen "
                 "only after this attempt is closed.",
-                f"objective: {objective}",
+                "",
+                "Objective:",
+                "```json",
+                json.dumps(objective, sort_keys=True, indent=2, default=str),
+                "```",
+                "",
+                "Search guidance:",
+                "- Preferred strategies: "
+                f"{_format_brief_list(guidance.preferred_strategies)}.",
+                f"- Preferred tools: {_format_brief_list(guidance.preferred_tools)}.",
+                "- Extra instructions: "
+                f"{guidance.extra_instructions or 'none specified'}.",
+                "",
+                "Workspace permissions:",
+                "- Network research: "
+                f"{_permission_status(permissions.network_access)}.",
+                "- Workspace-local dependency installation: "
+                f"{_permission_status(permissions.dependency_install)}.",
+                "These are allowed capabilities, not required steps. Keep dependency "
+                "installs inside this attempt workspace when possible.",
+                "Keep validation and test data out of local search. Use only "
+                "Core-written feedback files for official validation feedback.",
                 f"readonly_entries: {mount_manifest.entries}",
             ]
         )
@@ -716,6 +753,41 @@ def write_agent_brief(
         encoding="utf-8",
     )
     return brief
+
+
+def _format_brief_list(values: list[str]) -> str:
+    return ", ".join(values) if values else "none specified"
+
+
+def _permission_status(value: bool) -> str:
+    return "allowed" if value else "disabled"
+
+
+def _coerce_workspace_permissions(value: Any) -> AgentWorkspacePermissions:
+    if value is None:
+        return AgentWorkspacePermissions()
+    if isinstance(value, AgentWorkspacePermissions):
+        return value
+    if isinstance(value, dict):
+        network_access = value.get("network_access", False)
+        dependency_install = value.get("dependency_install", False)
+        if not isinstance(network_access, bool) or not isinstance(
+            dependency_install, bool
+        ):
+            raise WorkspaceError("agent workspace permissions must be booleans")
+        return AgentWorkspacePermissions(
+            network_access=network_access,
+            dependency_install=dependency_install,
+        )
+    raise WorkspaceError("agent workspace permissions must be a mapping")
+
+
+def _workspace_permissions_metadata(
+    permissions: AgentWorkspacePermissions | dict[str, Any] | None,
+) -> dict[str, bool] | None:
+    if permissions is None:
+        return None
+    return asdict(_coerce_workspace_permissions(permissions))
 
 
 def _prepare_agent_launch(
@@ -747,20 +819,37 @@ def _prepare_agent_launch(
     protected_paths = [
         Path(path) for path in agent_runtime.get("protected_paths", []) if str(path)
     ]
+    permissions = _coerce_workspace_permissions(agent_runtime.get("permissions"))
     _make_readonly_tree(attempt.workspace_path / "readonly_inputs")
     _make_readonly_tree(attempt.workspace_path / "readonly_source")
     sandbox_exec = shutil.which("sandbox-exec")
     if sandbox_exec is None:
         sandbox_profile: Path | None = None
-        sandbox_mode = "portable_python"
-        sandboxed_command = _agent_portable_sandbox_command(
-            attempt.workspace_path, command, protected_paths
-        )
+        if is_python_command(command):
+            sandbox_mode = (
+                "portable_python_research"
+                if permissions.network_access or permissions.dependency_install
+                else "portable_python"
+            )
+            sandboxed_command = _agent_portable_sandbox_command(
+                attempt.workspace_path, command, protected_paths, permissions
+            )
+        elif permissions.network_access or permissions.dependency_install:
+            sandbox_mode = "unsandboxed_research"
+            sandboxed_command = command
+        else:
+            sandboxed_command = _agent_portable_sandbox_command(
+                attempt.workspace_path, command, protected_paths, permissions
+            )
     else:
         sandbox_profile = _write_agent_sandbox_profile(
-            attempt.workspace_path, command, protected_paths
+            attempt.workspace_path, command, protected_paths, permissions
         )
-        sandbox_mode = "sandbox_exec"
+        sandbox_mode = (
+            "sandbox_exec_research"
+            if permissions.network_access or permissions.dependency_install
+            else "sandbox_exec"
+        )
         sandboxed_command = [
             sandbox_exec,
             "-f",
@@ -784,6 +873,7 @@ def _prepare_agent_launch(
         "timeout_seconds": timeout_seconds,
         "session_record": session_record,
         "log_path": attempt.workspace_path / "journal" / "agent.log",
+        "workspace_permissions": asdict(permissions),
     }
 
 
@@ -800,6 +890,7 @@ def _write_completed_session_record(
     returncode: int | None,
     timeout_seconds: int | None = None,
     stop_reason: str | None = None,
+    workspace_permissions: dict[str, Any] | None = None,
 ) -> None:
     record: dict[str, Any] = {
         "attempt_id": attempt_id,
@@ -812,6 +903,9 @@ def _write_completed_session_record(
         "completed_at": utcnow(),
         "log_path": log_path,
     }
+    permissions = _workspace_permissions_metadata(workspace_permissions)
+    if permissions is not None:
+        record["workspace_permissions"] = permissions
     if timeout_seconds is not None:
         record["timeout_seconds"] = timeout_seconds
     if stop_reason is not None:
@@ -832,6 +926,7 @@ def launch_target_adaptation_agent(
     session_record = launch["session_record"]
     log_path = launch["log_path"]
     timeout_seconds = launch["timeout_seconds"]
+    workspace_permissions = launch["workspace_permissions"]
     try:
         completed = subprocess.run(
             launch["sandboxed_command"],
@@ -868,6 +963,7 @@ def launch_target_adaptation_agent(
             status="timed_out",
             returncode=None,
             timeout_seconds=timeout_seconds,
+            workspace_permissions=workspace_permissions,
         )
         raise WorkspaceError("agent runtime command timed out") from exc
     log_path.write_text(
@@ -887,6 +983,7 @@ def launch_target_adaptation_agent(
         status=status,
         returncode=completed.returncode,
         timeout_seconds=timeout_seconds,
+        workspace_permissions=workspace_permissions,
     )
     if completed.returncode != 0:
         raise WorkspaceError("agent runtime command failed")
@@ -914,6 +1011,7 @@ def launch_target_adaptation_agent_async(
     started_at = launch["started_at"]
     session_record = launch["session_record"]
     log_path = launch["log_path"]
+    workspace_permissions = launch["workspace_permissions"]
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as log_file:
         log_file.write(f"$ {' '.join(command)}\n\n")
@@ -948,6 +1046,7 @@ def launch_target_adaptation_agent_async(
             "started_at": started_at,
             "log_path": log_path,
             "timeout_seconds": launch["timeout_seconds"],
+            "workspace_permissions": workspace_permissions,
         },
     )
     return AgentSessionHandle(
@@ -995,6 +1094,7 @@ def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
                             if record.get("timeout_seconds") is not None
                             else handle.timeout_seconds
                         ),
+                        workspace_permissions=record.get("workspace_permissions"),
                     )
                     return replace(handle, status="failed", pid=recorded_pid)
             return replace(
@@ -1036,6 +1136,7 @@ def poll_agent_session(handle: AgentSessionHandle) -> AgentSessionHandle:
                 if record.get("timeout_seconds") is not None
                 else handle.timeout_seconds
             ),
+            workspace_permissions=record.get("workspace_permissions"),
         )
     return replace(handle, status=status, pid=process.pid)
 
@@ -1258,6 +1359,7 @@ def stop_agent_session(
                 if record.get("timeout_seconds") is not None
                 else handle.timeout_seconds
             ),
+            workspace_permissions=record.get("workspace_permissions"),
             stop_reason=None if process_already_exited else reason,
         )
     return replace(handle, status=status, pid=pid)

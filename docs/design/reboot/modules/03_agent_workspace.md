@@ -128,6 +128,39 @@ Fields:
 - `agent_model: str`
 - `status: Literal["running", "closed", "failed", "timed_out"]`
 
+### `AgentSearchGuidance`
+
+Fields:
+
+- `preferred_strategies: list[str]`
+- `preferred_tools: list[str]`
+- `extra_instructions: str | None`
+
+The strategy and tool strings are user guidance only. Core renders them into the
+brief and does not interpret them as an optimizer framework, plugin registry, or
+target-specific rule set.
+
+### `AgentWorkspacePermissions`
+
+Fields:
+
+- `network_access: bool`
+- `dependency_install: bool`
+
+Defaults are conservative: no network research and no workspace-local
+dependency installation. When a user explicitly enables either permission, the
+agent launch policy records that choice and relaxes the matching runtime
+restriction for the attempt workspace.
+
+### `AgentAttemptOptions`
+
+Fields:
+
+- `agent_model: str`
+- `agent_command: list[str]`
+- `agent_timeout_seconds: int | None`
+- `permissions: AgentWorkspacePermissions`
+
 ### `ClosedAgentAttempt`
 
 Fields:
@@ -310,6 +343,8 @@ Input:
 - `compile_run: CompileRun`
 - `mount_manifest: WorkspaceMountManifest`
 - `objective: CompileObjective`
+- `agent_guidance: AgentSearchGuidance`
+- `workspace_permissions: AgentWorkspacePermissions`
 
 Output:
 
@@ -318,6 +353,9 @@ Output:
 Purpose:
 
 - Write a concise brief telling the agent the target, scorecard, budget, allowed files, forbidden actions, and candidate submission format.
+- Render the objective, preferred search strategies/tools, extra user
+  instructions, and whether network research or workspace-local dependency
+  installation is allowed.
 - Include that compile-time scaffolding and runtime source are both writable.
 - Include mounted telemetry summaries as aggregate context only, not as raw production examples.
 - Include that generated code must not launch another autonomous coding agent.
@@ -342,7 +380,9 @@ Purpose:
 
 - Start the single target adaptation agent for this attempt.
 - Stream logs and command events to the compile run store.
-- Apply time, filesystem, network, process, and API broker restrictions.
+- Apply time, filesystem, network, process, and API broker restrictions. Network
+  and workspace-local dependency installation remain disabled by default and are
+  enabled only when the attempt permissions explicitly allow them.
 
 Used by:
 
@@ -508,4 +548,8 @@ Used by:
 - Only accepted Release work or explicit carry-forward can become the next workspace baseline.
 - The agent can edit `scaffolding/` and `runtime/`, but not active target definition, evaluator, snapshot, registry, or telemetry.
 - Generated scaffolding may call trainers, tuners, compilers, and Core brokers, but not another autonomous coding agent.
+- User-enabled network research or workspace-local dependency installation does
+  not grant validation/test rows, release authority, evaluator authority,
+  registry credentials, production credentials, or direct reference/L4 broker
+  access.
 - Test evaluation starts only after the relevant agent attempt is closed.

@@ -742,7 +742,14 @@ def start_compile_launch(
         telemetry_summaries=telemetry_summaries or [],
         protocol_docs=protocol_docs,
     )
-    brief = write_agent_brief(attempt, compile_run, mount_manifest, compile_options.objective)
+    brief = write_agent_brief(
+        attempt,
+        compile_run,
+        mount_manifest,
+        compile_options.objective,
+        compile_options.agent_guidance,
+        agent_options.permissions,
+    )
     timeout_seconds = agent_options.agent_timeout_seconds or (
         decision.budget.max_agent_seconds if decision.budget.max_agent_seconds > 0 else None
     )
@@ -757,6 +764,7 @@ def start_compile_launch(
         {
             "command": agent_options.agent_command,
             "timeout_seconds": timeout_seconds,
+            "permissions": asdict(agent_options.permissions),
         },
     )
     _record_compile_run(compile_run_store, compile_run)
