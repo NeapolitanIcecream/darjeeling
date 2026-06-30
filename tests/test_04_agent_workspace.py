@@ -98,6 +98,23 @@ def _wait_for_path(path: Path, timeout_seconds: float = 5.0) -> None:
     raise AssertionError(f"timed out waiting for non-empty {path}")
 
 
+def _poll_until_status(
+    handle: AgentSessionHandle,
+    expected_status: str,
+    timeout_seconds: float = 5.0,
+) -> AgentSessionHandle:
+    deadline = time.time() + timeout_seconds
+    updated = handle
+    while time.time() < deadline:
+        updated = poll_agent_session(updated)
+        if updated.status == expected_status:
+            return updated
+        time.sleep(0.05)
+    raise AssertionError(
+        f"timed out waiting for {expected_status!r}; last status was {updated.status!r}"
+    )
+
+
 def _process_alive(pid: int) -> bool:
     try:
         result = subprocess.run(
@@ -1567,7 +1584,7 @@ def test_poll_agent_session_stops_completed_parent_process_group_children(
     _wait_for_path(child_pid_path)
     child_pid = int(child_pid_path.read_text(encoding="utf-8"))
     try:
-        updated = poll_agent_session(handle)
+        updated = _poll_until_status(handle, "completed")
         time.sleep(1.2)
         assert updated.status == "completed"
         assert not (attempt.workspace_path / "journal" / "child-survived.txt").exists()
