@@ -502,8 +502,13 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         [
             "from pathlib import Path",
             "import subprocess",
+            "outside = Path(" + repr(str(outside_secret)) + ")",
             "globals_obj = getattr(subprocess.Popen, '__globals__', {})",
             "assert '_subprocess_guard' not in globals_obj",
+            "assert '_original_popen' not in globals_obj",
+            "assert 'allowed_read_roots' not in globals_obj",
+            "assert 'denied_read_roots' not in globals_obj",
+            "assert 'allow_network' not in globals_obj",
             "try:",
             "    globals_obj['_original_popen'](",
             "        ['/usr/bin/python3', '-c',",
@@ -515,32 +520,13 @@ def test_portable_research_mode_keeps_filesystem_isolation(
             "except (AttributeError, KeyError, PermissionError):",
             "    pass",
             "Path('journal/audit-bypass-blocked.txt').write_text('ok')",
-            "helper = Path('journal/audited-executable-helper.py')",
-            "helper.write_text(",
-            "    '#!/usr/bin/python3\\n'",
-            "    'from pathlib import Path\\n'",
-            "    \"Path('journal/audited-executable-used.txt').write_text('bad')\\n\"",
-            ")",
-            "helper.chmod(0o755)",
-            "child_config = globals_obj['_child_config'](",
-            "    ['/usr/bin/python3', '-c',",
-            "     \"from pathlib import Path; \"",
-            "     \"Path('journal/audited-executable-child-ok.txt').write_text('ok')\"],",
-            "    Path('.').resolve(),",
-            ")",
-            "child_env = globals_obj['_child_env'](None, child_config)",
+            "globals_obj['allowed_read_roots'] = (Path('/'),)",
             "try:",
-            "    globals_obj['_original_popen'](",
-            "        [globals_obj['sys'].executable, '-I',",
-            "         str(globals_obj['runner_path']), '--config-env'],",
-            "        executable=str(helper),",
-            "        env=child_env,",
-            "        cwd='.',",
-            "    ).wait()",
-            "    raise SystemExit(45)",
+            "    outside.read_text()",
+            "    raise SystemExit(47)",
             "except PermissionError:",
             "    pass",
-            "Path('journal/audited-executable-blocked.txt').write_text('ok')",
+            "Path('journal/policy-globals-blocked.txt').write_text('ok')",
         ]
     )
     handle = launch_target_adaptation_agent(
@@ -549,6 +535,7 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         {
             "command": ["/usr/bin/python3", "-c", audit_bypass_code],
             "permissions": permissions,
+            "protected_paths": [str(outside_secret)],
         },
     )
     assert handle.status == "completed"
@@ -559,15 +546,7 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         audit_bypass_attempt.workspace_path / "journal" / "audit-bypass-used.txt"
     ).exists()
     assert (
-        audit_bypass_attempt.workspace_path / "journal" / "audited-executable-blocked.txt"
-    ).exists()
-    assert not (
-        audit_bypass_attempt.workspace_path / "journal" / "audited-executable-used.txt"
-    ).exists()
-    assert not (
-        audit_bypass_attempt.workspace_path
-        / "journal"
-        / "audited-executable-child-ok.txt"
+        audit_bypass_attempt.workspace_path / "journal" / "policy-globals-blocked.txt"
     ).exists()
 
     process_group_attempt, process_group_brief = create_brief()
