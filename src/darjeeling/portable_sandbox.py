@@ -185,6 +185,8 @@ def _is_sandboxed_child_popen(args):
     expected = [sys.executable, "-I", str(runner_path), "--config-env"]
     if len(event_command) != len(expected):
         return False
+    if not _same_path(args[0], expected[0]):
+        return False
     if not _same_path(event_command[0], expected[0]):
         return False
     if event_command[1:] != expected[1:]:
@@ -341,6 +343,17 @@ def _sandboxed_popen(*popen_args, **popen_kwargs):
     if popen_kwargs.get("pass_fds"):
         raise PermissionError(
             "portable dependency installation does not allow inherited file descriptors"
+        )
+    if popen_kwargs.get("start_new_session"):
+        raise PermissionError(
+            "portable dependency installation does not allow process group overrides"
+        )
+    if (
+        "process_group" in popen_kwargs
+        and popen_kwargs.get("process_group") is not None
+    ):
+        raise PermissionError(
+            "portable dependency installation does not allow process group overrides"
         )
     if popen_args:
         raw_command = popen_args[0]
