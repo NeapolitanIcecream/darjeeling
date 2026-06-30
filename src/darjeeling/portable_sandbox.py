@@ -19,13 +19,16 @@ import sys
 import sysconfig
 from pathlib import Path
 
-config_path = Path(sys.argv[1]).resolve()
-config = json.loads(config_path.read_text(encoding="utf-8"))
+_CONFIG_ENV_VAR = "DARJEELING_PORTABLE_SANDBOX_CONFIG"
+if len(sys.argv) > 1 and sys.argv[1] == "--config-env":
+    config = json.loads(os.environ[_CONFIG_ENV_VAR])
+else:
+    config_path = Path(sys.argv[1]).resolve()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
 command = config["command"]
 cwd = Path(config["cwd"]).resolve()
 runner_path = Path(config["runner_path"]).resolve()
 allow_dependency_install = bool(config.get("allow_dependency_install", False))
-_child_config_counter = 0
 _subprocess_guard = False
 
 
@@ -211,18 +214,21 @@ def _subprocess_cwd(value):
     return path
 
 
-def _write_child_config(child_command, child_cwd):
-    global _child_config_counter
-    _child_config_counter += 1
+def _child_config(child_command, child_cwd):
     child_config = dict(config)
     child_config["command"] = child_command
     child_config["cwd"] = str(child_cwd)
     child_config["runner_path"] = str(runner_path)
-    path = config_path.with_name(
-        f".{config_path.stem}.{os.getpid()}.{_child_config_counter}.json"
-    )
-    path.write_text(json.dumps(child_config, sort_keys=True), encoding="utf-8")
-    return path
+    return json.dumps(child_config, sort_keys=True)
+
+
+def _child_env(existing_env, config_json):
+    if existing_env is None:
+        env = dict(os.environ)
+    else:
+        env = dict(existing_env)
+    env[_CONFIG_ENV_VAR] = config_json
+    return env
 
 
 _original_popen = subprocess.Popen
@@ -232,9 +238,25 @@ def _sandboxed_popen(*popen_args, **popen_kwargs):
     global _subprocess_guard
     if not allow_dependency_install:
         raise PermissionError("subprocess.Popen denied by Darjeeling sandbox")
+    if len(popen_args) > 1:
+        raise PermissionError(
+            "portable dependency installation only allows command as a positional argument"
+        )
     if popen_kwargs.get("shell"):
         raise PermissionError(
             "portable dependency installation does not allow shell subprocesses"
+        )
+    for key, message in {
+        "executable": "executable overrides",
+        "preexec_fn": "pre-exec hooks",
+    }.items():
+        if popen_kwargs.get(key) is not None:
+            raise PermissionError(
+                f"portable dependency installation does not allow {message}"
+            )
+    if popen_kwargs.get("pass_fds"):
+        raise PermissionError(
+            "portable dependency installation does not allow inherited file descriptors"
         )
     if popen_args:
         raw_command = popen_args[0]
@@ -246,10 +268,14 @@ def _sandboxed_popen(*popen_args, **popen_kwargs):
         command_in_kwargs = "args" in popen_kwargs
     child_command = _normalize_subprocess_command(raw_command)
     child_cwd = _subprocess_cwd(popen_kwargs.get("cwd"))
-    child_config = _write_child_config(child_command, child_cwd)
-    wrapped_command = [sys.executable, str(runner_path), str(child_config)]
+    config_json = _child_config(child_command, child_cwd)
+    wrapped_command = [sys.executable, str(runner_path), "--config-env"]
     wrapped_kwargs = dict(popen_kwargs)
     wrapped_kwargs.pop("shell", None)
+    wrapped_kwargs.pop("executable", None)
+    wrapped_kwargs.pop("preexec_fn", None)
+    wrapped_kwargs.pop("pass_fds", None)
+    wrapped_kwargs["env"] = _child_env(wrapped_kwargs.get("env"), config_json)
     if "cwd" in wrapped_kwargs:
         wrapped_kwargs["cwd"] = str(child_cwd)
     _subprocess_guard = True
@@ -304,6 +330,14 @@ def resolve_python_command(command: list[str]) -> list[str]:
     return resolved
 
 
+def _path_contains(root: Path, path: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve(strict=False))
+        return True
+    except ValueError:
+        return False
+
+
 def build_python_sandbox_command(
     command: list[str],
     *,
@@ -320,6 +354,12 @@ def build_python_sandbox_command(
     config_path.parent.mkdir(parents=True, exist_ok=True)
     runner = textwrap.dedent(_PYTHON_SANDBOX_RUNNER).strip()
     runner_path = config_path.with_name(f"{config_path.stem}_runner.py")
+    if allow_dependency_install and any(
+        _path_contains(root, runner_path) for root in allowed_write_roots
+    ):
+        raise ArtifactError(
+            "portable dependency installation requires a runner outside writable roots"
+        )
     runner_path.write_text(runner + "\n", encoding="utf-8")
     config = {
         "command": resolved_command,

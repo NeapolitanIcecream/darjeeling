@@ -282,8 +282,9 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
         "network_access": False,
         "dependency_install": False,
     }
-    default_sandbox_config = default_attempt.workspace_path / "journal" / (
-        "agent_python_sandbox.json"
+    default_sandbox_config = (
+        agent_workspace_module.core_attempt_state_dir(default_attempt)
+        / "agent_python_sandbox.json"
     )
     if default_sandbox_config.exists():
         sandbox_config = json.loads(default_sandbox_config.read_text())
@@ -336,8 +337,9 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
         "network_access": True,
         "dependency_install": True,
     }
-    research_sandbox_config = research_attempt.workspace_path / "journal" / (
-        "agent_python_sandbox.json"
+    research_sandbox_config = (
+        agent_workspace_module.core_attempt_state_dir(research_attempt)
+        / "agent_python_sandbox.json"
     )
     if research_sandbox_config.exists():
         sandbox_config = json.loads(research_sandbox_config.read_text())
@@ -407,6 +409,94 @@ def test_portable_research_mode_keeps_filesystem_isolation(
     permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
     outside_secret = tmp_path / "outside-child-secret.txt"
     outside_secret.write_text("secret\n", encoding="utf-8")
+    runner_tamper_attempt, runner_tamper_brief = create_brief()
+    runner_tamper_child_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "Path('journal/real-child-runner-ok.txt').write_text('ok')",
+        ]
+    )
+    runner_tamper_agent_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import subprocess",
+            "Path('journal/agent_python_sandbox_runner.py').write_text(",
+            "    \"from pathlib import Path\\n\"",
+            "    \"Path('journal/malicious-runner-used.txt').write_text('bad')\\n\"",
+            ")",
+            "subprocess.run(['/usr/bin/python3', '-c', "
+            + repr(runner_tamper_child_code)
+            + "], check=True)",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        runner_tamper_attempt,
+        runner_tamper_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", runner_tamper_agent_code],
+            "permissions": permissions,
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        runner_tamper_attempt.workspace_path / "journal" / "real-child-runner-ok.txt"
+    ).exists()
+    assert not (
+        runner_tamper_attempt.workspace_path / "journal" / "malicious-runner-used.txt"
+    ).exists()
+    tamper_sandbox_config = json.loads(
+        (
+            agent_workspace_module.core_attempt_state_dir(runner_tamper_attempt)
+            / "agent_python_sandbox.json"
+        ).read_text()
+    )
+    runner_path = Path(tamper_sandbox_config["runner_path"]).resolve()
+    assert not runner_path.is_relative_to(runner_tamper_attempt.workspace_path.resolve())
+
+    executable_override_attempt, executable_override_brief = create_brief()
+    executable_override_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import subprocess",
+            "helper = Path('journal/executable-helper.py')",
+            "helper.write_text(",
+            "    '#!/usr/bin/python3\\n'",
+            "    'from pathlib import Path\\n'",
+            "    \"Path('journal/executable-override-used.txt').write_text('bad')\\n\"",
+            ")",
+            "helper.chmod(0o755)",
+            "try:",
+            "    subprocess.run(",
+            "        ['/usr/bin/python3', '-c', 'print(1)'],",
+            "        executable=str(helper),",
+            "        check=True,",
+            "    )",
+            "    raise SystemExit(43)",
+            "except PermissionError as exc:",
+            "    assert 'executable overrides' in str(exc)",
+            "Path('journal/executable-override-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        executable_override_attempt,
+        executable_override_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", executable_override_code],
+            "permissions": permissions,
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        executable_override_attempt.workspace_path
+        / "journal"
+        / "executable-override-blocked.txt"
+    ).exists()
+    assert not (
+        executable_override_attempt.workspace_path
+        / "journal"
+        / "executable-override-used.txt"
+    ).exists()
+
     python_child_attempt, python_child_brief = create_brief()
     child_code = "\n".join(
         [
@@ -446,8 +536,7 @@ def test_portable_research_mode_keeps_filesystem_isolation(
     ).exists()
     sandbox_config = json.loads(
         (
-            python_child_attempt.workspace_path
-            / "journal"
+            agent_workspace_module.core_attempt_state_dir(python_child_attempt)
             / "agent_python_sandbox.json"
         ).read_text()
     )

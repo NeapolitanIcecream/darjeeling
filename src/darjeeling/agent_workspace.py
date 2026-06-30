@@ -319,6 +319,7 @@ def _write_agent_sandbox_profile(
 
 def _agent_portable_sandbox_command(
     attempt_path: Path,
+    attempt_id: str,
     command: list[str],
     protected_paths: list[Path],
     permissions: AgentWorkspacePermissions,
@@ -336,10 +337,11 @@ def _agent_portable_sandbox_command(
         attempt_path / "readonly_source",
     ]
     try:
+        core_state_path = _core_attempt_state_dir_for_path(attempt_path, attempt_id)
         return build_python_sandbox_command(
             command,
             cwd=attempt_path,
-            config_path=attempt_path / "journal" / "agent_python_sandbox.json",
+            config_path=core_state_path / "agent_python_sandbox.json",
             allowed_read_roots=[attempt_path],
             allowed_write_roots=[attempt_path],
             denied_read_roots=all_protected,
@@ -832,11 +834,19 @@ def _prepare_agent_launch(
                 else "portable_python"
             )
             sandboxed_command = _agent_portable_sandbox_command(
-                attempt.workspace_path, command, protected_paths, permissions
+                attempt.workspace_path,
+                attempt.attempt_id,
+                command,
+                protected_paths,
+                permissions,
             )
         else:
             sandboxed_command = _agent_portable_sandbox_command(
-                attempt.workspace_path, command, protected_paths, permissions
+                attempt.workspace_path,
+                attempt.attempt_id,
+                command,
+                protected_paths,
+                permissions,
             )
     else:
         sandbox_profile = _write_agent_sandbox_profile(
