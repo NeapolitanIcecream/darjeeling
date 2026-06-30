@@ -24,6 +24,7 @@ from darjeeling.agent_workspace import (
 )
 from darjeeling.artifact_worker import build_protocol_docs
 from darjeeling.compile_orchestration import (
+    _load_persisted_selected_evaluation,
     _selected_successful_ledger_entry,
     _submission_content_digest,
     _validation_gate_status,
@@ -395,6 +396,10 @@ def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     assert handoff["selected_validation_report_id"] == result["validation_report"].report_id
     assert Path(handoff["selected_candidate_path"]).exists()
     assert Path(handoff["selected_validation_report_path"]).exists()
+    persisted = _load_persisted_selected_evaluation(handoff)
+    assert persisted is not None
+    assert persisted["candidate"].candidate_id == result["selected_candidate"].candidate_id
+    assert persisted["report"].report_id == result["validation_report"].report_id
     with pytest.raises(ValueError):
         handoff_path.resolve().relative_to(attempt.workspace_path.resolve())
     assert (attempt.workspace_path / "journal" / "feedback-c1.json").exists()
@@ -1621,6 +1626,7 @@ def test_interactive_compile_loop_uses_cumulative_compile_cost_without_double_co
     assert result["evaluated_submission_count"] == 2
     assert result["stop_reason"] == "ready_for_test"
     assert result["total_candidate_cost"] == 10.0
+    assert result["agent_usage_ledger"].cost == 10.0
 
 
 def test_first_compile_after_cold_start_uses_recompile_request_path(

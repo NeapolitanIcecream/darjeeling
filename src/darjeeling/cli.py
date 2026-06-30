@@ -368,7 +368,7 @@ def _run_compile_command(
         snapshot_result.snapshot,
         cold_release,
         snapshot_result.reference_qualification,
-        AgentUsageLedger(),
+        loop_result.get("agent_usage_ledger", AgentUsageLedger()),
         snapshot_result.reference_usage,
         None,
         None,

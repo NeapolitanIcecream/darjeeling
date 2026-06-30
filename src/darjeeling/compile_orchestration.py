@@ -4,10 +4,11 @@ import multiprocessing as mp
 import os
 import signal
 import time
-from dataclasses import asdict, replace
+from dataclasses import asdict, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from types import UnionType
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from darjeeling.agent_workspace import (
     _read_session_record_for_handle,
@@ -40,6 +41,7 @@ from darjeeling.model import (
     AgentUsageEvent,
     AgentUsageLedger,
     AgentViewOptions,
+    Candidate,
     CandidateSubmission,
     ClosedAgentAttempt,
     CompileLaunchDecision,
@@ -52,6 +54,7 @@ from darjeeling.model import (
     RecompileRequest,
     ReferenceBroker,
     Release,
+    Report,
     RequirementCheckResult,
     SchedulerPolicy,
     TargetCheckReport,
@@ -523,6 +526,71 @@ def _write_interactive_result(
     }
     write_json_atomic(_interactive_result_path(attempt), result)
     return result
+
+
+def _dataclass_from_json(cls: Any, raw: dict[str, Any]) -> Any:
+    type_hints = get_type_hints(cls)
+    values = {}
+    for field in fields(cls):
+        if field.name in raw:
+            values[field.name] = _coerce_json_value(
+                raw[field.name], type_hints.get(field.name, field.type)
+            )
+    return cls(**values)
+
+
+def _coerce_json_value(value: Any, type_hint: Any) -> Any:
+    if value is None:
+        return None
+    if type_hint is Any:
+        return value
+    if type_hint is Path:
+        return Path(value)
+    if type_hint is datetime and isinstance(value, str):
+        return datetime.fromisoformat(value)
+    if is_dataclass(type_hint) and isinstance(value, dict):
+        return _dataclass_from_json(type_hint, value)
+    origin = get_origin(type_hint)
+    if origin is list:
+        args = get_args(type_hint)
+        child_hint = args[0] if args else Any
+        return [_coerce_json_value(child, child_hint) for child in value]
+    if origin is dict:
+        args = get_args(type_hint)
+        value_hint = args[1] if len(args) == 2 else Any
+        return {
+            str(key): _coerce_json_value(child, value_hint)
+            for key, child in value.items()
+        }
+    if origin in {UnionType, Union}:
+        for child_hint in get_args(type_hint):
+            if child_hint is type(None):
+                continue
+            if is_dataclass(child_hint) and isinstance(value, dict):
+                return _dataclass_from_json(child_hint, value)
+            if child_hint is Path:
+                return Path(value)
+            if child_hint is datetime and isinstance(value, str):
+                return datetime.fromisoformat(value)
+        return value
+    return value
+
+
+def _load_persisted_selected_evaluation(
+    interactive_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    candidate_path = interactive_result.get("selected_candidate_path")
+    report_path = interactive_result.get("selected_validation_report_path")
+    if not isinstance(candidate_path, str) or not isinstance(report_path, str):
+        return None
+    candidate_file = Path(candidate_path)
+    report_file = Path(report_path)
+    if not candidate_file.is_file() or not report_file.is_file():
+        return None
+    return {
+        "candidate": _dataclass_from_json(Candidate, read_json(candidate_file)),
+        "report": _dataclass_from_json(Report, read_json(report_file)),
+    }
 
 
 def _agent_usage_ledger_from_raw(raw: Any) -> AgentUsageLedger | None:
@@ -1204,6 +1272,8 @@ def run_interactive_compile_loop(
         if isinstance(selected_submission_id, str)
         else None
     )
+    if selected_evaluation is None:
+        selected_evaluation = _load_persisted_selected_evaluation(interactive_result)
     result = {
         "compile_id": compile_run.compile_id,
         "attempt_id": attempt.attempt_id,
@@ -1227,6 +1297,7 @@ def run_interactive_compile_loop(
             "selected_validation_report_path"
         ),
         "closed_attempt": closed_attempt,
+        "agent_usage_ledger": agent_usage_ledger,
     }
     if selected_evaluation is not None:
         result["selected_candidate"] = selected_evaluation["candidate"]
