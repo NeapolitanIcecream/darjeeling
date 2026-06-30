@@ -467,7 +467,7 @@ def test_portable_research_mode_keeps_filesystem_isolation(
             "    ctypes.CDLL(None)",
             "    raise SystemExit(51)",
             "except PermissionError as exc:",
-            "    assert 'ctypes' in str(exc)",
+            "    assert 'ctypes' in str(exc) or 'native extension' in str(exc)",
             "Path('journal/native-ffi-blocked.txt').write_text('ok')",
         ]
     )
@@ -512,6 +512,58 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         gc_introspection_attempt.workspace_path
         / "journal"
         / "gc-introspection-blocked.txt"
+    ).exists()
+
+    traceback_attempt, traceback_brief = create_brief()
+    traceback_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "outside = Path(" + repr(str(outside_secret)) + ")",
+            "try:",
+            "    outside.read_text()",
+            "    raise SystemExit(57)",
+            "except PermissionError as exc:",
+            "    tb = exc.__traceback__",
+            "    saw_audit_frame = False",
+            "    sensitive_names = [",
+            "        '_resolve_path',",
+            "        '_check_read',",
+            "        '_check_write',",
+            "        '_is_native_extension_path',",
+            "        '_is_sandboxed_child_popen',",
+            "        '_child_popen_matches_policy',",
+            "        '_child_config_matches_policy',",
+            "    ]",
+            "    while tb is not None:",
+            "        frame = tb.tb_frame",
+            "        if frame.f_code.co_name == '_audit':",
+            "            saw_audit_frame = True",
+            "            for name in sensitive_names:",
+            "                assert name not in frame.f_locals, name",
+            "            frame.f_locals['_allowed_read_roots'] = (Path('/'),)",
+            "            frame.f_locals['_denied_read_roots'] = ()",
+            "        tb = tb.tb_next",
+            "    assert saw_audit_frame",
+            "try:",
+            "    outside.read_text()",
+            "    raise SystemExit(58)",
+            "except PermissionError:",
+            "    pass",
+            "Path('journal/traceback-policy-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        traceback_attempt,
+        traceback_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", traceback_code],
+            "permissions": AgentWorkspacePermissions(),
+            "protected_paths": [str(outside_secret)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        traceback_attempt.workspace_path / "journal" / "traceback-policy-blocked.txt"
     ).exists()
 
     sqlite_attempt, sqlite_brief = create_brief()

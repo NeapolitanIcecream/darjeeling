@@ -481,24 +481,121 @@ def _audit(
     event,
     args,
     _allow_network=allow_network,
-    _resolve_path=_resolve_path,
-    _is_write=_is_write,
-    _check_write=_check_write,
-    _check_read=_check_read,
-    _is_native_extension_path=_is_native_extension_path,
-    _is_sandboxed_child_popen=_is_sandboxed_child_popen,
+    _cwd=cwd,
+    _allowed_read_roots=allowed_read_roots,
+    _allowed_write_roots=allowed_write_roots,
+    _denied_read_roots=denied_read_roots,
+    _denied_write_roots=denied_write_roots,
+    _system_roots=tuple(system_roots),
+    _native_extension_suffixes=native_extension_suffixes,
+    _allow_dependency_install=allow_dependency_install,
+    _runner_path=runner_path,
+    _allowed_read_root_values=_allowed_read_root_values,
+    _allowed_write_root_values=_allowed_write_root_values,
+    _denied_read_root_values=_denied_read_root_values,
+    _denied_write_root_values=_denied_write_root_values,
+    _config_env_var=_CONFIG_ENV_VAR,
+    _popen_call_code=_sandboxed_popen_call_code,
+    _path_env=os.environ.get("PATH", ""),
+    _python_unbuffered=os.environ.get("PYTHONUNBUFFERED"),
+    _python_executable=sys.executable,
 ):
     if event == "open":
-        path = _resolve_path(args[0] if args else None)
+        value = args[0] if args else None
+        path = None
+        if value is not None and not isinstance(value, int):
+            if isinstance(value, bytes):
+                value = os.fsdecode(value)
+            if isinstance(value, str):
+                path = Path(value).expanduser()
+                if not path.is_absolute():
+                    path = _cwd / path
+                try:
+                    path = path.resolve(strict=False)
+                except OSError:
+                    path = path.absolute()
         mode = args[1] if len(args) > 1 else None
         flags = args[2] if len(args) > 2 else None
-        if _is_write(mode, flags):
-            _check_write(path)
+        is_write = isinstance(mode, str) and any(
+            part in mode for part in ["w", "a", "x", "+"]
+        )
+        if isinstance(flags, int):
+            write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+            is_write = is_write or bool(flags & write_flags)
+        if path is None:
+            return
+        if is_write:
+            for root in _denied_write_roots:
+                try:
+                    path.relative_to(root)
+                    raise PermissionError(
+                        f"write denied by Darjeeling sandbox: {path}"
+                    )
+                except ValueError:
+                    if path == root:
+                        raise PermissionError(
+                            f"write denied by Darjeeling sandbox: {path}"
+                        )
+            for root in _allowed_write_roots:
+                try:
+                    path.relative_to(root)
+                    return
+                except ValueError:
+                    if path == root:
+                        return
+            raise PermissionError(f"write outside Darjeeling sandbox: {path}")
         else:
-            _check_read(path)
+            for root in _denied_read_roots:
+                try:
+                    path.relative_to(root)
+                    raise PermissionError(f"read denied by Darjeeling sandbox: {path}")
+                except ValueError:
+                    if path == root:
+                        raise PermissionError(
+                            f"read denied by Darjeeling sandbox: {path}"
+                        )
+            for roots in (_allowed_read_roots, _system_roots):
+                for root in roots:
+                    try:
+                        path.relative_to(root)
+                        return
+                    except ValueError:
+                        if path == root:
+                            return
+            raise PermissionError(f"read outside Darjeeling sandbox: {path}")
         return
     if event in {"os.listdir", "os.scandir", "os.stat", "os.lstat"}:
-        _check_read(_resolve_path(args[0] if args else None))
+        value = args[0] if args else None
+        path = None
+        if value is not None and not isinstance(value, int):
+            if isinstance(value, bytes):
+                value = os.fsdecode(value)
+            if isinstance(value, str):
+                path = Path(value).expanduser()
+                if not path.is_absolute():
+                    path = _cwd / path
+                try:
+                    path = path.resolve(strict=False)
+                except OSError:
+                    path = path.absolute()
+        if path is None:
+            return
+        for root in _denied_read_roots:
+            try:
+                path.relative_to(root)
+                raise PermissionError(f"read denied by Darjeeling sandbox: {path}")
+            except ValueError:
+                if path == root:
+                    raise PermissionError(f"read denied by Darjeeling sandbox: {path}")
+        for roots in (_allowed_read_roots, _system_roots):
+            for root in roots:
+                try:
+                    path.relative_to(root)
+                    return
+                except ValueError:
+                    if path == root:
+                        return
+        raise PermissionError(f"read outside Darjeeling sandbox: {path}")
         return
     if event in {
         "os.mkdir",
@@ -513,7 +610,43 @@ def _audit(
         "os.chown",
     }:
         for value in args[:2]:
-            _check_write(_resolve_path(value))
+            path = None
+            if value is not None and not isinstance(value, int):
+                if isinstance(value, bytes):
+                    value = os.fsdecode(value)
+                if isinstance(value, str):
+                    path = Path(value).expanduser()
+                    if not path.is_absolute():
+                        path = _cwd / path
+                    try:
+                        path = path.resolve(strict=False)
+                    except OSError:
+                        path = path.absolute()
+            if path is None:
+                continue
+            for root in _denied_write_roots:
+                try:
+                    path.relative_to(root)
+                    raise PermissionError(
+                        f"write denied by Darjeeling sandbox: {path}"
+                    )
+                except ValueError:
+                    if path == root:
+                        raise PermissionError(
+                            f"write denied by Darjeeling sandbox: {path}"
+                        )
+            allowed = False
+            for root in _allowed_write_roots:
+                try:
+                    path.relative_to(root)
+                    allowed = True
+                    break
+                except ValueError:
+                    if path == root:
+                        allowed = True
+                        break
+            if not allowed:
+                raise PermissionError(f"write outside Darjeeling sandbox: {path}")
         return
     if event.startswith("socket.") and not _allow_network:
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
@@ -521,15 +654,197 @@ def _audit(
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
     if event.startswith("ctypes."):
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
-    if event == "import" and len(args) > 1 and _is_native_extension_path(args[1]):
-        raise PermissionError("native extension imports denied by Darjeeling sandbox")
+    if event == "import" and len(args) > 1:
+        value = args[1]
+        path = None
+        if value is not None and not isinstance(value, int):
+            if isinstance(value, bytes):
+                value = os.fsdecode(value)
+            if isinstance(value, str):
+                path = Path(value).expanduser()
+                if not path.is_absolute():
+                    path = _cwd / path
+                try:
+                    path = path.resolve(strict=False)
+                except OSError:
+                    path = path.absolute()
+        if path is not None and any(
+            path.name.lower().endswith(suffix)
+            for suffix in _native_extension_suffixes
+        ):
+            raise PermissionError("native extension imports denied by Darjeeling sandbox")
     if event == "sqlite3.connect":
-        _check_write(_resolve_path(args[0] if args else None))
+        value = args[0] if args else None
+        path = None
+        if value is not None and not isinstance(value, int):
+            if isinstance(value, bytes):
+                value = os.fsdecode(value)
+            if isinstance(value, str):
+                path = Path(value).expanduser()
+                if not path.is_absolute():
+                    path = _cwd / path
+                try:
+                    path = path.resolve(strict=False)
+                except OSError:
+                    path = path.absolute()
+        if path is None:
+            return
+        for root in _denied_write_roots:
+            try:
+                path.relative_to(root)
+                raise PermissionError(f"write denied by Darjeeling sandbox: {path}")
+            except ValueError:
+                if path == root:
+                    raise PermissionError(f"write denied by Darjeeling sandbox: {path}")
+        for root in _allowed_write_roots:
+            try:
+                path.relative_to(root)
+                return
+            except ValueError:
+                if path == root:
+                    return
+        raise PermissionError(f"write outside Darjeeling sandbox: {path}")
         return
     if event == "sqlite3.connect/handle":
         return
     if event == "subprocess.Popen":
-        if _is_sandboxed_child_popen(args):
+        allow_child = False
+        if _allow_dependency_install and len(args) >= 4:
+            frame = sys._getframe()
+            has_wrapper_frame = False
+            while frame is not None:
+                if frame.f_code is _popen_call_code:
+                    has_wrapper_frame = True
+                    break
+                frame = frame.f_back
+            raw_event_command = args[1]
+            if isinstance(raw_event_command, tuple):
+                raw_event_command = list(raw_event_command)
+            event_command = []
+            if has_wrapper_frame and isinstance(raw_event_command, list):
+                for part in raw_event_command:
+                    if isinstance(part, bytes):
+                        part = os.fsdecode(part)
+                    if not isinstance(part, str):
+                        event_command = []
+                        break
+                    event_command.append(part)
+            expected = [_python_executable, "-I", str(_runner_path), "--config-env"]
+            if len(event_command) == len(expected) and event_command[1:] == expected[1:]:
+                try:
+                    executable_matches = Path(args[0]).resolve(strict=False) == Path(
+                        expected[0]
+                    ).resolve(strict=False)
+                    command_matches = Path(event_command[0]).resolve(
+                        strict=False
+                    ) == Path(expected[0]).resolve(strict=False)
+                except (OSError, TypeError):
+                    executable_matches = False
+                    command_matches = False
+                env = args[3]
+                config_json = env.get(_config_env_var) if isinstance(env, dict) else None
+                expected_env = None
+                if isinstance(config_json, str):
+                    expected_env = {"PATH": _path_env, _config_env_var: config_json}
+                    if _python_unbuffered is not None:
+                        expected_env["PYTHONUNBUFFERED"] = _python_unbuffered
+                if (
+                    executable_matches
+                    and command_matches
+                    and isinstance(config_json, str)
+                    and env == expected_env
+                ):
+                    try:
+                        child_config = json.loads(config_json)
+                    except json.JSONDecodeError:
+                        child_config = None
+                    if isinstance(child_config, dict):
+                        config_matches = (
+                            child_config.get("allowed_read_roots")
+                            == list(_allowed_read_root_values)
+                            and child_config.get("allowed_write_roots")
+                            == list(_allowed_write_root_values)
+                            and child_config.get("denied_read_roots")
+                            == list(_denied_read_root_values)
+                            and child_config.get("denied_write_roots")
+                            == list(_denied_write_root_values)
+                            and bool(child_config.get("allow_network", False))
+                            == _allow_network
+                            and bool(
+                                child_config.get("allow_dependency_install", False)
+                            )
+                            == _allow_dependency_install
+                        )
+                        try:
+                            runner_matches = Path(
+                                child_config.get("runner_path", "")
+                            ).resolve(strict=False) == _runner_path.resolve(strict=False)
+                        except (OSError, TypeError):
+                            runner_matches = False
+                        child_cwd = None
+                        try:
+                            child_cwd = Path(child_config["cwd"]).resolve(strict=False)
+                        except (KeyError, OSError, TypeError):
+                            pass
+                        cwd_allowed = child_cwd is not None
+                        if cwd_allowed:
+                            for root in _denied_read_roots:
+                                try:
+                                    child_cwd.relative_to(root)
+                                    cwd_allowed = False
+                                    break
+                                except ValueError:
+                                    if child_cwd == root:
+                                        cwd_allowed = False
+                                        break
+                        if cwd_allowed:
+                            cwd_allowed = False
+                            for roots in (_allowed_read_roots, _system_roots):
+                                for root in roots:
+                                    try:
+                                        child_cwd.relative_to(root)
+                                        cwd_allowed = True
+                                        break
+                                    except ValueError:
+                                        if child_cwd == root:
+                                            cwd_allowed = True
+                                            break
+                                if cwd_allowed:
+                                    break
+                        child_command = child_config.get("command")
+                        if isinstance(child_command, tuple):
+                            child_command = list(child_command)
+                        normalized_command = []
+                        if isinstance(child_command, list) and child_command:
+                            for part in child_command:
+                                if isinstance(part, bytes):
+                                    part = os.fsdecode(part)
+                                if not isinstance(part, str) or not part:
+                                    normalized_command = []
+                                    break
+                                normalized_command.append(part)
+                        if normalized_command:
+                            executable = normalized_command[0]
+                            if Path(executable).is_absolute():
+                                resolved_executable = executable
+                            else:
+                                resolved_executable = shutil.which(executable) or executable
+                            executable_name = Path(resolved_executable).name.lower()
+                            is_python = executable_name in {
+                                "python",
+                                "python3",
+                            } or executable_name.startswith(("python3.", "python."))
+                            normalized_command[0] = resolved_executable
+                        else:
+                            is_python = False
+                        allow_child = (
+                            config_matches
+                            and runner_matches
+                            and cwd_allowed
+                            and is_python
+                            and child_config.get("command") == normalized_command
+                        )
+        if allow_child:
             return
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
     if event in {
