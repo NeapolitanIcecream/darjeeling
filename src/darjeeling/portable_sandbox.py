@@ -240,8 +240,6 @@ def _audit(event, args):
         "os.system",
         "os.exec",
         "os.posix_spawn",
-        "os.fork",
-        "os.forkpty",
     }:
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
 
