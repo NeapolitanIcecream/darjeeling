@@ -110,6 +110,54 @@ adapters, not in the core runtime.
 The target directory contract is documented in
 `docs/design/reboot/modules/01_target_definition.md`.
 
+## Compile A Target
+
+After a target checks cleanly, use the public compile CLI to run a
+target-adaptation agent and hand the selected candidate to final test:
+
+```bash
+uv run darjeeling compile run /path/to/target \
+  --run-root runs/my-target-compile \
+  --reference-config /path/to/reference_config.json \
+  --agent-command '["/usr/bin/python3", "-m", "my_agent"]' \
+  --max-candidates 1 \
+  --max-agent-seconds 300 \
+  --max-cost 10 \
+  --l4-deadline-ms 30000
+```
+
+The command writes `manifest.json`, `reports/compile_summary.json`,
+`reports/test_report.json`, `reports/final_report.json`, agent logs, candidate
+records, and the interactive handoff record under `--run-root`.
+
+Reference provider/cache config is intentionally small and target-independent.
+Target-specific prompting and response parsing stay in the target's
+`reference.py`; the config only tells Darjeeling how to call and cache a
+provider-backed `ReferenceBroker`:
+
+```json
+{
+  "provider": "openai_compatible",
+  "base_url_env": "OPENAI_BASE_URL",
+  "api_key_env": "OPENAI_API_KEY",
+  "model": "gpt-5.5",
+  "timeout_ms": 30000,
+  "max_completion_tokens": 2048,
+  "price": {
+    "input_per_million": 5.0,
+    "output_per_million": 30.0
+  },
+  "cache_path": "reference_cache.jsonl",
+  "usage_ledger_path": "reference_usage_ledger.json"
+}
+```
+
+Relative `cache_path` and `usage_ledger_path` values are resolved next to the
+config file. The usage ledger records provider calls, cache hits, and actual or
+estimated paid spend. Target-adaptation agent execution currently requires
+macOS `sandbox-exec`; unsupported platforms fail clearly instead of using a
+custom Python sandbox as a security boundary.
+
 ## How It Works
 
 At a high level, a Darjeeling target moves through this loop:

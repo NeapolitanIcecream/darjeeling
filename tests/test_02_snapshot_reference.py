@@ -13,12 +13,14 @@ from darjeeling.model import (
     ConsumedRowsManifest,
     DataConfig,
     ReferenceBudget,
+    ReferenceContext,
     ReferenceQualificationOptions,
     ReferenceResponse,
     SnapshotOptions,
     SourceRecord,
     TelemetryDataSource,
 )
+from darjeeling.reference_config import build_reference_broker_from_config
 from darjeeling.snapshot_reference import (
     build_snapshot,
     collect_source_records,
@@ -624,6 +626,88 @@ def test_reference_qualification_hard_failures_override_insufficient_gold(
     assert report.status == "fail"
     assert report.schema_failure_rate > 0
     assert report.gold_sample_count == 0
+
+
+def test_openai_compatible_reference_config_writes_cache_and_usage_ledger(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "reference.json"
+    cache_path = tmp_path / "reference_cache.jsonl"
+    ledger_path = tmp_path / "reference_usage.json"
+    config_path.write_text(
+        __import__("json").dumps(
+            {
+                "provider": "openai_compatible",
+                "base_url_env": "TEST_OPENAI_BASE_URL",
+                "api_key_env": "TEST_OPENAI_API_KEY",
+                "model": "test-model",
+                "timeout_ms": 5000,
+                "max_completion_tokens": 32,
+                "price": {
+                    "input_per_million": 1.0,
+                    "output_per_million": 2.0,
+                },
+                "cache_path": cache_path.name,
+                "usage_ledger_path": ledger_path.name,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TEST_OPENAI_BASE_URL", "https://provider.example/v1")
+    monkeypatch.setenv("TEST_OPENAI_API_KEY", "secret")
+    calls: list[dict] = []
+
+    class FakeResponse:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return __import__("json").dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {"content": '{"label": "a"}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append({"url": request.full_url, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    broker = build_reference_broker_from_config(config_path)
+    context = ReferenceContext(
+        purpose="snapshot_label",
+        request_id="r1",
+        metadata={"contract_hash": "c1", "normalized_input": "n1", "timeout_ms": 2500},
+    )
+
+    first = broker.call({"messages": [{"role": "user", "content": "x"}]}, context)
+    second = broker.call({"messages": [{"role": "user", "content": "x"}]}, context)
+
+    assert first.payload == {"label": "a"}
+    assert first.cost == 0.00012
+    assert second.payload == {"label": "a"}
+    assert second.cost == 0.0
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://provider.example/v1/chat/completions"
+    assert calls[0]["timeout"] == 2.5
+    cache_lines = cache_path.read_text(encoding="utf-8").splitlines()
+    assert len(cache_lines) == 1
+    ledger = __import__("json").loads(ledger_path.read_text(encoding="utf-8"))
+    assert ledger["totals"]["provider_call_count"] == 1
+    assert ledger["totals"]["cache_hit_count"] == 1
+    assert ledger["entries"][0]["cost_status"] == "estimated-from-token-usage"
+    assert ledger["entries"][1]["cost_status"] == "cache-hit"
 
 
 def test_path_backed_source_watermark_changes_with_file_contents(

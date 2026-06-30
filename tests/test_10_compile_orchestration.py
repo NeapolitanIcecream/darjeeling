@@ -381,6 +381,19 @@ def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     assert result["feedback_count"] == 2
     assert result["failed_submission_count"] == 0
     assert result["stop_reason"] == "ready_for_test"
+    assert result["selected_candidate_id"] == result["selected_candidate"].candidate_id
+    assert result["selected_validation_report_id"] == result["validation_report"].report_id
+    assert result["selected_candidate"].submission_id == "c2"
+    handoff_path = Path(result["interactive_result_path"])
+    handoff = json.loads(handoff_path.read_text())
+    assert handoff["schema_version"] == "darjeeling.interactive_compile_result.v1"
+    assert handoff["selected_submission_id"] == "c2"
+    assert handoff["selected_candidate_id"] == result["selected_candidate"].candidate_id
+    assert handoff["selected_validation_report_id"] == result["validation_report"].report_id
+    assert Path(handoff["selected_candidate_path"]).exists()
+    assert Path(handoff["selected_validation_report_path"]).exists()
+    with pytest.raises(ValueError):
+        handoff_path.resolve().relative_to(attempt.workspace_path.resolve())
     assert (attempt.workspace_path / "journal" / "feedback-c1.json").exists()
     assert (attempt.workspace_path / "journal" / "feedback-c2.json").exists()
     assert (attempt.workspace_path / "journal" / "c1-feedback-seen.txt").read_text() == "False"

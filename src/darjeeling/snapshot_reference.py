@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -261,7 +261,16 @@ def call_reference(
     response: ReferenceResponse | None = None
     try:
         request = contract.build_reference_request(input_value, request_context)
-        response = broker.call(request, request_context)
+        broker_context = replace(
+            request_context,
+            metadata={
+                **request_context.metadata,
+                "contract_hash": contract.contract_hash,
+                "normalized_input": contract.normalize_input(input_value),
+                "request_hash": stable_hash(request),
+            },
+        )
+        response = broker.call(request, broker_context)
         _validate_reference_source(response.reference_source)
         output = contract.validate_output(contract.parse_reference_response(response))
         return ReferenceCallResult(

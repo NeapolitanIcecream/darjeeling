@@ -339,6 +339,18 @@ def _ledger_path(attempt: AgentAttempt) -> Path:
     return core_attempt_state_dir(attempt) / "evaluated_submissions.json"
 
 
+def _interactive_result_path(attempt: AgentAttempt) -> Path:
+    return core_attempt_state_dir(attempt) / "interactive_compile_result.json"
+
+
+def _candidate_record_path(attempt: AgentAttempt, candidate_id: str) -> Path:
+    return core_attempt_state_dir(attempt) / "candidates" / f"{candidate_id}.json"
+
+
+def _validation_report_record_path(attempt: AgentAttempt, report_id: str) -> Path:
+    return core_attempt_state_dir(attempt) / "reports" / f"{report_id}.json"
+
+
 def _core_agent_usage_path(attempt: AgentAttempt) -> Path:
     return core_attempt_state_dir(attempt) / "agent_usage.json"
 
@@ -384,6 +396,88 @@ def _ledger_cost(ledger: list[dict[str, Any]]) -> float:
         if isinstance(value, (int, float)):
             total = max(total, float(value))
     return total
+
+
+def _selected_successful_ledger_entry(ledger: list[dict[str, Any]]) -> dict[str, Any] | None:
+    successful = [
+        (index, entry)
+        for index, entry in enumerate(ledger)
+        if entry.get("validation_status") == "feedback_written"
+        and isinstance(entry.get("candidate_id"), str)
+    ]
+    if not successful:
+        return None
+
+    def sort_key(item: tuple[int, dict[str, Any]]) -> tuple[float, int]:
+        index, entry = item
+        coverage = entry.get("validation_coverage")
+        if isinstance(coverage, (int, float)) and not isinstance(coverage, bool):
+            return (float(coverage), index)
+        return (-1.0, index)
+
+    return max(successful, key=sort_key)[1]
+
+
+def _last_evaluated_ledger_entry(ledger: list[dict[str, Any]]) -> dict[str, Any] | None:
+    evaluated = [
+        entry
+        for entry in ledger
+        if entry.get("validation_status") in {"feedback_written", "evaluation_failed"}
+    ]
+    return evaluated[-1] if evaluated else None
+
+
+def _write_interactive_result(
+    attempt: AgentAttempt,
+    compile_run: CompileRun,
+    ledger: list[dict[str, Any]],
+    closed_attempt: ClosedAgentAttempt,
+    *,
+    stop_reason: str,
+    elapsed_seconds: float,
+    total_candidate_cost: float,
+) -> dict[str, Any]:
+    selected = _selected_successful_ledger_entry(ledger)
+    last = _last_evaluated_ledger_entry(ledger)
+    result = {
+        "schema_version": "darjeeling.interactive_compile_result.v1",
+        "compile_id": compile_run.compile_id,
+        "attempt_id": attempt.attempt_id,
+        "target_name": compile_run.target_name,
+        "contract_hash": compile_run.contract_hash,
+        "snapshot_id": compile_run.snapshot_id,
+        "snapshot_digest": compile_run.snapshot_digest,
+        "base_release_id": compile_run.base_release_id,
+        "stop_reason": stop_reason,
+        "elapsed_seconds": elapsed_seconds,
+        "total_candidate_cost": total_candidate_cost,
+        "evaluated_submission_count": _count_evaluated_entries(ledger),
+        "feedback_count": sum(
+            1 for entry in ledger if entry.get("validation_status") == "feedback_written"
+        ),
+        "failed_submission_count": sum(
+            1 for entry in ledger if entry.get("validation_status") == "evaluation_failed"
+        ),
+        "skipped_submission_count": sum(
+            1 for entry in ledger if entry.get("validation_status") == "skipped"
+        ),
+        "last_evaluated_submission_id": last.get("submission_id") if last else None,
+        "last_evaluated_candidate_id": last.get("candidate_id") if last else None,
+        "selected_submission_id": selected.get("submission_id") if selected else None,
+        "selected_candidate_id": selected.get("candidate_id") if selected else None,
+        "selected_validation_report_id": (
+            selected.get("validation_report_id") if selected else None
+        ),
+        "selected_candidate_path": selected.get("candidate_path") if selected else None,
+        "selected_validation_report_path": (
+            selected.get("validation_report_path") if selected else None
+        ),
+        "evaluated_submissions_ledger_path": str(_ledger_path(attempt)),
+        "closed_attempt": asdict(closed_attempt),
+        "created_at": utcnow(),
+    }
+    write_json_atomic(_interactive_result_path(attempt), result)
+    return result
 
 
 def _agent_usage_ledger_from_raw(raw: Any) -> AgentUsageLedger | None:
@@ -823,6 +917,7 @@ def run_interactive_compile_loop(
     )
     agent_usage_ledger = _sync_core_agent_usage_ledger(attempt)
     pending_stop_reason: str | None = None
+    successful_evaluations: dict[str, dict[str, Any]] = {}
 
     def refresh_agent_usage_ledger() -> AgentUsageLedger:
         nonlocal agent_usage_ledger
@@ -948,18 +1043,37 @@ def run_interactive_compile_loop(
                 evaluation = evaluate_candidate_with_budget_checks(submission)
                 feedback = _feedback_for_submission(submission, evaluation)
                 feedback_record = provide_validation_feedback(attempt, feedback)
+                candidate = evaluation["candidate"]
                 report = evaluation.get("report")
                 report_cost = getattr(getattr(report, "cost", None), "compile_cost", None)
                 if isinstance(report_cost, (int, float)):
                     candidate_cost = float(report_cost)
                     total_candidate_cost = max(total_candidate_cost, candidate_cost)
+                candidate_path = _candidate_record_path(attempt, candidate.candidate_id)
+                report_path = (
+                    _validation_report_record_path(attempt, report.report_id)
+                    if report is not None
+                    else None
+                )
+                write_json_atomic(candidate_path, asdict(candidate))
+                if report is not None and report_path is not None:
+                    write_json_atomic(report_path, asdict(report))
+                successful_evaluations[submission.submission_id] = evaluation
                 ledger.append(
                     {
                         "submission_id": submission.submission_id,
                         "submission_digest": submission_digest,
                         "workspace_commit": submission.workspace_commit,
                         "validation_status": "feedback_written",
-                        "candidate_id": evaluation["candidate"].candidate_id,
+                        "candidate_id": candidate.candidate_id,
+                        "candidate_path": str(candidate_path),
+                        "validation_report_id": getattr(report, "report_id", None),
+                        "validation_report_path": str(report_path) if report_path else None,
+                        "validation_coverage": (
+                            report.metrics.get("local", {}).get("coverage")
+                            if report is not None
+                            else None
+                        ),
                         "feedback_path": str(feedback_record.path),
                         "total_compile_cost": candidate_cost,
                         "timestamp": utcnow(),
@@ -1022,7 +1136,22 @@ def run_interactive_compile_loop(
             int(agent_timeout_seconds) if agent_timeout_seconds is not None else None
         ),
     )
-    return {
+    interactive_result = _write_interactive_result(
+        attempt,
+        compile_run,
+        ledger,
+        closed_attempt,
+        stop_reason=close_reason,
+        elapsed_seconds=elapsed_seconds,
+        total_candidate_cost=total_candidate_cost,
+    )
+    selected_submission_id = interactive_result.get("selected_submission_id")
+    selected_evaluation = (
+        successful_evaluations.get(selected_submission_id)
+        if isinstance(selected_submission_id, str)
+        else None
+    )
+    result = {
         "compile_id": compile_run.compile_id,
         "attempt_id": attempt.attempt_id,
         "evaluated_submission_count": evaluated_count,
@@ -1035,4 +1164,18 @@ def run_interactive_compile_loop(
         "closed_attempt_status": closed_attempt.status,
         "closed_attempt_final_commit": closed_attempt.final_commit,
         "ledger_path": _ledger_path(attempt),
+        "interactive_result_path": _interactive_result_path(attempt),
+        "selected_candidate_id": interactive_result.get("selected_candidate_id"),
+        "selected_validation_report_id": interactive_result.get(
+            "selected_validation_report_id"
+        ),
+        "selected_candidate_path": interactive_result.get("selected_candidate_path"),
+        "selected_validation_report_path": interactive_result.get(
+            "selected_validation_report_path"
+        ),
+        "closed_attempt": closed_attempt,
     }
+    if selected_evaluation is not None:
+        result["selected_candidate"] = selected_evaluation["candidate"]
+        result["validation_report"] = selected_evaluation["report"]
+    return result
