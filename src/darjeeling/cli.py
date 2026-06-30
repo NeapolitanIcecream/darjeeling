@@ -343,6 +343,7 @@ def _run_compile_command(
             "command": command,
             "timeout_seconds": max_agent_seconds,
             "permissions": asdict(agent_options.permissions),
+            "protected_paths": [str(target_path.resolve())],
         },
     )
     loop_result = run_interactive_compile_loop(

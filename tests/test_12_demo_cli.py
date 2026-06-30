@@ -136,6 +136,98 @@ def test_compile_run_requires_target_reference_before_provider_setup(
         )
 
 
+def test_compile_run_protects_source_target_path_before_agent_launch(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    class StopAfterLaunch(Exception):
+        pass
+
+    captured_runtime: dict[str, Any] = {}
+    definition = SimpleNamespace(
+        name="thin",
+        contract_hash="contract-hash",
+        data_config=SimpleNamespace(),
+        requirements={},
+    )
+    snapshot_result = SimpleNamespace(
+        snapshot=SimpleNamespace(snapshot_id="snapshot-id"),
+        reference_qualification=SimpleNamespace(cost={}, latency={}),
+        reference_usage=ReferenceUsageLedger(call_count=0, cost=0.0, errors={}),
+    )
+    attempt = SimpleNamespace(
+        attempt_id="attempt-id",
+        workspace_path=tmp_path / "workspaces" / "attempt-id",
+    )
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "darjeeling.cli.load_checked_target",
+        lambda target_path, require_reference=False: (
+            definition,
+            SimpleNamespace(),
+            SimpleNamespace(),
+        ),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config",
+        lambda path: SimpleNamespace(reference_version="reference"),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.create_release_without_artifacts",
+        lambda *args, **kwargs: SimpleNamespace(release_id="cold"),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.build_snapshot", lambda *args, **kwargs: snapshot_result
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.load_target_workspace", lambda *args, **kwargs: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.create_compile_run",
+        lambda *args, **kwargs: SimpleNamespace(compile_id="compile-id"),
+    )
+    monkeypatch.setattr("darjeeling.cli.create_agent_workspace", lambda *args: attempt)
+    monkeypatch.setattr(
+        "darjeeling.cli.export_agent_readonly_target_view",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.export_train_view_for_agent",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.mount_readonly_inputs", lambda *args, **kwargs: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.write_agent_brief", lambda *args, **kwargs: tmp_path / "brief.md"
+    )
+
+    def fake_launch(attempt, brief, runtime):
+        captured_runtime.update(runtime)
+        raise StopAfterLaunch
+
+    monkeypatch.setattr("darjeeling.cli.launch_target_adaptation_agent_async", fake_launch)
+
+    with pytest.raises(StopAfterLaunch):
+        _run_compile_command(
+            target_path=target_dir,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+    assert captured_runtime["protected_paths"] == [str(target_dir.resolve())]
+
+
 def test_reference_budget_blocks_zero_cost_before_provider_call() -> None:
     class CountingBroker:
         reference_version = "counting"
