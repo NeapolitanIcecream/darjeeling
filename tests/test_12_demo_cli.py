@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,6 +14,7 @@ from darjeeling.cli import (
     _run_compile_command,
     app,
 )
+from darjeeling.errors import TargetDefinitionError
 from darjeeling.model import ReferenceContext, ReferenceResponse, ReferenceUsageLedger
 
 
@@ -58,6 +60,41 @@ def test_compile_run_checks_sandbox_before_reference_setup(tmp_path, monkeypatch
     with pytest.raises(ValueError, match="No reference calls were made"):
         _run_compile_command(
             target_path=tmp_path / "missing-target",
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
+def test_compile_run_requires_target_reference_before_provider_setup(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: "/usr/bin/sandbox-exec")
+    target_path = tmp_path / "target-without-reference"
+    shutil.copytree(target_dir, target_path)
+    target_yaml = target_path / "target.yaml"
+    target_yaml.write_text(
+        "\n".join(
+            line
+            for line in target_yaml.read_text(encoding="utf-8").splitlines()
+            if not line.startswith("reference:")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TargetDefinitionError, match="reference adapter is required"):
+        _run_compile_command(
+            target_path=target_path,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
             agent_command='["python3", "-c", "pass"]',

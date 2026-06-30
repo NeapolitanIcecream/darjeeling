@@ -856,6 +856,8 @@ def _run_contract_tests(
 
 def load_checked_target(
     target_path: Path,
+    *,
+    require_reference: bool = False,
 ) -> tuple[TargetDefinition, TargetRuntimeContract, TargetCheckReport]:
     draft = load_target_definition(target_path)
     contract_module = load_contract_module(draft.contract_path)
@@ -864,7 +866,9 @@ def load_checked_target(
     contract = build_runtime_contract(
         draft, contract_module, reference_module, contract_hash=definition.contract_hash
     )
-    report = check_target_definition(target_path, TargetCheckOptions(require_reference=False))
+    report = check_target_definition(
+        target_path, TargetCheckOptions(require_reference=require_reference)
+    )
     if report.status != "pass":
         raise TargetDefinitionError("; ".join(report.failures))
     return definition, contract, report

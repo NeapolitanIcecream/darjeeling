@@ -223,7 +223,9 @@ def _run_compile_command(
     if max_cost == 0:
         raise ValueError("--max-cost 0 leaves no budget for the required reference probe")
     _ensure_agent_execution_supported()
-    definition, contract, target_check = load_checked_target(target_path)
+    definition, contract, target_check = load_checked_target(
+        target_path, require_reference=True
+    )
     broker = _BudgetedReferenceBroker(
         build_reference_broker_from_config(reference_config), max_cost
     )
