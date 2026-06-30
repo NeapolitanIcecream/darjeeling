@@ -1023,11 +1023,7 @@ def run_interactive_compile_loop(
     total_candidate_cost = _ledger_cost(ledger)
     started = time.monotonic()
     agent_timeout_seconds = _agent_session_timeout_seconds(agent_handle)
-    stop_reason: str | None = (
-        "candidate_limit"
-        if evaluated_count >= compile_run.budget.max_candidates
-        else None
-    )
+    stop_reason: str | None = None
     handle = agent_handle
     options = dict(evaluation_options)
     options["contract"] = contract
@@ -1068,6 +1064,18 @@ def run_interactive_compile_loop(
         ):
             return "budget_exhausted"
         return None
+
+    def candidate_limit_stop_reason() -> str | None:
+        if (
+            compile_run.budget.max_cost is not None
+            and refresh_total_compile_cost() >= compile_run.budget.max_cost
+        ):
+            return "budget_exhausted"
+        if evaluated_count >= compile_run.budget.max_candidates:
+            return "candidate_limit"
+        return None
+
+    stop_reason = candidate_limit_stop_reason()
 
     def stop_running_agent(reason: str) -> None:
         nonlocal handle, pending_stop_reason
@@ -1133,8 +1141,9 @@ def run_interactive_compile_loop(
 
     def drain_ready_submissions() -> str | None:
         nonlocal evaluated_count, feedback_count, failed_count, total_candidate_cost
-        if evaluated_count >= compile_run.budget.max_candidates:
-            return "candidate_limit"
+        limit_stop = candidate_limit_stop_reason()
+        if limit_stop is not None:
+            return limit_stop
         submissions_dir = attempt.workspace_path / "submissions"
         if (
             not submissions_dir.exists()
@@ -1147,8 +1156,9 @@ def run_interactive_compile_loop(
             for path in submissions_dir.iterdir()
             if path.is_dir() and candidate_submission_ready(path)
         ):
-            if evaluated_count >= compile_run.budget.max_candidates:
-                return "candidate_limit"
+            limit_stop = candidate_limit_stop_reason()
+            if limit_stop is not None:
+                return limit_stop
             candidate_cost: float | None = None
             submission_digest: str | None = None
             try:
@@ -1230,13 +1240,9 @@ def run_interactive_compile_loop(
             _write_submission_ledger(attempt, ledger)
             if pending_stop_reason is not None:
                 return pending_stop_reason
-            if evaluated_count >= compile_run.budget.max_candidates:
-                return "candidate_limit"
-            if (
-                compile_run.budget.max_cost is not None
-                and refresh_total_compile_cost() >= compile_run.budget.max_cost
-            ):
-                return "budget_exhausted"
+            limit_stop = candidate_limit_stop_reason()
+            if limit_stop is not None:
+                return limit_stop
         return None
 
     while stop_reason is None:

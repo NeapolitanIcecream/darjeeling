@@ -1175,6 +1175,67 @@ def test_interactive_compile_loop_rejects_validation_ok_after_budget_stop(
     assert session["stop_reason"] == "budget_exhausted"
 
 
+def test_interactive_compile_loop_reports_budget_before_candidate_limit(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=10, max_candidates=1, max_cost=2.0),
+            "\n".join(
+                [
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('overbudget', ['a'])",
+                    "time.sleep(30)",
+                ]
+            ),
+        )
+    )
+    original_evaluate = compile_orchestration_module.evaluate_candidate_on_validation
+
+    def validation_reports_over_budget(*args, **kwargs):
+        result = original_evaluate(*args, **kwargs)
+        report = result["report"]
+        result["report"] = replace(
+            report, cost=replace(report.cost, compile_cost=3.0)
+        )
+        return result
+
+    monkeypatch.setattr(
+        "darjeeling.compile_orchestration.evaluate_candidate_on_validation",
+        validation_reports_over_budget,
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert result["failed_submission_count"] == 0
+    assert result["stop_reason"] == "budget_exhausted"
+    assert result["total_candidate_cost"] == 3.0
+    assert json.loads((attempt.workspace_path / "journal" / "closed.json").read_text())[
+        "reason"
+    ] == "budget_exhausted"
+
+
 def test_interactive_compile_loop_tolerates_malformed_agent_usage_ledger(
     target_dir: Path, tmp_path: Path, now
 ) -> None:
