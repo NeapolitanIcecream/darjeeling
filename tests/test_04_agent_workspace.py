@@ -92,10 +92,10 @@ def _train_export_digest(
 def _wait_for_path(path: Path, timeout_seconds: float = 5.0) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        if path.exists():
+        if path.exists() and path.read_text(encoding="utf-8").strip():
             return
         time.sleep(0.05)
-    raise AssertionError(f"timed out waiting for {path}")
+    raise AssertionError(f"timed out waiting for non-empty {path}")
 
 
 def _process_alive(pid: int) -> bool:
@@ -288,7 +288,7 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     if default_sandbox_config.exists():
         sandbox_config = json.loads(default_sandbox_config.read_text())
         assert sandbox_config["allow_network"] is False
-        assert sandbox_config["allow_subprocess"] is False
+        assert "allow_subprocess" not in sandbox_config
     elif default_session["sandbox_profile"] is not None:
         assert "(deny network*)" in Path(default_session["sandbox_profile"]).read_text()
 
@@ -341,9 +341,105 @@ def test_agent_guidance_permissions_render_and_reach_launch_metadata(
     if research_sandbox_config.exists():
         sandbox_config = json.loads(research_sandbox_config.read_text())
         assert sandbox_config["allow_network"] is True
-        assert sandbox_config["allow_subprocess"] is True
+        assert "allow_subprocess" not in sandbox_config
     elif research_session["sandbox_profile"] is not None:
         assert "(deny network*)" not in Path(research_session["sandbox_profile"]).read_text()
+
+
+def test_portable_research_mode_keeps_filesystem_isolation(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, check = load_checked_target(target_dir)
+    snapshot = build_snapshot(
+        definition,
+        contract,
+        definition.data_config,
+        None,
+        [],
+        PrefixBroker(),
+        now,
+        SnapshotOptions(storage_root=tmp_path / "snapshots"),
+    )
+    registry = __import__("darjeeling.model").model.ReleaseRegistry()
+    release = create_release_without_artifacts(
+        definition, contract, check, PrefixBroker(), RoutingSettings(), registry
+    )
+    workspace = load_target_workspace(
+        definition.name, definition.contract_hash, WorkspaceStore(tmp_path / "workspaces")
+    )
+    compile_run = create_compile_run(
+        definition,
+        check,
+        snapshot.snapshot,
+        release,
+        CompileBudget(),
+        workspace,
+        snapshot.reference_qualification,
+        CompileOptions(),
+    )
+
+    def create_brief():
+        attempt = create_agent_workspace(compile_run, workspace, AgentAttemptOptions())
+        target_view = export_agent_readonly_target_view(
+            definition, attempt.workspace_path / "target_view"
+        )
+        train_view = export_train_view_for_agent(
+            snapshot.snapshot,
+            contract,
+            __import__("darjeeling.model").model.AgentViewOptions(),
+            attempt.workspace_path / "train_view",
+        )
+        manifest = mount_readonly_inputs(
+            attempt, target_view, train_view, release, [], [], build_protocol_docs("v1")
+        )
+        return attempt, write_agent_brief(attempt, compile_run, manifest, {})
+
+    original_which = agent_workspace_module.shutil.which
+
+    def no_sandbox_exec(name: str):
+        if name == "sandbox-exec":
+            return None
+        return original_which(name)
+
+    monkeypatch.setattr(agent_workspace_module.shutil, "which", no_sandbox_exec)
+    permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
+    subprocess_attempt, subprocess_brief = create_brief()
+    with pytest.raises(WorkspaceError, match="agent runtime command failed"):
+        launch_target_adaptation_agent(
+            subprocess_attempt,
+            subprocess_brief,
+            {
+                "command": [
+                    "/usr/bin/python3",
+                    "-c",
+                    "import subprocess; subprocess.run(['/usr/bin/python3', '-c', 'pass'])",
+                ],
+                "permissions": permissions,
+            },
+        )
+    sandbox_config = json.loads(
+        (
+            subprocess_attempt.workspace_path
+            / "journal"
+            / "agent_python_sandbox.json"
+        ).read_text()
+    )
+    assert sandbox_config["allow_network"] is True
+    assert "allow_subprocess" not in sandbox_config
+    assert "subprocess.Popen denied by Darjeeling sandbox" in (
+        subprocess_attempt.workspace_path / "journal" / "agent.log"
+    ).read_text()
+
+    shell_attempt, shell_brief = create_brief()
+    with pytest.raises(WorkspaceError, match="Python agent command"):
+        launch_target_adaptation_agent(
+            shell_attempt,
+            shell_brief,
+            {
+                "command": ["/bin/sh", "-c", "echo unsandboxed"],
+                "permissions": permissions,
+            },
+        )
 
 
 def test_agent_mount_contains_train_only_inputs(

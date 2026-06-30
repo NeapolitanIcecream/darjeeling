@@ -38,7 +38,6 @@ allowed_write_roots = _roots(config["allowed_write_roots"])
 denied_read_roots = _roots(config["denied_read_roots"])
 denied_write_roots = _roots(config["denied_write_roots"])
 allow_network = bool(config.get("allow_network", False))
-allow_subprocess = bool(config.get("allow_subprocess", False))
 
 system_roots = []
 for value in set(sys.path + [sys.prefix, sys.base_prefix, sys.exec_prefix]):
@@ -145,10 +144,7 @@ def _audit(event, args):
         return
     if event.startswith("socket.") and not allow_network:
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
-    if (
-        event in {"subprocess.Popen", "os.system", "os.exec"}
-        and not allow_subprocess
-    ):
+    if event in {"subprocess.Popen", "os.system", "os.exec"}:
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
 
 
@@ -204,7 +200,6 @@ def build_python_sandbox_command(
     denied_read_roots: list[Path],
     denied_write_roots: list[Path],
     allow_network: bool = False,
-    allow_subprocess: bool = False,
 ) -> list[str]:
     resolved_command = resolve_python_command(command)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +211,6 @@ def build_python_sandbox_command(
         "denied_read_roots": [str(path) for path in denied_read_roots],
         "denied_write_roots": [str(path) for path in denied_write_roots],
         "allow_network": allow_network,
-        "allow_subprocess": allow_subprocess,
     }
     config_path.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
     runner = textwrap.dedent(_PYTHON_SANDBOX_RUNNER).strip()

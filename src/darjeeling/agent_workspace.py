@@ -345,7 +345,6 @@ def _agent_portable_sandbox_command(
             denied_read_roots=all_protected,
             denied_write_roots=[*readonly_paths, *all_protected],
             allow_network=permissions.network_access,
-            allow_subprocess=permissions.dependency_install,
         )
     except Exception as exc:
         raise WorkspaceError(str(exc)) from exc
@@ -834,9 +833,6 @@ def _prepare_agent_launch(
             sandboxed_command = _agent_portable_sandbox_command(
                 attempt.workspace_path, command, protected_paths, permissions
             )
-        elif permissions.network_access or permissions.dependency_install:
-            sandbox_mode = "unsandboxed_research"
-            sandboxed_command = command
         else:
             sandboxed_command = _agent_portable_sandbox_command(
                 attempt.workspace_path, command, protected_paths, permissions
