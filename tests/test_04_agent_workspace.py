@@ -426,6 +426,65 @@ def test_portable_research_mode_keeps_filesystem_isolation(
     permissions = AgentWorkspacePermissions(network_access=True, dependency_install=True)
     outside_secret = tmp_path / "outside-child-secret.txt"
     outside_secret.write_text("secret\n", encoding="utf-8")
+    protected_inside_attempt, protected_inside_brief = create_brief()
+    protected_inside_path = (
+        protected_inside_attempt.workspace_path / "journal" / "workspace-protected.txt"
+    )
+    protected_inside_path.write_text("workspace secret\n", encoding="utf-8")
+    protected_inside_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "try:",
+            "    Path('journal/workspace-protected.txt').read_text()",
+            "    raise SystemExit(50)",
+            "except PermissionError:",
+            "    pass",
+            "Path('journal/workspace-protected-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        protected_inside_attempt,
+        protected_inside_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", protected_inside_code],
+            "permissions": permissions,
+            "protected_paths": [str(protected_inside_path)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        protected_inside_attempt.workspace_path
+        / "journal"
+        / "workspace-protected-blocked.txt"
+    ).exists()
+
+    native_ffi_attempt, native_ffi_brief = create_brief()
+    native_ffi_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "try:",
+            "    import ctypes",
+            "    ctypes.CDLL(None)",
+            "    raise SystemExit(51)",
+            "except PermissionError as exc:",
+            "    assert 'ctypes' in str(exc)",
+            "Path('journal/native-ffi-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        native_ffi_attempt,
+        native_ffi_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", native_ffi_code],
+            "permissions": permissions,
+            "protected_paths": [str(outside_secret)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        native_ffi_attempt.workspace_path / "journal" / "native-ffi-blocked.txt"
+    ).exists()
+
     runner_tamper_attempt, runner_tamper_brief = create_brief()
     runner_tamper_child_code = "\n".join(
         [

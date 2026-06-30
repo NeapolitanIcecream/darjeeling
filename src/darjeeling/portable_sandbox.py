@@ -115,10 +115,10 @@ def _check_read(
 ):
     if path is None:
         return
-    if _inside(path, _allowed_read_roots) or _inside(path, _system_roots):
-        return
     if _inside(path, _denied_read_roots):
         raise PermissionError(f"read denied by Darjeeling sandbox: {path}")
+    if _inside(path, _allowed_read_roots) or _inside(path, _system_roots):
+        return
     raise PermissionError(f"read outside Darjeeling sandbox: {path}")
 
 
@@ -469,6 +469,8 @@ def _audit(
             _check_write(_resolve_path(value))
         return
     if event.startswith("socket.") and not _allow_network:
+        raise PermissionError(f"{event} denied by Darjeeling sandbox")
+    if event.startswith("ctypes."):
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
     if event == "subprocess.Popen":
         if _is_sandboxed_child_popen(args):
