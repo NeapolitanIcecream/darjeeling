@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from darjeeling.cli import _BudgetedReferenceBroker, _run_compile_command, app
@@ -30,15 +31,19 @@ def test_thin_target_demo_reports_local_accept_and_fallback() -> None:
 def test_compile_cli_help_is_discoverable() -> None:
     runner = CliRunner()
 
-    compile_help = runner.invoke(app, ["compile", "--help"], terminal_width=240)
-    run_help = runner.invoke(app, ["compile", "run", "--help"], terminal_width=240)
+    compile_help = runner.invoke(app, ["compile", "--help"])
+    run_help = runner.invoke(app, ["compile", "run", "--help"])
 
     assert compile_help.exit_code == 0, compile_help.output
     assert run_help.exit_code == 0, run_help.output
     assert "Compile target-local artifacts." in compile_help.output
-    assert "--reference-config" in run_help.output
-    assert "--agent-command" in run_help.output
-    assert "--l4-deadline-ms" in run_help.output
+    run_command = get_command(app).commands["compile"].commands["run"]
+    option_names = {
+        option
+        for parameter in run_command.params
+        for option in getattr(parameter, "opts", [])
+    }
+    assert {"--reference-config", "--agent-command", "--l4-deadline-ms"} <= option_names
 
 
 def test_compile_run_checks_sandbox_before_reference_setup(tmp_path, monkeypatch) -> None:

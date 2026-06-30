@@ -829,6 +829,11 @@ def test_interactive_compile_loop_stops_agent_when_timeout_expires_during_valida
             agent_timeout_seconds=2,
         )
     )
+    ready_path = attempt.workspace_path / "submissions" / "slowvalid" / "READY"
+    deadline = time.time() + 5
+    while not ready_path.exists() and time.time() < deadline:
+        time.sleep(0.02)
+    assert ready_path.exists()
     started_at = utcnow() - timedelta(seconds=1.5)
     handle = replace(handle, started_at=started_at)
     core_session_path = (
