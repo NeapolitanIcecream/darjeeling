@@ -159,6 +159,54 @@ def _same_path(left, right):
         return False
 
 
+def _is_python_command(value):
+    try:
+        executable = Path(os.fsdecode(value)).name.lower()
+    except TypeError:
+        return False
+    if executable in {"python", "python3"}:
+        return True
+    return executable.startswith("python3.") or executable.startswith("python.")
+
+
+def _resolve_executable(value):
+    if isinstance(value, bytes):
+        value = os.fsdecode(value)
+    if not isinstance(value, str) or not value:
+        return None
+    if Path(value).is_absolute():
+        return value
+    resolved = shutil.which(value)
+    return resolved or value
+
+
+def _normalize_subprocess_command(
+    raw_command,
+    _resolve_executable=_resolve_executable,
+    _is_python_command=_is_python_command,
+):
+    if isinstance(raw_command, tuple):
+        raw_command = list(raw_command)
+    if not isinstance(raw_command, list) or not raw_command:
+        raise PermissionError(
+            "portable dependency installation requires a Python command list"
+        )
+    command_parts = [
+        os.fsdecode(part) if isinstance(part, bytes) else part for part in raw_command
+    ]
+    if not all(isinstance(part, str) and part for part in command_parts):
+        raise PermissionError(
+            "portable dependency installation requires a Python command list"
+        )
+    executable = _resolve_executable(command_parts[0])
+    if executable is None or not _is_python_command(executable):
+        raise PermissionError(
+            "portable dependency installation only allows sandboxed Python subprocesses"
+        )
+    command_parts[0] = executable
+    return command_parts
+
+
 def _child_config_matches_policy(
     child_config,
     _allowed_read_root_values=_allowed_read_root_values,
@@ -170,6 +218,7 @@ def _child_config_matches_policy(
     _runner_path=runner_path,
     _same_path=_same_path,
     _check_read=_check_read,
+    _normalize_subprocess_command=_normalize_subprocess_command,
 ):
     if child_config.get("allowed_read_roots") != list(_allowed_read_root_values):
         return False
@@ -291,56 +340,20 @@ def _audit(
 sys.addaudithook(_audit)
 
 
-def _is_python_command(value):
-    try:
-        executable = Path(os.fsdecode(value)).name.lower()
-    except TypeError:
-        return False
-    if executable in {"python", "python3"}:
-        return True
-    return executable.startswith("python3.") or executable.startswith("python.")
-
-
-def _resolve_executable(value):
-    if isinstance(value, bytes):
-        value = os.fsdecode(value)
-    if not isinstance(value, str) or not value:
-        return None
-    if Path(value).is_absolute():
-        return value
-    resolved = shutil.which(value)
-    return resolved or value
-
-
-def _normalize_subprocess_command(raw_command):
-    if isinstance(raw_command, tuple):
-        raw_command = list(raw_command)
-    if not isinstance(raw_command, list) or not raw_command:
-        raise PermissionError(
-            "portable dependency installation requires a Python command list"
-        )
-    command_parts = [
-        os.fsdecode(part) if isinstance(part, bytes) else part for part in raw_command
-    ]
-    if not all(isinstance(part, str) and part for part in command_parts):
-        raise PermissionError(
-            "portable dependency installation requires a Python command list"
-        )
-    executable = _resolve_executable(command_parts[0])
-    if executable is None or not _is_python_command(executable):
-        raise PermissionError(
-            "portable dependency installation only allows sandboxed Python subprocesses"
-        )
-    command_parts[0] = executable
-    return command_parts
-
-
-def _subprocess_cwd(value, _cwd=cwd, _check_read=_check_read):
+def _resolve_child_cwd(value, _cwd=cwd):
     if value is None:
         return _cwd
-    path = _resolve_path(value)
-    _check_read(path)
-    return path
+    if isinstance(value, bytes):
+        value = os.fsdecode(value)
+    if not isinstance(value, str):
+        raise PermissionError("portable dependency installation requires cwd path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = _cwd / path
+    try:
+        return path.resolve(strict=False)
+    except OSError:
+        return path.absolute()
 
 
 def _child_config(
@@ -369,80 +382,88 @@ def _make_sandboxed_popen(
     original_popen,
     allow_dependency_install_value,
     normalize_subprocess_command,
-    subprocess_cwd,
+    resolve_child_cwd,
     child_config_factory,
     child_env_factory,
     child_runner_path,
 ):
-    def _sandboxed_popen(*popen_args, **popen_kwargs):
-        if not allow_dependency_install_value:
-            raise PermissionError("subprocess.Popen denied by Darjeeling sandbox")
-        if len(popen_args) > 1:
-            raise PermissionError(
-                "portable dependency installation only allows command as a positional argument"
-            )
-        if popen_kwargs.get("shell"):
-            raise PermissionError(
-                "portable dependency installation does not allow shell subprocesses"
-            )
-        for key, message in {
-            "executable": "executable overrides",
-            "preexec_fn": "pre-exec hooks",
-        }.items():
-            if popen_kwargs.get(key) is not None:
-                raise PermissionError(
-                    f"portable dependency installation does not allow {message}"
-                )
-        if popen_kwargs.get("pass_fds"):
-            raise PermissionError(
-                "portable dependency installation does not allow inherited file descriptors"
-            )
-        if popen_kwargs.get("start_new_session"):
-            raise PermissionError(
-                "portable dependency installation does not allow process group overrides"
-            )
-        if (
-            "process_group" in popen_kwargs
-            and popen_kwargs.get("process_group") is not None
-        ):
-            raise PermissionError(
-                "portable dependency installation does not allow process group overrides"
-            )
-        if popen_args:
-            raw_command = popen_args[0]
-            remaining_args = popen_args[1:]
-            command_in_kwargs = False
-        else:
-            raw_command = popen_kwargs.get("args")
-            remaining_args = ()
-            command_in_kwargs = "args" in popen_kwargs
-        child_command = normalize_subprocess_command(raw_command)
-        child_cwd = subprocess_cwd(popen_kwargs.get("cwd"))
-        config_json = child_config_factory(child_command, child_cwd)
-        wrapped_command = [sys.executable, "-I", str(child_runner_path), "--config-env"]
-        wrapped_kwargs = dict(popen_kwargs)
-        wrapped_kwargs.pop("shell", None)
-        wrapped_kwargs.pop("executable", None)
-        wrapped_kwargs.pop("preexec_fn", None)
-        wrapped_kwargs.pop("pass_fds", None)
-        wrapped_kwargs["env"] = child_env_factory(
-            wrapped_kwargs.get("env"), config_json
-        )
-        if "cwd" in wrapped_kwargs:
-            wrapped_kwargs["cwd"] = str(child_cwd)
-        if command_in_kwargs:
-            wrapped_kwargs["args"] = wrapped_command
-            return original_popen(*remaining_args, **wrapped_kwargs)
-        return original_popen(wrapped_command, *remaining_args, **wrapped_kwargs)
+    class _SandboxedPopen:
+        __slots__ = ()
 
-    return _sandboxed_popen
+        def __call__(self, *popen_args, **popen_kwargs):
+            if not allow_dependency_install_value:
+                raise PermissionError("subprocess.Popen denied by Darjeeling sandbox")
+            if len(popen_args) > 1:
+                raise PermissionError(
+                    "portable dependency installation only allows command as a positional argument"
+                )
+            if popen_kwargs.get("shell"):
+                raise PermissionError(
+                    "portable dependency installation does not allow shell subprocesses"
+                )
+            for key, message in {
+                "executable": "executable overrides",
+                "preexec_fn": "pre-exec hooks",
+            }.items():
+                if popen_kwargs.get(key) is not None:
+                    raise PermissionError(
+                        f"portable dependency installation does not allow {message}"
+                    )
+            if popen_kwargs.get("pass_fds"):
+                raise PermissionError(
+                    "portable dependency installation does not allow inherited file descriptors"
+                )
+            if popen_kwargs.get("start_new_session"):
+                raise PermissionError(
+                    "portable dependency installation does not allow process group overrides"
+                )
+            if (
+                "process_group" in popen_kwargs
+                and popen_kwargs.get("process_group") is not None
+            ):
+                raise PermissionError(
+                    "portable dependency installation does not allow process group overrides"
+                )
+            if popen_args:
+                raw_command = popen_args[0]
+                remaining_args = popen_args[1:]
+                command_in_kwargs = False
+            else:
+                raw_command = popen_kwargs.get("args")
+                remaining_args = ()
+                command_in_kwargs = "args" in popen_kwargs
+            child_command = normalize_subprocess_command(raw_command)
+            child_cwd = resolve_child_cwd(popen_kwargs.get("cwd"))
+            config_json = child_config_factory(child_command, child_cwd)
+            wrapped_command = [
+                sys.executable,
+                "-I",
+                str(child_runner_path),
+                "--config-env",
+            ]
+            wrapped_kwargs = dict(popen_kwargs)
+            wrapped_kwargs.pop("shell", None)
+            wrapped_kwargs.pop("executable", None)
+            wrapped_kwargs.pop("preexec_fn", None)
+            wrapped_kwargs.pop("pass_fds", None)
+            wrapped_kwargs["env"] = child_env_factory(
+                wrapped_kwargs.get("env"), config_json
+            )
+            if "cwd" in wrapped_kwargs:
+                wrapped_kwargs["cwd"] = str(child_cwd)
+            if command_in_kwargs:
+                wrapped_kwargs["args"] = wrapped_command
+                return original_popen(*remaining_args, **wrapped_kwargs)
+            return original_popen(wrapped_command, *remaining_args, **wrapped_kwargs)
+
+    return _SandboxedPopen()
 
 
 subprocess.Popen = _make_sandboxed_popen(
     subprocess.Popen,
     allow_dependency_install,
     _normalize_subprocess_command,
-    _subprocess_cwd,
+    _resolve_child_cwd,
     _child_config,
     _child_env,
     runner_path,
@@ -467,8 +488,28 @@ for _policy_name in [
     "_allowed_write_root_values",
     "_denied_read_root_values",
     "_denied_write_root_values",
+    "_roots",
+    "_resolve_path",
+    "_contains",
+    "_inside",
+    "_is_write",
+    "_check_read",
+    "_check_write",
+    "_command_parts",
+    "_same_path",
+    "_is_python_command",
+    "_resolve_executable",
+    "_normalize_subprocess_command",
+    "_child_config_matches_policy",
+    "_is_sandboxed_child_popen",
+    "_audit",
+    "_resolve_child_cwd",
+    "_child_config",
+    "_child_env",
+    "_make_sandboxed_popen",
 ]:
     globals().pop(_policy_name, None)
+globals().pop("_policy_name", None)
 if not args:
     raise SystemExit("Python sandbox command requires script, -m, or -c")
 if args[0] == "-c":
