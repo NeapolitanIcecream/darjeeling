@@ -352,11 +352,39 @@ import json
 
 
 def validate_input(value):
-    return dict(value)
+    if not isinstance(value, dict):
+        raise ValueError("input must be an object")
+    row_id = value.get("row_id")
+    category = value.get("category")
+    question = value.get("question")
+    functions = value.get("functions")
+    if not isinstance(row_id, str) or not row_id:
+        raise ValueError("input.row_id must be a non-empty string")
+    if not isinstance(category, str) or not category:
+        raise ValueError("input.category must be a non-empty string")
+    if not isinstance(question, list):
+        raise ValueError("input.question must be a list")
+    if not all(isinstance(message, dict) for message in question):
+        raise ValueError("input.question entries must be objects")
+    if not isinstance(functions, list):
+        raise ValueError("input.functions must be a list")
+    if not all(isinstance(function, dict) for function in functions):
+        raise ValueError("input.functions entries must be objects")
+    return {
+        **value,
+        "row_id": row_id,
+        "category": category,
+        "question": question,
+        "functions": functions,
+    }
 
 
 def validate_output(value):
-    return {"calls": _normalize_calls(value.get("calls", []))}
+    if not isinstance(value, dict):
+        raise ValueError("output must be an object")
+    if "calls" not in value:
+        raise ValueError("output.calls is required")
+    return {"calls": _normalize_calls(value["calls"])}
 
 
 def is_correct(output, reference):
@@ -409,12 +437,22 @@ def bucket_runtime_metadata(metadata):
 
 
 def _normalize_calls(calls):
+    if not isinstance(calls, list):
+        raise ValueError("output.calls must be a list")
     normalized = []
     for call in calls:
+        if not isinstance(call, dict):
+            raise ValueError("output.calls entries must be objects")
+        name = call.get("name")
+        arguments = call.get("arguments")
+        if not isinstance(name, str) or not name:
+            raise ValueError("output call name must be a non-empty string")
+        if not isinstance(arguments, dict):
+            raise ValueError("output call arguments must be an object")
         normalized.append(
             {
-                "name": str(call.get("name", "")),
-                "arguments": dict(call.get("arguments") or {}),
+                "name": name,
+                "arguments": dict(arguments),
             }
         )
     return normalized
