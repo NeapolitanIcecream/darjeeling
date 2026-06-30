@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import shutil
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -89,6 +91,50 @@ def test_compile_run_checks_agent_command_before_reference_setup(
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
             agent_command='["missing-darjeeling-agent", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
+@pytest.mark.parametrize("protected_source", ["target", "repo"])
+def test_compile_run_rejects_protected_agent_command_before_reference_setup(
+    target_dir, tmp_path, monkeypatch, protected_source
+) -> None:
+    target_path = tmp_path / "source-target"
+    shutil.copytree(target_dir, target_path)
+    target_command = target_path / "agent-helper"
+    target_command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    repo_command = Path(__file__).resolve().parents[1] / "README.md"
+    command_path = target_command if protected_source == "target" else repo_command
+
+    def fake_which(name: str) -> str | None:
+        if name == "sandbox-exec":
+            return "/usr/bin/sandbox-exec"
+        if name == str(command_path):
+            return str(command_path)
+        return f"/usr/bin/{name}"
+
+    def fail_reference_setup(path):
+        raise AssertionError("reference config should not be loaded")
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config", fail_reference_setup
+    )
+
+    with pytest.raises(ValueError, match="protected target/Core paths"):
+        _run_compile_command(
+            target_path=target_path,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command=json.dumps([str(command_path)]),
             workspace_root=None,
             max_candidates=1,
             max_agent_seconds=1,
@@ -226,6 +272,105 @@ def test_compile_run_protects_source_target_path_before_agent_launch(
         )
 
     assert captured_runtime["protected_paths"] == [str(target_dir.resolve())]
+
+
+def test_compile_run_rejects_budget_exhausted_before_final_test(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    definition = SimpleNamespace(
+        name="thin",
+        contract_hash="contract-hash",
+        data_config=SimpleNamespace(),
+        requirements={},
+    )
+    snapshot_result = SimpleNamespace(
+        snapshot=SimpleNamespace(snapshot_id="snapshot-id"),
+        reference_qualification=SimpleNamespace(cost={}, latency={}),
+        reference_usage=ReferenceUsageLedger(call_count=0, cost=0.0, errors={}),
+    )
+    attempt = SimpleNamespace(
+        attempt_id="attempt-id",
+        workspace_path=tmp_path / "workspaces" / "attempt-id",
+    )
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "darjeeling.cli.load_checked_target",
+        lambda target_path, require_reference=False: (
+            definition,
+            SimpleNamespace(),
+            SimpleNamespace(),
+        ),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config",
+        lambda path: SimpleNamespace(reference_version="reference"),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.create_release_without_artifacts",
+        lambda *args, **kwargs: SimpleNamespace(release_id="cold"),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.build_snapshot", lambda *args, **kwargs: snapshot_result
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.load_target_workspace", lambda *args, **kwargs: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.create_compile_run",
+        lambda *args, **kwargs: SimpleNamespace(compile_id="compile-id"),
+    )
+    monkeypatch.setattr("darjeeling.cli.create_agent_workspace", lambda *args: attempt)
+    monkeypatch.setattr(
+        "darjeeling.cli.export_agent_readonly_target_view",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.export_train_view_for_agent",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.mount_readonly_inputs", lambda *args, **kwargs: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.write_agent_brief", lambda *args, **kwargs: tmp_path / "brief.md"
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.launch_target_adaptation_agent_async",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.run_interactive_compile_loop",
+        lambda *args, **kwargs: {
+            "stop_reason": "budget_exhausted",
+            "total_candidate_cost": 3.0,
+            "selected_candidate": SimpleNamespace(),
+            "validation_report": SimpleNamespace(),
+            "closed_attempt": SimpleNamespace(),
+        },
+    )
+
+    def fail_final_test(*args, **kwargs):
+        raise AssertionError("final test should not run after budget exhaustion")
+
+    monkeypatch.setattr("darjeeling.cli.evaluate_candidate_on_test", fail_final_test)
+
+    with pytest.raises(RuntimeError, match="exhausted --max-cost before final test"):
+        _run_compile_command(
+            target_path=target_dir,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=2,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
 
 
 @pytest.mark.parametrize(

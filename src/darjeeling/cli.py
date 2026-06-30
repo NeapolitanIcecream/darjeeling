@@ -241,6 +241,10 @@ def _run_compile_command(
     _ensure_agent_workspace_outside_target(
         target_path, workspace_store_root / definition.name / "main"
     )
+    _ensure_agent_command_outside_protected_paths(
+        command,
+        _compile_agent_protected_paths(target_path, workspace_store_root, definition.name),
+    )
     broker = _BudgetedReferenceBroker(
         build_reference_broker_from_config(reference_config), max_cost
     )
@@ -372,6 +376,10 @@ def _run_compile_command(
         {"artifact_store": run_root / "artifacts"},
         poll_interval_seconds=0.05,
     )
+    if loop_result.get("stop_reason") == "budget_exhausted":
+        raise RuntimeError(
+            "interactive compile exhausted --max-cost before final test; final test was not run"
+        )
     selected_candidate = loop_result.get("selected_candidate")
     validation_report = loop_result.get("validation_report")
     closed_attempt = loop_result.get("closed_attempt")
@@ -521,6 +529,55 @@ def _ensure_agent_command_supported(command: list[str]) -> None:
             f"agent command executable was not found: {command[0]}. "
             "No reference calls were made."
         )
+
+
+def _ensure_agent_command_outside_protected_paths(
+    command: list[str], protected_paths: list[Path]
+) -> None:
+    executable = Path(shutil.which(command[0]) or command[0]).expanduser().resolve()
+    for protected_path in protected_paths:
+        if _path_contains(protected_path, executable):
+            raise ValueError(
+                "agent command executable must not be inside protected target/Core paths. "
+                "No reference calls were made."
+            )
+
+
+def _compile_agent_protected_paths(
+    target_path: Path, workspace_store_root: Path, target_name: str
+) -> list[Path]:
+    repo_root = Path(__file__).resolve().parents[2]
+    predicted_attempt_path = (
+        workspace_store_root / target_name / "attempts" / "_compile" / "_attempt"
+    )
+    protected = [target_path.resolve()]
+    if _path_contains(repo_root, predicted_attempt_path):
+        protected.extend(_protect_siblings_from(repo_root, predicted_attempt_path))
+    else:
+        protected.append(repo_root)
+    if len(predicted_attempt_path.parents) >= 5:
+        workspace_parent = predicted_attempt_path.parents[4]
+        protected.extend(_protect_siblings_from(workspace_parent, predicted_attempt_path))
+    return protected
+
+
+def _protect_siblings_from(root: Path, child_path: Path) -> list[Path]:
+    protected: list[Path] = []
+    current = root.resolve()
+    child_resolved = child_path.resolve()
+    while current != child_resolved and current.is_dir():
+        try:
+            rel_parts = child_resolved.relative_to(current).parts
+        except ValueError:
+            break
+        if not rel_parts:
+            break
+        allowed_child = current / rel_parts[0]
+        for child in current.iterdir():
+            if child != allowed_child:
+                protected.append(child)
+        current = allowed_child
+    return protected
 
 
 def _path_contains(parent: Path, child: Path) -> bool:
