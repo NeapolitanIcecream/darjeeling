@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from darjeeling.cli import _BudgetedReferenceBroker, app
+from darjeeling.cli import _BudgetedReferenceBroker, _run_compile_command, app
 from darjeeling.model import ReferenceContext, ReferenceResponse
 
 
@@ -30,8 +30,8 @@ def test_thin_target_demo_reports_local_accept_and_fallback() -> None:
 def test_compile_cli_help_is_discoverable() -> None:
     runner = CliRunner()
 
-    compile_help = runner.invoke(app, ["compile", "--help"], env={"COLUMNS": "200"})
-    run_help = runner.invoke(app, ["compile", "run", "--help"], env={"COLUMNS": "200"})
+    compile_help = runner.invoke(app, ["compile", "--help"], terminal_width=240)
+    run_help = runner.invoke(app, ["compile", "run", "--help"], terminal_width=240)
 
     assert compile_help.exit_code == 0, compile_help.output
     assert run_help.exit_code == 0, run_help.output
@@ -39,6 +39,27 @@ def test_compile_cli_help_is_discoverable() -> None:
     assert "--reference-config" in run_help.output
     assert "--agent-command" in run_help.output
     assert "--l4-deadline-ms" in run_help.output
+
+
+def test_compile_run_checks_sandbox_before_reference_setup(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: None)
+
+    with pytest.raises(ValueError, match="No reference calls were made"):
+        _run_compile_command(
+            target_path=tmp_path / "missing-target",
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
 
 
 def test_reference_budget_blocks_zero_cost_before_provider_call() -> None:

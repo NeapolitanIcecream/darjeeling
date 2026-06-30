@@ -451,9 +451,14 @@ def _validation_requirement_results(
 def _validation_gate_status(
     requirement_results: list[RequirementCheckResult],
 ) -> str:
-    if any(result.status == "fail" for result in requirement_results):
+    gate_results = [
+        result
+        for result in requirement_results
+        if result.name not in {"precision_drop", "coverage_retention"}
+    ]
+    if any(result.status == "fail" for result in gate_results):
         return "fail"
-    if any(result.status == "insufficient" for result in requirement_results):
+    if any(result.status == "insufficient" for result in gate_results):
         return "insufficient"
     return "pass"
 

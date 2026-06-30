@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
@@ -220,6 +221,7 @@ def _run_compile_command(
         raise ValueError("--max-cost must be non-negative")
     if max_cost == 0:
         raise ValueError("--max-cost 0 leaves no budget for the required reference probe")
+    _ensure_agent_execution_supported()
     definition, contract, target_check = load_checked_target(target_path)
     broker = _BudgetedReferenceBroker(
         build_reference_broker_from_config(reference_config), max_cost
@@ -473,6 +475,14 @@ def _estimated_baseline_serving_cost(snapshot_result) -> float:
         1,
     )
     return total / calls
+
+
+def _ensure_agent_execution_supported() -> None:
+    if shutil.which("sandbox-exec") is None:
+        raise ValueError(
+            "agent execution requires macOS sandbox-exec; sandbox-exec was not found. "
+            "No reference calls were made."
+        )
 
 
 class _BudgetedReferenceBroker:

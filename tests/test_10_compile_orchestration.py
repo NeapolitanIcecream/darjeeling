@@ -26,6 +26,7 @@ from darjeeling.artifact_worker import build_protocol_docs
 from darjeeling.compile_orchestration import (
     _selected_successful_ledger_entry,
     _submission_content_digest,
+    _validation_gate_status,
     plan_compile_launch,
     run_interactive_compile_loop,
     start_compile_launch,
@@ -45,6 +46,7 @@ from darjeeling.model import (
     RecompileReason,
     RecompileRequest,
     ReleaseRegistry,
+    RequirementCheckResult,
     RoutingSettings,
     SchedulerPolicy,
     SnapshotOptions,
@@ -451,6 +453,28 @@ def test_interactive_handoff_selects_only_validation_passing_candidates() -> Non
 
     assert selected is not None
     assert selected["submission_id"] == "passing-higher-coverage"
+
+
+def test_validation_handoff_defers_transfer_only_checks() -> None:
+    assert (
+        _validation_gate_status(
+            [
+                RequirementCheckResult("precision_min", "pass", {}),
+                RequirementCheckResult("precision_drop", "insufficient", {}),
+                RequirementCheckResult("coverage_retention", "insufficient", {}),
+            ]
+        )
+        == "pass"
+    )
+    assert (
+        _validation_gate_status(
+            [
+                RequirementCheckResult("precision_min", "fail", {}),
+                RequirementCheckResult("coverage_retention", "insufficient", {}),
+            ]
+        )
+        == "fail"
+    )
 
 
 def test_interactive_compile_loop_ignores_agent_written_submission_ledger(

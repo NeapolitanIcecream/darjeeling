@@ -653,7 +653,8 @@ def test_agent_mount_contains_train_only_inputs(
     assert "(deny network*)" in profile_text
     assert str(outside_secret) in profile_text
     assert "readonly_inputs" in profile_text
-    assert "bad" not in (manifest.mount_path / "train.json").read_text()
+    train_rows = json.loads((manifest.mount_path / "train.json").read_text())
+    assert all(row["input"]["text"] == "<redacted>" for row in train_rows)
 
     with pytest.raises(WorkspaceError, match="holdout reconstruction"):
         provide_validation_feedback(
