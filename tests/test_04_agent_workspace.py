@@ -497,6 +497,83 @@ def test_portable_research_mode_keeps_filesystem_isolation(
         / "executable-override-used.txt"
     ).exists()
 
+    audit_bypass_attempt, audit_bypass_brief = create_brief()
+    audit_bypass_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import subprocess",
+            "globals_obj = getattr(subprocess.Popen, '__globals__', {})",
+            "assert '_subprocess_guard' not in globals_obj",
+            "try:",
+            "    globals_obj['_original_popen'](",
+            "        ['/usr/bin/python3', '-c',",
+            "         \"from pathlib import Path; \"",
+            "         \"Path('journal/audit-bypass-used.txt').write_text('bad')\"],",
+            "        cwd='.',",
+            "    ).wait()",
+            "    raise SystemExit(44)",
+            "except (AttributeError, KeyError, PermissionError):",
+            "    pass",
+            "Path('journal/audit-bypass-blocked.txt').write_text('ok')",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        audit_bypass_attempt,
+        audit_bypass_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", audit_bypass_code],
+            "permissions": permissions,
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        audit_bypass_attempt.workspace_path / "journal" / "audit-bypass-blocked.txt"
+    ).exists()
+    assert not (
+        audit_bypass_attempt.workspace_path / "journal" / "audit-bypass-used.txt"
+    ).exists()
+
+    startup_env_attempt, startup_env_brief = create_brief()
+    startup_sitecustomize = (
+        "from pathlib import Path\n"
+        f"Path('journal/startup-env-used.txt').write_text("
+        f"Path({str(outside_secret)!r}).read_text())\n"
+    )
+    startup_env_code = "\n".join(
+        [
+            "from pathlib import Path",
+            "import subprocess",
+            "site_dir = Path('journal/startup_site')",
+            "site_dir.mkdir()",
+            f"site_dir.joinpath('sitecustomize.py').write_text({startup_sitecustomize!r})",
+            "subprocess.run(",
+            "    ['/usr/bin/python3', '-c',",
+            "     \"from pathlib import Path; \"",
+            "     \"Path('journal/startup-env-sanitized-ok.txt').write_text('ok')\"],",
+            "    env={'PYTHONPATH': str(site_dir)},",
+            "    check=True,",
+            ")",
+        ]
+    )
+    handle = launch_target_adaptation_agent(
+        startup_env_attempt,
+        startup_env_brief,
+        {
+            "command": ["/usr/bin/python3", "-c", startup_env_code],
+            "permissions": permissions,
+            "protected_paths": [str(outside_secret)],
+        },
+    )
+    assert handle.status == "completed"
+    assert (
+        startup_env_attempt.workspace_path
+        / "journal"
+        / "startup-env-sanitized-ok.txt"
+    ).exists()
+    assert not (
+        startup_env_attempt.workspace_path / "journal" / "startup-env-used.txt"
+    ).exists()
+
     python_child_attempt, python_child_brief = create_brief()
     child_code = "\n".join(
         [

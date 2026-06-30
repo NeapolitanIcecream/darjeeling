@@ -29,7 +29,6 @@ command = config["command"]
 cwd = Path(config["cwd"]).resolve()
 runner_path = Path(config["runner_path"]).resolve()
 allow_dependency_install = bool(config.get("allow_dependency_install", False))
-_subprocess_guard = False
 
 
 def _roots(values):
@@ -42,10 +41,14 @@ def _roots(values):
     return roots
 
 
-allowed_read_roots = _roots(config["allowed_read_roots"])
-allowed_write_roots = _roots(config["allowed_write_roots"])
-denied_read_roots = _roots(config["denied_read_roots"])
-denied_write_roots = _roots(config["denied_write_roots"])
+_allowed_read_root_values = tuple(config["allowed_read_roots"])
+_allowed_write_root_values = tuple(config["allowed_write_roots"])
+_denied_read_root_values = tuple(config["denied_read_roots"])
+_denied_write_root_values = tuple(config["denied_write_roots"])
+allowed_read_roots = tuple(_roots(_allowed_read_root_values))
+allowed_write_roots = tuple(_roots(_allowed_write_root_values))
+denied_read_roots = tuple(_roots(_denied_read_root_values))
+denied_write_roots = tuple(_roots(_denied_write_root_values))
 allow_network = bool(config.get("allow_network", False))
 
 system_roots = []
@@ -123,9 +126,83 @@ def _check_write(path):
     raise PermissionError(f"write outside Darjeeling sandbox: {path}")
 
 
+def _command_parts(value):
+    if isinstance(value, tuple):
+        value = list(value)
+    if not isinstance(value, list):
+        return []
+    parts = []
+    for part in value:
+        if isinstance(part, bytes):
+            part = os.fsdecode(part)
+        if not isinstance(part, str):
+            return []
+        parts.append(part)
+    return parts
+
+
+def _same_path(left, right):
+    try:
+        return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
+    except (OSError, TypeError):
+        return False
+
+
+def _child_config_matches_policy(child_config):
+    if child_config.get("allowed_read_roots") != list(_allowed_read_root_values):
+        return False
+    if child_config.get("allowed_write_roots") != list(_allowed_write_root_values):
+        return False
+    if child_config.get("denied_read_roots") != list(_denied_read_root_values):
+        return False
+    if child_config.get("denied_write_roots") != list(_denied_write_root_values):
+        return False
+    if bool(child_config.get("allow_network", False)) != allow_network:
+        return False
+    if bool(child_config.get("allow_dependency_install", False)) != allow_dependency_install:
+        return False
+    if not _same_path(child_config.get("runner_path"), runner_path):
+        return False
+    try:
+        child_cwd = Path(child_config["cwd"]).resolve(strict=False)
+    except (KeyError, OSError, TypeError):
+        return False
+    try:
+        _check_read(child_cwd)
+    except PermissionError:
+        return False
+    try:
+        child_command = _normalize_subprocess_command(child_config.get("command"))
+    except PermissionError:
+        return False
+    return child_config.get("command") == child_command
+
+
+def _is_sandboxed_child_popen(args):
+    if not allow_dependency_install or len(args) < 4:
+        return False
+    event_command = _command_parts(args[1])
+    expected = [sys.executable, "-I", str(runner_path), "--config-env"]
+    if len(event_command) != len(expected):
+        return False
+    if not _same_path(event_command[0], expected[0]):
+        return False
+    if event_command[1:] != expected[1:]:
+        return False
+    env = args[3]
+    if not isinstance(env, dict):
+        return False
+    config_json = env.get(_CONFIG_ENV_VAR)
+    if not isinstance(config_json, str):
+        return False
+    try:
+        child_config = json.loads(config_json)
+    except json.JSONDecodeError:
+        return False
+    return _child_config_matches_policy(child_config)
+
+
 def _audit(event, args):
-    if event == "subprocess.Popen" and _subprocess_guard:
-        return
     if event == "open":
         path = _resolve_path(args[0] if args else None)
         mode = args[1] if len(args) > 1 else None
@@ -155,7 +232,17 @@ def _audit(event, args):
         return
     if event.startswith("socket.") and not allow_network:
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
-    if event in {"subprocess.Popen", "os.system", "os.exec"}:
+    if event == "subprocess.Popen":
+        if _is_sandboxed_child_popen(args):
+            return
+        raise PermissionError(f"{event} denied by Darjeeling sandbox")
+    if event in {
+        "os.system",
+        "os.exec",
+        "os.posix_spawn",
+        "os.fork",
+        "os.forkpty",
+    }:
         raise PermissionError(f"{event} denied by Darjeeling sandbox")
 
 
@@ -222,11 +309,11 @@ def _child_config(child_command, child_cwd):
     return json.dumps(child_config, sort_keys=True)
 
 
-def _child_env(existing_env, config_json):
-    if existing_env is None:
-        env = dict(os.environ)
-    else:
-        env = dict(existing_env)
+def _child_env(_existing_env, config_json):
+    env = {"PATH": os.environ.get("PATH", "")}
+    python_unbuffered = os.environ.get("PYTHONUNBUFFERED")
+    if python_unbuffered is not None:
+        env["PYTHONUNBUFFERED"] = python_unbuffered
     env[_CONFIG_ENV_VAR] = config_json
     return env
 
@@ -235,7 +322,6 @@ _original_popen = subprocess.Popen
 
 
 def _sandboxed_popen(*popen_args, **popen_kwargs):
-    global _subprocess_guard
     if not allow_dependency_install:
         raise PermissionError("subprocess.Popen denied by Darjeeling sandbox")
     if len(popen_args) > 1:
@@ -269,7 +355,7 @@ def _sandboxed_popen(*popen_args, **popen_kwargs):
     child_command = _normalize_subprocess_command(raw_command)
     child_cwd = _subprocess_cwd(popen_kwargs.get("cwd"))
     config_json = _child_config(child_command, child_cwd)
-    wrapped_command = [sys.executable, str(runner_path), "--config-env"]
+    wrapped_command = [sys.executable, "-I", str(runner_path), "--config-env"]
     wrapped_kwargs = dict(popen_kwargs)
     wrapped_kwargs.pop("shell", None)
     wrapped_kwargs.pop("executable", None)
@@ -278,14 +364,10 @@ def _sandboxed_popen(*popen_args, **popen_kwargs):
     wrapped_kwargs["env"] = _child_env(wrapped_kwargs.get("env"), config_json)
     if "cwd" in wrapped_kwargs:
         wrapped_kwargs["cwd"] = str(child_cwd)
-    _subprocess_guard = True
-    try:
-        if command_in_kwargs:
-            wrapped_kwargs["args"] = wrapped_command
-            return _original_popen(*remaining_args, **wrapped_kwargs)
-        return _original_popen(wrapped_command, *remaining_args, **wrapped_kwargs)
-    finally:
-        _subprocess_guard = False
+    if command_in_kwargs:
+        wrapped_kwargs["args"] = wrapped_command
+        return _original_popen(*remaining_args, **wrapped_kwargs)
+    return _original_popen(wrapped_command, *remaining_args, **wrapped_kwargs)
 
 
 subprocess.Popen = _sandboxed_popen
@@ -373,4 +455,4 @@ def build_python_sandbox_command(
         "allow_dependency_install": allow_dependency_install,
     }
     config_path.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
-    return [sys.executable, str(runner_path), str(config_path)]
+    return [sys.executable, "-I", str(runner_path), str(config_path)]
