@@ -73,6 +73,17 @@ def _remove_tree_with_write_permissions(path: Path) -> None:
     shutil.rmtree(path)
 
 
+@pytest.mark.parametrize(
+    "target_name",
+    ["", ".", "..", "../outside", "nested/target", "nested\\target"],
+)
+def test_load_target_workspace_rejects_target_name_path_segments(
+    tmp_path: Path, target_name: str
+) -> None:
+    with pytest.raises(WorkspaceError, match="single safe path segment"):
+        load_target_workspace(target_name, "contract-hash", WorkspaceStore(tmp_path / "workspaces"))
+
+
 def _train_export_digest(
     snapshot_id: str,
     snapshot_digest: str,

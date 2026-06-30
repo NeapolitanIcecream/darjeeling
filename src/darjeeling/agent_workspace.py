@@ -93,6 +93,17 @@ _UNSUPPORTED_AGENT_EXECUTION_MESSAGE = (
 )
 
 
+def validate_workspace_target_name(target_name: str) -> None:
+    if (
+        not target_name
+        or target_name in {".", ".."}
+        or "/" in target_name
+        or "\\" in target_name
+        or Path(target_name).name != target_name
+    ):
+        raise WorkspaceError("target name must be a single safe path segment")
+
+
 def _ensure_workspace_layout(path: Path, *, include_submissions: bool = True) -> None:
     writable_dirs = _ATTEMPT_DIRS if include_submissions else _BASELINE_DIRS
     for name in writable_dirs:
@@ -336,6 +347,7 @@ def _expected_train_export_digest(train_view: TrainViewManifest) -> str:
 def load_target_workspace(
     target_name: str, contract_hash: str, workspace_store: WorkspaceStore
 ) -> TargetWorkspace:
+    validate_workspace_target_name(target_name)
     workspace_path = workspace_store.root / target_name / "main"
     workspace_path.mkdir(parents=True, exist_ok=True)
     _ensure_workspace_layout(workspace_path, include_submissions=False)

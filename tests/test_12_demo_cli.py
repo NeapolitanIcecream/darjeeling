@@ -264,6 +264,45 @@ def test_compile_run_rejects_agent_workspace_inside_target_before_reference_setu
     assert not run_root.exists()
 
 
+def test_compile_run_rejects_path_component_target_name_before_reference_setup(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    target_path = tmp_path / "source-target"
+    shutil.copytree(target_dir, target_path)
+    yaml = __import__("yaml")
+    target_yaml = target_path / "target.yaml"
+    target_data = yaml.safe_load(target_yaml.read_text(encoding="utf-8"))
+    target_data["name"] = "../../source-target/generated/workspaces"
+    target_yaml.write_text(yaml.safe_dump(target_data), encoding="utf-8")
+
+    def fail_reference_setup(path):
+        raise AssertionError("reference config should not be loaded")
+
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config", fail_reference_setup
+    )
+
+    with pytest.raises(ValueError, match="single safe path segment"):
+        _run_compile_command(
+            target_path=target_path,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+    assert not (target_path / "generated").exists()
+
+
 def test_reference_budget_blocks_zero_cost_before_provider_call() -> None:
     class CountingBroker:
         reference_version = "counting"

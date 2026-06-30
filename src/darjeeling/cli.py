@@ -14,6 +14,7 @@ from darjeeling.agent_workspace import (
     launch_target_adaptation_agent_async,
     load_target_workspace,
     mount_readonly_inputs,
+    validate_workspace_target_name,
     write_agent_brief,
 )
 from darjeeling.artifact_worker import build_protocol_docs
@@ -24,6 +25,7 @@ from darjeeling.candidate_evaluation import (
 )
 from darjeeling.compile_orchestration import run_interactive_compile_loop
 from darjeeling.demos.thin_target import format_thin_target_report, run_thin_target_demo
+from darjeeling.errors import WorkspaceError
 from darjeeling.model import (
     AgentAttemptOptions,
     AgentSearchGuidance,
@@ -231,6 +233,13 @@ def _run_compile_command(
     _ensure_agent_command_supported(command)
     definition, contract, target_check = load_checked_target(
         target_path, require_reference=True
+    )
+    try:
+        validate_workspace_target_name(definition.name)
+    except WorkspaceError as exc:
+        raise ValueError(f"{exc}. No reference calls were made.") from exc
+    _ensure_agent_workspace_outside_target(
+        target_path, workspace_store_root / definition.name / "main"
     )
     broker = _BudgetedReferenceBroker(
         build_reference_broker_from_config(reference_config), max_cost
