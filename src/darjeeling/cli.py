@@ -38,6 +38,7 @@ from darjeeling.model import (
     ReferenceContext,
     ReferenceQualificationOptions,
     ReferenceResponse,
+    ReferenceUsageLedger,
     ReleaseBaseline,
     ReleaseRegistry,
     RoutingSettings,
@@ -256,6 +257,7 @@ def _run_compile_command(
         utcnow(),
         snapshot_options,
     )
+    compile_reference_usage = _compile_reference_usage(broker, snapshot_result)
     workspace_store = WorkspaceStore(
         workspace_root.resolve() if workspace_root else run_root / "workspaces"
     )
@@ -349,7 +351,7 @@ def _run_compile_command(
         snapshot_result.snapshot,
         cold_release,
         snapshot_result.reference_qualification,
-        snapshot_result.reference_usage,
+        compile_reference_usage,
         {"serving_l4_cost": _estimated_baseline_serving_cost(snapshot_result)},
         {"artifact_store": run_root / "artifacts"},
         poll_interval_seconds=0.05,
@@ -369,7 +371,7 @@ def _run_compile_command(
         cold_release,
         snapshot_result.reference_qualification,
         loop_result.get("agent_usage_ledger", AgentUsageLedger()),
-        snapshot_result.reference_usage,
+        compile_reference_usage,
         None,
         None,
         {"serving_l4_cost": _estimated_baseline_serving_cost(snapshot_result)},
@@ -475,6 +477,18 @@ def _estimated_baseline_serving_cost(snapshot_result) -> float:
         1,
     )
     return total / calls
+
+
+def _compile_reference_usage(broker: Any, snapshot_result: Any) -> ReferenceUsageLedger:
+    usage = snapshot_result.reference_usage
+    return ReferenceUsageLedger(
+        call_count=max(
+            int(getattr(broker, "call_count", 0)),
+            int(getattr(usage, "call_count", 0)),
+        ),
+        cost=max(float(getattr(broker, "cost", 0.0)), float(getattr(usage, "cost", 0.0))),
+        errors=dict(getattr(usage, "errors", {}) or {}),
+    )
 
 
 def _ensure_agent_execution_supported() -> None:

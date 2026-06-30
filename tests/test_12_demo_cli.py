@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from typer.main import get_command
 from typer.testing import CliRunner
 
-from darjeeling.cli import _BudgetedReferenceBroker, _run_compile_command, app
-from darjeeling.model import ReferenceContext, ReferenceResponse
+from darjeeling.cli import (
+    _BudgetedReferenceBroker,
+    _compile_reference_usage,
+    _run_compile_command,
+    app,
+)
+from darjeeling.model import ReferenceContext, ReferenceResponse, ReferenceUsageLedger
 
 
 def test_thin_target_demo_reports_local_accept_and_fallback() -> None:
@@ -87,3 +93,20 @@ def test_reference_budget_blocks_zero_cost_before_provider_call() -> None:
         budgeted.call({}, ReferenceContext(purpose="runtime_l4_fallback"))
 
     assert broker.call_count == 0
+
+
+def test_compile_reference_usage_counts_prior_provider_spend() -> None:
+    broker = SimpleNamespace(call_count=7, cost=9.0)
+    snapshot_result = SimpleNamespace(
+        reference_usage=ReferenceUsageLedger(
+            call_count=2,
+            cost=1.25,
+            errors={"validation_failure": 1},
+        )
+    )
+
+    usage = _compile_reference_usage(broker, snapshot_result)
+
+    assert usage.call_count == 7
+    assert usage.cost == 9.0
+    assert usage.errors == {"validation_failure": 1}
