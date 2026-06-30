@@ -75,6 +75,32 @@ def test_compile_run_checks_sandbox_before_reference_setup(tmp_path, monkeypatch
         )
 
 
+def test_compile_run_checks_agent_command_before_reference_setup(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/sandbox-exec" if name == "sandbox-exec" else None
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+
+    with pytest.raises(ValueError, match="agent command executable was not found"):
+        _run_compile_command(
+            target_path=target_dir,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["missing-darjeeling-agent", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
 def test_compile_run_requires_target_reference_before_provider_setup(
     target_dir, tmp_path, monkeypatch
 ) -> None:

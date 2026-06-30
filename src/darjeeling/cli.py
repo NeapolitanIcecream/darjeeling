@@ -223,6 +223,7 @@ def _run_compile_command(
     if max_cost == 0:
         raise ValueError("--max-cost 0 leaves no budget for the required reference probe")
     _ensure_agent_execution_supported()
+    _ensure_agent_command_supported(command)
     definition, contract, target_check = load_checked_target(
         target_path, require_reference=True
     )
@@ -497,6 +498,14 @@ def _ensure_agent_execution_supported() -> None:
     if shutil.which("sandbox-exec") is None:
         raise ValueError(
             "agent execution requires macOS sandbox-exec; sandbox-exec was not found. "
+            "No reference calls were made."
+        )
+
+
+def _ensure_agent_command_supported(command: list[str]) -> None:
+    if shutil.which(command[0]) is None:
+        raise ValueError(
+            f"agent command executable was not found: {command[0]}. "
             "No reference calls were made."
         )
 
