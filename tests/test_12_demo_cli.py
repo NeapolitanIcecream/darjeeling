@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
 from typer.testing import CliRunner
 
-from darjeeling.cli import app
+from darjeeling.cli import _BudgetedReferenceBroker, app
+from darjeeling.model import ReferenceContext, ReferenceResponse
 
 
 def test_thin_target_demo_reports_local_accept_and_fallback() -> None:
@@ -26,8 +30,8 @@ def test_thin_target_demo_reports_local_accept_and_fallback() -> None:
 def test_compile_cli_help_is_discoverable() -> None:
     runner = CliRunner()
 
-    compile_help = runner.invoke(app, ["compile", "--help"])
-    run_help = runner.invoke(app, ["compile", "run", "--help"])
+    compile_help = runner.invoke(app, ["compile", "--help"], env={"COLUMNS": "200"})
+    run_help = runner.invoke(app, ["compile", "run", "--help"], env={"COLUMNS": "200"})
 
     assert compile_help.exit_code == 0, compile_help.output
     assert run_help.exit_code == 0, run_help.output
@@ -35,3 +39,25 @@ def test_compile_cli_help_is_discoverable() -> None:
     assert "--reference-config" in run_help.output
     assert "--agent-command" in run_help.output
     assert "--l4-deadline-ms" in run_help.output
+
+
+def test_reference_budget_blocks_zero_cost_before_provider_call() -> None:
+    class CountingBroker:
+        reference_version = "counting"
+
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def call(
+            self, request: dict[str, Any], context: ReferenceContext
+        ) -> ReferenceResponse:
+            self.call_count += 1
+            return ReferenceResponse(payload={"label": "a"}, cost=0.01)
+
+    broker = CountingBroker()
+    budgeted = _BudgetedReferenceBroker(broker, max_cost=0.0)
+
+    with pytest.raises(RuntimeError, match="before provider call"):
+        budgeted.call({}, ReferenceContext(purpose="runtime_l4_fallback"))
+
+    assert broker.call_count == 0

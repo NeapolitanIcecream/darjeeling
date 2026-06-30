@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -32,8 +32,11 @@ from darjeeling.model import (
     CompileBudget,
     CompileOptions,
     L4BaselineSummary,
+    ReferenceBroker,
     ReferenceBudget,
+    ReferenceContext,
     ReferenceQualificationOptions,
+    ReferenceResponse,
     ReleaseBaseline,
     ReleaseRegistry,
     RoutingSettings,
@@ -215,8 +218,12 @@ def _run_compile_command(
         raise ValueError("--l4-deadline-ms must be positive")
     if max_cost is not None and max_cost < 0:
         raise ValueError("--max-cost must be non-negative")
+    if max_cost == 0:
+        raise ValueError("--max-cost 0 leaves no budget for the required reference probe")
     definition, contract, target_check = load_checked_target(target_path)
-    broker = build_reference_broker_from_config(reference_config)
+    broker = _BudgetedReferenceBroker(
+        build_reference_broker_from_config(reference_config), max_cost
+    )
     registry = ReleaseRegistry()
     routing = RoutingSettings(
         cache_enabled=False,
@@ -405,6 +412,8 @@ def _run_compile_command(
         "reference_timeout_ms": getattr(broker, "config", None).timeout_ms
         if hasattr(broker, "config")
         else None,
+        "reference_call_count": broker.call_count,
+        "reference_cost": broker.cost,
         "created_at": utcnow(),
     }
     summary = {
@@ -420,6 +429,8 @@ def _run_compile_command(
         "decision_blockers": list(decision.release_blockers),
         "effective_l4_deadline_ms": l4_deadline_ms,
         "reference_timeout_ms": manifest["reference_timeout_ms"],
+        "reference_call_count": broker.call_count,
+        "reference_cost": broker.cost,
         "cost": asdict(final_report.cost),
     }
     write_json(run_root / "manifest.json", manifest)
@@ -462,3 +473,23 @@ def _estimated_baseline_serving_cost(snapshot_result) -> float:
         1,
     )
     return total / calls
+
+
+class _BudgetedReferenceBroker:
+    def __init__(self, broker: ReferenceBroker, max_cost: float | None):
+        self._broker = broker
+        self.max_cost = max_cost
+        self.reference_version = broker.reference_version
+        self.config = getattr(broker, "config", None)
+        self.cost = 0.0
+        self.call_count = 0
+
+    def call(self, request: dict[str, Any], context: ReferenceContext) -> ReferenceResponse:
+        if self.max_cost is not None and self.cost >= self.max_cost:
+            raise RuntimeError("reference cost budget exhausted before provider call")
+        response = self._broker.call(request, context)
+        self.call_count += 1
+        self.cost += max(float(response.cost), 0.0)
+        if self.max_cost is not None and self.cost > self.max_cost:
+            raise RuntimeError("reference cost budget exhausted after provider call")
+        return response

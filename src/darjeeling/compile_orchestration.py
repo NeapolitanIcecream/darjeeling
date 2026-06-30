@@ -27,7 +27,10 @@ from darjeeling.agent_workspace import (
     write_agent_brief,
 )
 from darjeeling.artifact_worker import build_protocol_docs
-from darjeeling.candidate_evaluation import evaluate_candidate_on_validation
+from darjeeling.candidate_evaluation import (
+    check_candidate_requirements,
+    evaluate_candidate_on_validation,
+)
 from darjeeling.errors import CompileLaunchError, SnapshotBuildError
 from darjeeling.model import (
     AgentAttempt,
@@ -45,9 +48,11 @@ from darjeeling.model import (
     CompileRunStore,
     ConsumedRowsManifest,
     DataConfig,
+    MetricSummary,
     RecompileRequest,
     ReferenceBroker,
     Release,
+    RequirementCheckResult,
     SchedulerPolicy,
     TargetCheckReport,
     TargetDefinition,
@@ -403,6 +408,7 @@ def _selected_successful_ledger_entry(ledger: list[dict[str, Any]]) -> dict[str,
         (index, entry)
         for index, entry in enumerate(ledger)
         if entry.get("validation_status") == "feedback_written"
+        and entry.get("validation_gate_status") == "pass"
         and isinstance(entry.get("candidate_id"), str)
     ]
     if not successful:
@@ -416,6 +422,40 @@ def _selected_successful_ledger_entry(ledger: list[dict[str, Any]]) -> dict[str,
         return (-1.0, index)
 
     return max(successful, key=sort_key)[1]
+
+
+def _validation_requirement_results(
+    report: Any, requirements: Any | None
+) -> list[RequirementCheckResult]:
+    if report is None:
+        return []
+    if requirements is None:
+        return [
+            RequirementCheckResult(
+                "default_quality",
+                "pass"
+                if report.metrics["local"].get("wrong_accept_count") == 0
+                and report.metrics["local"].get("accepted_count", 0) > 0
+                else "fail",
+                {},
+            )
+        ]
+    return check_candidate_requirements(
+        MetricSummary(**report.metrics["local"]),
+        report.generalization,
+        report.latency,
+        requirements,
+    )
+
+
+def _validation_gate_status(
+    requirement_results: list[RequirementCheckResult],
+) -> str:
+    if any(result.status == "fail" for result in requirement_results):
+        return "fail"
+    if any(result.status == "insufficient" for result in requirement_results):
+        return "insufficient"
+    return "pass"
 
 
 def _last_evaluated_ledger_entry(ledger: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1058,6 +1098,10 @@ def run_interactive_compile_loop(
                 write_json_atomic(candidate_path, asdict(candidate))
                 if report is not None and report_path is not None:
                     write_json_atomic(report_path, asdict(report))
+                requirement_results = _validation_requirement_results(
+                    report, definition.requirements
+                )
+                validation_gate_status = _validation_gate_status(requirement_results)
                 successful_evaluations[submission.submission_id] = evaluation
                 ledger.append(
                     {
@@ -1074,6 +1118,10 @@ def run_interactive_compile_loop(
                             if report is not None
                             else None
                         ),
+                        "validation_gate_status": validation_gate_status,
+                        "validation_requirement_results": [
+                            asdict(result) for result in requirement_results
+                        ],
                         "feedback_path": str(feedback_record.path),
                         "total_compile_cost": candidate_cost,
                         "timestamp": utcnow(),

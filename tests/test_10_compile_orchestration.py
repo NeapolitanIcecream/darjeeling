@@ -24,6 +24,7 @@ from darjeeling.agent_workspace import (
 )
 from darjeeling.artifact_worker import build_protocol_docs
 from darjeeling.compile_orchestration import (
+    _selected_successful_ledger_entry,
     _submission_content_digest,
     plan_compile_launch,
     run_interactive_compile_loop,
@@ -411,6 +412,45 @@ def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     ledger = json.loads(ledger_path.read_text())
     assert [entry["submission_id"] for entry in ledger] == ["c1", "c2"]
     assert {entry["validation_status"] for entry in ledger} == {"feedback_written"}
+    assert {entry["validation_gate_status"] for entry in ledger} == {"pass"}
+
+
+def test_interactive_handoff_selects_only_validation_passing_candidates() -> None:
+    ledger = [
+        {
+            "submission_id": "passing-low-coverage",
+            "validation_status": "feedback_written",
+            "validation_gate_status": "pass",
+            "candidate_id": "candidate-pass-low",
+            "validation_coverage": 0.5,
+        },
+        {
+            "submission_id": "failing-high-coverage",
+            "validation_status": "feedback_written",
+            "validation_gate_status": "fail",
+            "candidate_id": "candidate-fail-high",
+            "validation_coverage": 1.0,
+        },
+        {
+            "submission_id": "insufficient-higher-coverage",
+            "validation_status": "feedback_written",
+            "validation_gate_status": "insufficient",
+            "candidate_id": "candidate-insufficient",
+            "validation_coverage": 0.9,
+        },
+        {
+            "submission_id": "passing-higher-coverage",
+            "validation_status": "feedback_written",
+            "validation_gate_status": "pass",
+            "candidate_id": "candidate-pass-high",
+            "validation_coverage": 0.7,
+        },
+    ]
+
+    selected = _selected_successful_ledger_entry(ledger)
+
+    assert selected is not None
+    assert selected["submission_id"] == "passing-higher-coverage"
 
 
 def test_interactive_compile_loop_ignores_agent_written_submission_ledger(
