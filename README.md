@@ -158,7 +158,9 @@ estimated paid spend. When the provider response has token usage but no cost
 header, the matching `price` fields are required so live calls cannot be
 reported as zero-cost. Target-adaptation agent execution currently requires
 macOS `sandbox-exec`; unsupported platforms fail clearly instead of using a
-custom Python sandbox as a security boundary.
+custom Python sandbox as a security boundary. Keep `--run-root` or
+`--workspace-root` outside `--target-path` so the agent sandbox can deny access
+to the source target tree and force the agent through the readonly exports.
 
 When `base_url_env` is `OPENAI_BASE_URL`, Darjeeling uses
 `https://api.openai.com/v1` if that environment variable is unset. Set

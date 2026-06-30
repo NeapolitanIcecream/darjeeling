@@ -228,6 +228,42 @@ def test_compile_run_protects_source_target_path_before_agent_launch(
     assert captured_runtime["protected_paths"] == [str(target_dir.resolve())]
 
 
+@pytest.mark.parametrize(
+    ("run_root_name", "workspace_root_name"),
+    [
+        ("source-target/runs/compile", None),
+        ("run", "source-target/workspaces"),
+    ],
+)
+def test_compile_run_rejects_agent_workspace_inside_target_before_reference_setup(
+    target_dir, tmp_path, monkeypatch, run_root_name, workspace_root_name
+) -> None:
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    target_path = tmp_path / "source-target"
+    shutil.copytree(target_dir, target_path)
+    run_root = tmp_path / run_root_name
+    workspace_root = tmp_path / workspace_root_name if workspace_root_name else None
+
+    with pytest.raises(ValueError, match="workspace root must not be inside"):
+        _run_compile_command(
+            target_path=target_path,
+            run_root=run_root,
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=workspace_root,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+    assert not run_root.exists()
+
+
 def test_reference_budget_blocks_zero_cost_before_provider_call() -> None:
     class CountingBroker:
         reference_version = "counting"

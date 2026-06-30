@@ -208,6 +208,11 @@ def _run_compile_command(
     allow_insufficient_reference: bool,
 ) -> dict[str, object]:
     run_root = run_root.resolve()
+    target_path = target_path.resolve()
+    workspace_store_root = (
+        workspace_root.resolve() if workspace_root else run_root / "workspaces"
+    )
+    _ensure_agent_workspace_outside_target(target_path, workspace_store_root)
     run_root.mkdir(parents=True, exist_ok=True)
     (run_root / "reports").mkdir(parents=True, exist_ok=True)
     layers = _parse_enabled_layers(enabled_layers)
@@ -261,9 +266,7 @@ def _run_compile_command(
         snapshot_options,
     )
     compile_reference_usage = _compile_reference_usage(broker, snapshot_result)
-    workspace_store = WorkspaceStore(
-        workspace_root.resolve() if workspace_root else run_root / "workspaces"
-    )
+    workspace_store = WorkspaceStore(workspace_store_root)
     compile_options = CompileOptions(
         objective={
             "optimize": "coverage",
@@ -507,6 +510,25 @@ def _ensure_agent_command_supported(command: list[str]) -> None:
     if shutil.which(command[0]) is None:
         raise ValueError(
             f"agent command executable was not found: {command[0]}. "
+            "No reference calls were made."
+        )
+
+
+def _path_contains(parent: Path, child: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _ensure_agent_workspace_outside_target(
+    target_path: Path, workspace_root: Path
+) -> None:
+    if _path_contains(target_path, workspace_root):
+        raise ValueError(
+            "agent workspace root must not be inside --target-path; choose "
+            "--workspace-root outside the target or move --run-root outside the target. "
             "No reference calls were made."
         )
 
