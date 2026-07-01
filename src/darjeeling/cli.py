@@ -244,7 +244,9 @@ def _run_compile_command(
     )
     _ensure_agent_command_outside_protected_paths(
         command,
-        _compile_agent_protected_paths(target_path, workspace_store_root, definition.name),
+        _compile_agent_protected_paths(
+            target_path, run_root, workspace_store_root, definition.name
+        ),
     )
     broker = _BudgetedReferenceBroker(
         build_reference_broker_from_config(reference_config), max_cost
@@ -569,6 +571,7 @@ def _resolve_agent_command(command: list[str]) -> list[str]:
     resolved = [str(Path(executable).expanduser().resolve()), *command[1:]]
     command_offset = _env_command_operand_index(resolved) or 0
     if command_offset:
+        resolved = _resolve_env_assignment_path_values(resolved, command_offset)
         inner_executable = shutil.which(resolved[command_offset])
         if inner_executable is None:
             raise ValueError(
@@ -665,6 +668,20 @@ def _env_assignment_paths(command: list[str], command_offset: int) -> list[Path]
     return paths
 
 
+def _resolve_env_assignment_path_values(command: list[str], command_offset: int) -> list[str]:
+    resolved = list(command)
+    for index in range(1, command_offset):
+        name, _, value = resolved[index].partition("=")
+        if name not in _PATH_ENV_NAMES or value == "":
+            continue
+        parts = [
+            str(Path(part).expanduser().resolve()) if part else str(Path().resolve())
+            for part in value.split(os.pathsep)
+        ]
+        resolved[index] = f"{name}={os.pathsep.join(parts)}"
+    return resolved
+
+
 def _interpreter_script_operand_index(command: list[str]) -> int | None:
     if len(command) < 2:
         return None
@@ -714,13 +731,13 @@ def _simple_script_operand_index(args: list[str]) -> int | None:
 
 
 def _compile_agent_protected_paths(
-    target_path: Path, workspace_store_root: Path, target_name: str
+    target_path: Path, run_root: Path, workspace_store_root: Path, target_name: str
 ) -> list[Path]:
     repo_root = Path(__file__).resolve().parents[2]
     predicted_attempt_path = (
         workspace_store_root / target_name / "attempts" / "_compile" / "_attempt"
     )
-    protected = [target_path.resolve()]
+    protected = [target_path.resolve(), (run_root / "snapshots").resolve()]
     if _path_contains(repo_root, predicted_attempt_path):
         protected.extend(_protect_siblings_from(repo_root, predicted_attempt_path))
     else:

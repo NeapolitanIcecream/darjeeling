@@ -152,7 +152,40 @@ def test_compile_run_resolves_env_wrapped_interpreter_script_before_launch(
 
     assert command == [
         str(env.resolve()),
-        "PYTHONPATH=/tmp/lib",
+        f"PYTHONPATH={Path('/tmp/lib').resolve()}",
+        str(interpreter.resolve()),
+        str(script.resolve()),
+    ]
+
+
+def test_compile_run_resolves_env_relative_paths_before_launch(
+    tmp_path, monkeypatch
+) -> None:
+    script = tmp_path / "agent.py"
+    lib = tmp_path / "lib"
+    script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    lib.mkdir()
+    env = tmp_path / "bin" / "env"
+    interpreter = tmp_path / "bin" / "python3"
+    env.parent.mkdir()
+    env.write_text("#!/bin/sh\nexec \"$@\"\n", encoding="utf-8")
+    interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    def fake_which(name: str) -> str | None:
+        if name == "env":
+            return str(env)
+        if name == "python3":
+            return str(interpreter)
+        return None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+
+    command = _resolve_agent_command(["env", "PYTHONPATH=./lib", "python3", "./agent.py"])
+
+    assert command == [
+        str(env.resolve()),
+        f"PYTHONPATH={lib.resolve()}",
         str(interpreter.resolve()),
         str(script.resolve()),
     ]
@@ -302,16 +335,24 @@ def test_compile_run_rejects_protected_env_path_before_reference_setup(
         )
 
 
-@pytest.mark.parametrize("protected_source", ["target", "repo"])
+@pytest.mark.parametrize("protected_source", ["target", "repo", "run_snapshots"])
 def test_compile_run_rejects_protected_agent_command_before_reference_setup(
     target_dir, tmp_path, monkeypatch, protected_source
 ) -> None:
     target_path = tmp_path / "source-target"
+    run_root = tmp_path / "run"
     shutil.copytree(target_dir, target_path)
     target_command = target_path / "agent-helper"
     target_command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     repo_command = Path(__file__).resolve().parents[1] / "README.md"
-    command_path = target_command if protected_source == "target" else repo_command
+    snapshot_command = run_root / "snapshots" / "agent-helper"
+    snapshot_command.parent.mkdir(parents=True)
+    snapshot_command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    command_path = {
+        "target": target_command,
+        "repo": repo_command,
+        "run_snapshots": snapshot_command,
+    }[protected_source]
 
     def fake_which(name: str) -> str | None:
         if name == "sandbox-exec":
@@ -331,7 +372,7 @@ def test_compile_run_rejects_protected_agent_command_before_reference_setup(
     with pytest.raises(ValueError, match="protected target/Core paths"):
         _run_compile_command(
             target_path=target_path,
-            run_root=tmp_path / "run",
+            run_root=run_root,
             reference_config=tmp_path / "missing-reference.json",
             agent_command=json.dumps([str(command_path)]),
             workspace_root=None,
