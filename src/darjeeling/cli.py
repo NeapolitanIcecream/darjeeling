@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import asdict
 from pathlib import Path
@@ -595,6 +596,7 @@ def _ensure_agent_command_outside_protected_paths(
     command_offset = _env_command_operand_index(command) or 0
     if command_offset:
         command_paths.append(Path(command[command_offset]).expanduser().resolve())
+        command_paths.extend(_env_assignment_paths(command, command_offset))
     script_path = _interpreter_script_path(command)
     if script_path is not None:
         command_paths.append(script_path)
@@ -602,8 +604,8 @@ def _ensure_agent_command_outside_protected_paths(
         for command_path in command_paths:
             if _path_contains(protected_path, command_path):
                 raise ValueError(
-                    "agent command executable or script must not be inside protected "
-                    "target/Core paths. No reference calls were made."
+                    "agent command executable, script, or env path must not be inside "
+                    "protected target/Core paths. No reference calls were made."
                 )
 
 
@@ -646,6 +648,21 @@ def _env_command_operand_index(command: list[str]) -> int | None:
 def _env_assignment(arg: str) -> bool:
     name, separator, _ = arg.partition("=")
     return bool(separator and name and not name.startswith("-"))
+
+
+_PATH_ENV_NAMES = {"PATH", "PYTHONHOME", "PYTHONPATH", "NODE_PATH", "RUBYLIB", "PERL5LIB"}
+
+
+def _env_assignment_paths(command: list[str], command_offset: int) -> list[Path]:
+    paths: list[Path] = []
+    for arg in command[1:command_offset]:
+        name, _, value = arg.partition("=")
+        if name not in _PATH_ENV_NAMES or value == "":
+            continue
+        for part in value.split(os.pathsep):
+            candidate = Path(part).expanduser() if part else Path()
+            paths.append(candidate.resolve())
+    return paths
 
 
 def _interpreter_script_operand_index(command: list[str]) -> int | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -255,6 +256,40 @@ def test_compile_run_rejects_env_wrapped_protected_agent_script_before_reference
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
             agent_command=json.dumps(["env", "python3", str(target_command)]),
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
+@pytest.mark.parametrize("env_name", ["PYTHONPATH", "NODE_PATH", "PATH"])
+def test_compile_run_rejects_protected_env_path_before_reference_setup(
+    target_dir, tmp_path, monkeypatch, env_name
+) -> None:
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    target_path = tmp_path / "source-target"
+    shutil.copytree(target_dir, target_path)
+
+    def fail_reference_setup(path):
+        raise AssertionError("reference config should not be loaded")
+
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config", fail_reference_setup
+    )
+    env_value = f"{tmp_path / 'safe'}{os.pathsep}{target_path}"
+
+    with pytest.raises(ValueError, match="env path must not be inside protected"):
+        _run_compile_command(
+            target_path=target_path,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command=json.dumps(["env", f"{env_name}={env_value}", "python3", "-c", "pass"]),
             workspace_root=None,
             max_candidates=1,
             max_agent_seconds=1,
