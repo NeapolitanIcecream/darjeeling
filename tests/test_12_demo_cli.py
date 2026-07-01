@@ -109,16 +109,20 @@ def test_compile_run_resolves_relative_interpreter_script_before_launch(
 ) -> None:
     script = tmp_path / "agent.py"
     script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    interpreter = tmp_path / "bin" / "python3"
+    interpreter.parent.mkdir()
+    interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    interpreter.chmod(0o755)
 
     def fake_which(name: str) -> str | None:
-        return "/usr/bin/python3" if name == "python3" else None
+        return str(interpreter) if name == "python3" else None
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
 
     command = _resolve_agent_command(["python3", "./agent.py", "--flag"])
 
-    assert command == ["/usr/bin/python3", str(script.resolve()), "--flag"]
+    assert command == [str(interpreter.resolve()), str(script.resolve()), "--flag"]
 
 
 @pytest.mark.parametrize("protected_source", ["target", "repo"])
