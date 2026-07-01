@@ -119,7 +119,7 @@ target-adaptation agent and hand the selected candidate to final test:
 uv run darjeeling compile run /path/to/target \
   --run-root runs/my-target-compile \
   --reference-config /path/to/reference_config.json \
-  --agent-command '["/usr/bin/python3", "-m", "my_agent"]' \
+  --agent-command '["/usr/bin/python3", "/path/to/my_agent.py"]' \
   --max-candidates 1 \
   --max-agent-seconds 300 \
   --max-cost 10 \

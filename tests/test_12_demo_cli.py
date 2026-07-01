@@ -17,8 +17,9 @@ from darjeeling.cli import (
     _run_compile_command,
     app,
 )
-from darjeeling.errors import TargetDefinitionError
+from darjeeling.errors import ReferenceBudgetExhausted, TargetDefinitionError
 from darjeeling.model import ReferenceContext, ReferenceResponse, ReferenceUsageLedger
+from darjeeling.snapshot_reference import call_reference
 
 
 def test_thin_target_demo_reports_local_accept_and_fallback() -> None:
@@ -123,6 +124,40 @@ def test_compile_run_resolves_relative_interpreter_script_before_launch(
     command = _resolve_agent_command(["python3", "./agent.py", "--flag"])
 
     assert command == [str(interpreter.resolve()), str(script.resolve()), "--flag"]
+
+
+def test_compile_run_rejects_python_module_agent_command_before_reference_setup(
+    tmp_path, monkeypatch
+) -> None:
+    def fake_which(name: str) -> str | None:
+        if name == "sandbox-exec":
+            return "/usr/bin/sandbox-exec"
+        if name == "python3":
+            return "/usr/bin/python3"
+        return None
+
+    def fail_target_load(*args, **kwargs):
+        raise AssertionError("target should not be loaded after python -m rejection")
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+    monkeypatch.setattr("darjeeling.cli.load_checked_target", fail_target_load)
+
+    with pytest.raises(ValueError, match="python -m agent commands are not supported"):
+        _run_compile_command(
+            target_path=tmp_path / "missing-target",
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["python3", "-m", "my_agent"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
 
 
 @pytest.mark.parametrize("protected_source", ["target", "repo"])
@@ -585,6 +620,85 @@ def test_compile_run_rejects_cold_start_reference_budget_before_snapshot(
         )
 
 
+def test_compile_run_reports_snapshot_reference_budget_before_agent_launch(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    definition = SimpleNamespace(
+        name="thin",
+        contract_hash="contract-hash",
+        data_config=SimpleNamespace(),
+        requirements={},
+    )
+
+    class Contract:
+        contract_hash = "contract-hash"
+
+        def build_reference_request(
+            self, input_value: dict[str, Any], context: ReferenceContext
+        ) -> dict[str, Any]:
+            return {"input": dict(input_value)}
+
+        def normalize_input(self, input_value: dict[str, Any]) -> dict[str, Any]:
+            return dict(input_value)
+
+        def parse_reference_response(
+            self, response: ReferenceResponse
+        ) -> dict[str, Any]:
+            return dict(response.payload)
+
+        def validate_output(self, value: dict[str, Any]) -> dict[str, Any]:
+            return dict(value)
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "darjeeling.cli.load_checked_target",
+        lambda target_path, require_reference=False: (
+            definition,
+            Contract(),
+            SimpleNamespace(),
+        ),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config",
+        lambda path: SimpleNamespace(reference_version="reference"),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.create_release_without_artifacts",
+        lambda *args, **kwargs: SimpleNamespace(release_id="cold"),
+    )
+
+    def exhaust_snapshot_budget(*args, **kwargs):
+        contract = args[1]
+        broker = args[5]
+        broker.cost = 1.0
+        result = call_reference(
+            contract,
+            {"text": "a:sample"},
+            broker,
+            ReferenceContext(purpose="snapshot_label", request_id="r1"),
+        )
+        raise RuntimeError(f"unexpected reference result: {result.status}")
+
+    monkeypatch.setattr("darjeeling.cli.build_snapshot", exhaust_snapshot_budget)
+
+    with pytest.raises(RuntimeError, match="agent was not started"):
+        _run_compile_command(
+            target_path=target_dir,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=2,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
 @pytest.mark.parametrize(
     ("run_root_name", "workspace_root_name"),
     [
@@ -676,7 +790,7 @@ def test_reference_budget_blocks_zero_cost_before_provider_call() -> None:
     broker = CountingBroker()
     budgeted = _BudgetedReferenceBroker(broker, max_cost=0.0)
 
-    with pytest.raises(RuntimeError, match="before provider call"):
+    with pytest.raises(ReferenceBudgetExhausted, match="before provider call"):
         budgeted.call({}, ReferenceContext(purpose="runtime_l4_fallback"))
 
     assert broker.call_count == 0

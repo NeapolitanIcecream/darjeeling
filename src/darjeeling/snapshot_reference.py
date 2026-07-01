@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from darjeeling.errors import SnapshotBuildError, ValidationError
+from darjeeling.errors import ReferenceBudgetExhausted, SnapshotBuildError, ValidationError
 from darjeeling.model import (
     AgentViewOptions,
     ConsumedRowsManifest,
@@ -283,6 +283,8 @@ def call_reference(
             latency_ms=response.latency_ms,
             finish_status=response.finish_status,
         )
+    except ReferenceBudgetExhausted:
+        raise
     except ValidationError as exc:
         return ReferenceCallResult(
             status="error",

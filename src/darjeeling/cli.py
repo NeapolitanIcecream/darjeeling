@@ -25,7 +25,7 @@ from darjeeling.candidate_evaluation import (
 )
 from darjeeling.compile_orchestration import run_interactive_compile_loop
 from darjeeling.demos.thin_target import format_thin_target_report, run_thin_target_demo
-from darjeeling.errors import WorkspaceError
+from darjeeling.errors import ReferenceBudgetExhausted, WorkspaceError
 from darjeeling.model import (
     AgentAttemptOptions,
     AgentSearchGuidance,
@@ -269,16 +269,22 @@ def _run_compile_command(
         reference_budget=ReferenceBudget(max_cost=max_cost),
         storage_root=run_root / "snapshots",
     )
-    snapshot_result = build_snapshot(
-        definition,
-        contract,
-        definition.data_config,
-        None,
-        [],
-        broker,
-        utcnow(),
-        snapshot_options,
-    )
+    try:
+        snapshot_result = build_snapshot(
+            definition,
+            contract,
+            definition.data_config,
+            None,
+            [],
+            broker,
+            utcnow(),
+            snapshot_options,
+        )
+    except ReferenceBudgetExhausted as exc:
+        raise RuntimeError(
+            "compile reference cost exhausted --max-cost during snapshot; "
+            "agent was not started"
+        ) from exc
     compile_reference_usage = _compile_reference_usage(broker, snapshot_result)
     _ensure_reference_budget_available_for_agent_launch(
         compile_reference_usage.cost, max_cost
@@ -608,7 +614,12 @@ def _python_script_operand_index(args: list[str]) -> int | None:
     index = 0
     while index < len(args):
         arg = args[index]
-        if arg in {"-c", "-m", "-"}:
+        if arg == "-m":
+            raise ValueError(
+                "python -m agent commands are not supported by compile preflight; "
+                "pass a script path instead. No reference calls were made."
+            )
+        if arg in {"-c", "-"}:
             return None
         if arg == "--":
             index += 1
@@ -701,7 +712,9 @@ class _BudgetedReferenceBroker:
 
     def call(self, request: dict[str, Any], context: ReferenceContext) -> ReferenceResponse:
         if self.max_cost is not None and self.cost >= self.max_cost:
-            raise RuntimeError("reference cost budget exhausted before provider call")
+            raise ReferenceBudgetExhausted(
+                "reference cost budget exhausted before provider call"
+            )
         response = self._broker.call(request, context)
         self.call_count += 1
         self.cost += max(float(response.cost), 0.0)
