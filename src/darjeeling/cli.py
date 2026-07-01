@@ -559,7 +559,11 @@ def _resolve_agent_command(command: list[str]) -> list[str]:
             f"agent command executable was not found: {command[0]}. "
             "No reference calls were made."
         )
-    return [str(Path(executable).expanduser().resolve()), *command[1:]]
+    resolved = [str(Path(executable).expanduser().resolve()), *command[1:]]
+    script_index = _interpreter_script_operand_index(resolved)
+    if script_index is not None:
+        resolved[script_index] = str(Path(resolved[script_index]).expanduser().resolve())
+    return resolved
 
 
 def _ensure_agent_command_outside_protected_paths(
@@ -579,19 +583,28 @@ def _ensure_agent_command_outside_protected_paths(
 
 
 def _interpreter_script_path(command: list[str]) -> Path | None:
+    script_index = _interpreter_script_operand_index(command)
+    return (
+        Path(command[script_index]).expanduser().resolve()
+        if script_index is not None
+        else None
+    )
+
+
+def _interpreter_script_operand_index(command: list[str]) -> int | None:
     if len(command) < 2:
         return None
     interpreter = Path(command[0]).name.lower()
     if interpreter.startswith("python") or interpreter in {"pypy", "pypy3"}:
-        operand = _python_script_operand(command[1:])
+        operand_index = _python_script_operand_index(command[1:])
     elif interpreter in {"sh", "bash", "zsh", "node", "ruby", "perl"}:
-        operand = _simple_script_operand(command[1:])
+        operand_index = _simple_script_operand_index(command[1:])
     else:
         return None
-    return Path(operand).expanduser().resolve() if operand else None
+    return operand_index + 1 if operand_index is not None else None
 
 
-def _python_script_operand(args: list[str]) -> str | None:
+def _python_script_operand_index(args: list[str]) -> int | None:
     index = 0
     while index < len(args):
         arg = args[index]
@@ -599,9 +612,9 @@ def _python_script_operand(args: list[str]) -> str | None:
             return None
         if arg == "--":
             index += 1
-            return args[index] if index < len(args) else None
+            return index if index < len(args) else None
         if not arg.startswith("-"):
-            return arg
+            return index
         if arg in {"-W", "-X", "--check-hash-based-pycs"}:
             index += 2
         else:
@@ -609,15 +622,15 @@ def _python_script_operand(args: list[str]) -> str | None:
     return None
 
 
-def _simple_script_operand(args: list[str]) -> str | None:
-    for arg in args:
+def _simple_script_operand_index(args: list[str]) -> int | None:
+    for index, arg in enumerate(args):
         if arg in {"-c", "-e"}:
             return None
         if arg == "--":
             continue
         if arg.startswith("-"):
             continue
-        return arg
+        return index
     return None
 
 

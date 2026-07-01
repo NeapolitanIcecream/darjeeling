@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from darjeeling.cli import (
     _BudgetedReferenceBroker,
     _compile_reference_usage,
+    _resolve_agent_command,
     _run_compile_command,
     app,
 )
@@ -101,6 +102,23 @@ def test_compile_run_checks_agent_command_before_reference_setup(
             agent_dependency_install=False,
             allow_insufficient_reference=False,
         )
+
+
+def test_compile_run_resolves_relative_interpreter_script_before_launch(
+    tmp_path, monkeypatch
+) -> None:
+    script = tmp_path / "agent.py"
+    script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/python3" if name == "python3" else None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+
+    command = _resolve_agent_command(["python3", "./agent.py", "--flag"])
+
+    assert command == ["/usr/bin/python3", str(script.resolve()), "--flag"]
 
 
 @pytest.mark.parametrize("protected_source", ["target", "repo"])
