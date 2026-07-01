@@ -566,9 +566,21 @@ def _resolve_agent_command(command: list[str]) -> list[str]:
             "No reference calls were made."
         )
     resolved = [str(Path(executable).expanduser().resolve()), *command[1:]]
-    script_index = _interpreter_script_operand_index(resolved)
+    command_offset = _env_command_operand_index(resolved) or 0
+    if command_offset:
+        inner_executable = shutil.which(resolved[command_offset])
+        if inner_executable is None:
+            raise ValueError(
+                f"agent command executable was not found: {resolved[command_offset]}. "
+                "No reference calls were made."
+            )
+        resolved[command_offset] = str(Path(inner_executable).expanduser().resolve())
+    script_index = _interpreter_script_operand_index(resolved[command_offset:])
     if script_index is not None:
-        resolved[script_index] = str(Path(resolved[script_index]).expanduser().resolve())
+        absolute_script_index = command_offset + script_index
+        resolved[absolute_script_index] = str(
+            Path(resolved[absolute_script_index]).expanduser().resolve()
+        )
     return resolved
 
 
@@ -576,6 +588,9 @@ def _ensure_agent_command_outside_protected_paths(
     command: list[str], protected_paths: list[Path]
 ) -> None:
     command_paths = [Path(command[0]).expanduser().resolve()]
+    command_offset = _env_command_operand_index(command) or 0
+    if command_offset:
+        command_paths.append(Path(command[command_offset]).expanduser().resolve())
     script_path = _interpreter_script_path(command)
     if script_path is not None:
         command_paths.append(script_path)
@@ -589,12 +604,44 @@ def _ensure_agent_command_outside_protected_paths(
 
 
 def _interpreter_script_path(command: list[str]) -> Path | None:
-    script_index = _interpreter_script_operand_index(command)
+    command_offset = _env_command_operand_index(command) or 0
+    script_index = _interpreter_script_operand_index(command[command_offset:])
     return (
-        Path(command[script_index]).expanduser().resolve()
+        Path(command[command_offset + script_index]).expanduser().resolve()
         if script_index is not None
         else None
     )
+
+
+def _env_command_operand_index(command: list[str]) -> int | None:
+    if len(command) < 2 or Path(command[0]).name != "env":
+        return None
+    index = 1
+    while index < len(command):
+        arg = command[index]
+        if arg == "--":
+            index += 1
+            break
+        if _env_assignment(arg):
+            index += 1
+            continue
+        if arg.startswith("-"):
+            raise ValueError(
+                "env agent command options are not supported by compile preflight; "
+                "pass the command directly or use env VAR=value COMMAND. "
+                "No reference calls were made."
+            )
+        break
+    if index >= len(command):
+        raise ValueError(
+            "env agent command must include a command operand. No reference calls were made."
+        )
+    return index
+
+
+def _env_assignment(arg: str) -> bool:
+    name, separator, _ = arg.partition("=")
+    return bool(separator and name and not name.startswith("-"))
 
 
 def _interpreter_script_operand_index(command: list[str]) -> int | None:

@@ -126,6 +126,37 @@ def test_compile_run_resolves_relative_interpreter_script_before_launch(
     assert command == [str(interpreter.resolve()), str(script.resolve()), "--flag"]
 
 
+def test_compile_run_resolves_env_wrapped_interpreter_script_before_launch(
+    tmp_path, monkeypatch
+) -> None:
+    script = tmp_path / "agent.py"
+    script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    env = tmp_path / "bin" / "env"
+    interpreter = tmp_path / "bin" / "python3"
+    env.parent.mkdir()
+    env.write_text("#!/bin/sh\nexec \"$@\"\n", encoding="utf-8")
+    interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    def fake_which(name: str) -> str | None:
+        if name == "env":
+            return str(env)
+        if name == "python3":
+            return str(interpreter)
+        return None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+
+    command = _resolve_agent_command(["env", "PYTHONPATH=/tmp/lib", "python3", "./agent.py"])
+
+    assert command == [
+        str(env.resolve()),
+        "PYTHONPATH=/tmp/lib",
+        str(interpreter.resolve()),
+        str(script.resolve()),
+    ]
+
+
 def test_compile_run_rejects_python_module_agent_command_before_reference_setup(
     tmp_path, monkeypatch
 ) -> None:
@@ -148,6 +179,40 @@ def test_compile_run_rejects_python_module_agent_command_before_reference_setup(
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
             agent_command='["python3", "-m", "my_agent"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
+def test_compile_run_rejects_env_wrapped_protected_agent_script_before_reference_setup(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    target_path = tmp_path / "source-target"
+    shutil.copytree(target_dir, target_path)
+    target_command = target_path / "agent.py"
+    target_command.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+    def fail_reference_setup(path):
+        raise AssertionError("reference config should not be loaded")
+
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config", fail_reference_setup
+    )
+
+    with pytest.raises(ValueError, match="must not be inside protected"):
+        _run_compile_command(
+            target_path=target_path,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command=json.dumps(["env", "python3", str(target_command)]),
             workspace_root=None,
             max_candidates=1,
             max_agent_seconds=1,
