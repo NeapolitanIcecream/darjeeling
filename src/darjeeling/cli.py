@@ -578,9 +578,13 @@ def _resolve_agent_command(command: list[str]) -> list[str]:
     script_index = _interpreter_script_operand_index(resolved[command_offset:])
     if script_index is not None:
         absolute_script_index = command_offset + script_index
-        resolved[absolute_script_index] = str(
-            Path(resolved[absolute_script_index]).expanduser().resolve()
-        )
+        script_path = Path(resolved[absolute_script_index]).expanduser().resolve()
+        if not script_path.is_file():
+            raise ValueError(
+                f"agent command script was not found or is not a file: {script_path}. "
+                "No reference calls were made."
+            )
+        resolved[absolute_script_index] = str(script_path)
     return resolved
 
 

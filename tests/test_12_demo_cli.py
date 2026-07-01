@@ -191,6 +191,48 @@ def test_compile_run_rejects_python_module_agent_command_before_reference_setup(
         )
 
 
+def test_compile_run_rejects_missing_agent_script_before_reference_setup(
+    tmp_path, monkeypatch
+) -> None:
+    def fake_which(name: str) -> str | None:
+        if name == "sandbox-exec":
+            return "/usr/bin/sandbox-exec"
+        if name == "env":
+            return "/usr/bin/env"
+        if name == "python3":
+            return "/usr/bin/python3"
+        return None
+
+    def fail_target_load(*args, **kwargs):
+        raise AssertionError("target should not be loaded after missing script rejection")
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+    monkeypatch.setattr("darjeeling.cli.load_checked_target", fail_target_load)
+    missing_script = tmp_path / "missing_agent.py"
+    commands = [
+        ["python3", str(missing_script)],
+        ["env", "PYTHONPATH=/tmp/lib", "python3", str(missing_script)],
+    ]
+
+    for index, command in enumerate(commands):
+        with pytest.raises(ValueError, match="agent command script was not found"):
+            _run_compile_command(
+                target_path=tmp_path / "missing-target",
+                run_root=tmp_path / f"run-{index}",
+                reference_config=tmp_path / "missing-reference.json",
+                agent_command=json.dumps(command),
+                workspace_root=None,
+                max_candidates=1,
+                max_agent_seconds=1,
+                max_cost=1.0,
+                enabled_layers="L1",
+                l4_deadline_ms=1000,
+                agent_network=False,
+                agent_dependency_install=False,
+                allow_insufficient_reference=False,
+            )
+
+
 def test_compile_run_rejects_env_wrapped_protected_agent_script_before_reference_setup(
     target_dir, tmp_path, monkeypatch
 ) -> None:
