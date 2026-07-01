@@ -23,6 +23,17 @@ from darjeeling.model import ReferenceContext, ReferenceResponse, ReferenceUsage
 from darjeeling.snapshot_reference import call_reference
 
 
+def _write_agent_executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _agent_command_json(path: Path) -> str:
+    return json.dumps([str(_write_agent_executable(path).resolve())])
+
+
 def test_thin_target_demo_reports_local_accept_and_fallback() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["demo", "thin-target"])
@@ -67,7 +78,7 @@ def test_compile_run_checks_sandbox_before_reference_setup(tmp_path, monkeypatch
             target_path=tmp_path / "missing-target",
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
-            agent_command='["python3", "-c", "pass"]',
+            agent_command=json.dumps([str(tmp_path / "agent.sh")]),
             workspace_root=None,
             max_candidates=1,
             max_agent_seconds=1,
@@ -93,7 +104,7 @@ def test_compile_run_checks_agent_command_before_reference_setup(
             target_path=target_dir,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
-            agent_command='["missing-darjeeling-agent", "-c", "pass"]',
+            agent_command=json.dumps([str(tmp_path / "missing-darjeeling-agent")]),
             workspace_root=None,
             max_candidates=1,
             max_agent_seconds=1,
@@ -106,7 +117,7 @@ def test_compile_run_checks_agent_command_before_reference_setup(
         )
 
 
-def test_compile_run_resolves_relative_interpreter_script_before_launch(
+def test_compile_run_rejects_relative_interpreter_script_before_launch(
     tmp_path, monkeypatch
 ) -> None:
     script = tmp_path / "agent.py"
@@ -122,9 +133,39 @@ def test_compile_run_resolves_relative_interpreter_script_before_launch(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
 
-    command = _resolve_agent_command(["python3", "./agent.py", "--flag"])
+    with pytest.raises(ValueError, match="script must be an absolute path"):
+        _resolve_agent_command(["python3", "./agent.py", "--flag"])
 
-    assert command == [str(interpreter.resolve()), str(script.resolve()), "--flag"]
+
+def test_compile_run_rejects_relative_executable_before_reference_setup(
+    tmp_path, monkeypatch
+) -> None:
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/sandbox-exec" if name == "sandbox-exec" else None
+
+    def fail_target_load(*args, **kwargs):
+        raise AssertionError("target should not be loaded after command rejection")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+    monkeypatch.setattr("darjeeling.cli.load_checked_target", fail_target_load)
+
+    with pytest.raises(ValueError, match="executable must be an absolute path"):
+        _run_compile_command(
+            target_path=tmp_path / "missing-target",
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["./agent.sh"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
 
 
 def test_compile_run_resolves_env_wrapped_interpreter_script_before_launch(
@@ -148,17 +189,19 @@ def test_compile_run_resolves_env_wrapped_interpreter_script_before_launch(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
 
-    command = _resolve_agent_command(["env", "PYTHONPATH=/tmp/lib", "python3", "./agent.py"])
+    command = _resolve_agent_command(
+        ["env", "PYTHONPATH=/tmp/lib", "python3", str(script.resolve())]
+    )
 
     assert command == [
         str(env.resolve()),
-        f"PYTHONPATH={Path('/tmp/lib').resolve()}",
+        "PYTHONPATH=/tmp/lib",
         str(interpreter.resolve()),
         str(script.resolve()),
     ]
 
 
-def test_compile_run_resolves_env_relative_paths_before_launch(
+def test_compile_run_rejects_env_relative_paths_before_launch(
     tmp_path, monkeypatch
 ) -> None:
     script = tmp_path / "agent.py"
@@ -181,14 +224,78 @@ def test_compile_run_resolves_env_relative_paths_before_launch(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
 
-    command = _resolve_agent_command(["env", "PYTHONPATH=./lib", "python3", "./agent.py"])
+    with pytest.raises(ValueError, match="absolute path segments"):
+        _resolve_agent_command(
+            ["env", "PYTHONPATH=./lib", "python3", str(script.resolve())]
+        )
 
-    assert command == [
-        str(env.resolve()),
-        f"PYTHONPATH={lib.resolve()}",
-        str(interpreter.resolve()),
-        str(script.resolve()),
-    ]
+
+def test_compile_run_rejects_interpreter_command_string_before_reference_setup(
+    tmp_path, monkeypatch
+) -> None:
+    def fake_which(name: str) -> str | None:
+        if name == "sandbox-exec":
+            return "/usr/bin/sandbox-exec"
+        if name == "python3":
+            return "/usr/bin/python3"
+        return None
+
+    def fail_target_load(*args, **kwargs):
+        raise AssertionError("target should not be loaded after command rejection")
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+    monkeypatch.setattr("darjeeling.cli.load_checked_target", fail_target_load)
+
+    with pytest.raises(ValueError, match="command strings"):
+        _run_compile_command(
+            target_path=tmp_path / "missing-target",
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
+def test_compile_run_rejects_interpreter_without_script_before_reference_setup(
+    tmp_path, monkeypatch
+) -> None:
+    def fake_which(name: str) -> str | None:
+        if name == "sandbox-exec":
+            return "/usr/bin/sandbox-exec"
+        if name == "python3":
+            return "/usr/bin/python3"
+        return None
+
+    def fail_target_load(*args, **kwargs):
+        raise AssertionError("target should not be loaded after command rejection")
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+    monkeypatch.setattr("darjeeling.cli.load_checked_target", fail_target_load)
+
+    with pytest.raises(ValueError, match="absolute script path"):
+        _run_compile_command(
+            target_path=tmp_path / "missing-target",
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command='["python3"]',
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
 
 
 def test_compile_run_rejects_python_module_agent_command_before_reference_setup(
@@ -207,7 +314,7 @@ def test_compile_run_rejects_python_module_agent_command_before_reference_setup(
     monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
     monkeypatch.setattr("darjeeling.cli.load_checked_target", fail_target_load)
 
-    with pytest.raises(ValueError, match="python -m agent commands are not supported"):
+    with pytest.raises(ValueError, match="python -m, -c/-e command strings"):
         _run_compile_command(
             target_path=tmp_path / "missing-target",
             run_root=tmp_path / "run",
@@ -316,13 +423,14 @@ def test_compile_run_rejects_protected_env_path_before_reference_setup(
         "darjeeling.cli.build_reference_broker_from_config", fail_reference_setup
     )
     env_value = f"{tmp_path / 'safe'}{os.pathsep}{target_path}"
+    agent = _write_agent_executable(tmp_path / "agent.sh")
 
     with pytest.raises(ValueError, match="env path must not be inside protected"):
         _run_compile_command(
             target_path=target_path,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
-            agent_command=json.dumps(["env", f"{env_name}={env_value}", "python3", "-c", "pass"]),
+            agent_command=json.dumps(["env", f"{env_name}={env_value}", str(agent)]),
             workspace_root=None,
             max_candidates=1,
             max_agent_seconds=1,
@@ -335,7 +443,7 @@ def test_compile_run_rejects_protected_env_path_before_reference_setup(
         )
 
 
-@pytest.mark.parametrize("protected_source", ["target", "repo", "run_snapshots"])
+@pytest.mark.parametrize("protected_source", ["target", "run_snapshots"])
 def test_compile_run_rejects_protected_agent_command_before_reference_setup(
     target_dir, tmp_path, monkeypatch, protected_source
 ) -> None:
@@ -344,13 +452,13 @@ def test_compile_run_rejects_protected_agent_command_before_reference_setup(
     shutil.copytree(target_dir, target_path)
     target_command = target_path / "agent-helper"
     target_command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    repo_command = Path(__file__).resolve().parents[1] / "README.md"
+    target_command.chmod(0o755)
     snapshot_command = run_root / "snapshots" / "agent-helper"
     snapshot_command.parent.mkdir(parents=True)
     snapshot_command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    snapshot_command.chmod(0o755)
     command_path = {
         "target": target_command,
-        "repo": repo_command,
         "run_snapshots": snapshot_command,
     }[protected_source]
 
@@ -453,7 +561,7 @@ def test_compile_run_requires_target_reference_before_provider_setup(
             target_path=target_path,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
-            agent_command='["python3", "-c", "pass"]',
+            agent_command=_agent_command_json(tmp_path / "agent.sh"),
             workspace_root=None,
             max_candidates=1,
             max_agent_seconds=1,
@@ -490,9 +598,7 @@ def test_compile_run_protects_snapshots_reference_artifacts_and_resolves_agent_c
     )
     agent_dir = tmp_path.parent / f"{tmp_path.name}-agent-bin"
     agent_dir.mkdir()
-    relative_agent = agent_dir / "agent.sh"
-    relative_agent.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    relative_agent.chmod(0o755)
+    agent = _write_agent_executable(agent_dir / "agent.sh")
     reference_cache = tmp_path / "reference-artifacts" / "cache.jsonl"
     reference_ledger = tmp_path / "reference-artifacts" / "usage-ledger.json"
     reference_cache.parent.mkdir()
@@ -567,7 +673,7 @@ def test_compile_run_protects_snapshots_reference_artifacts_and_resolves_agent_c
             target_path=target_dir,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "reference.json",
-            agent_command='["./agent.sh"]',
+            agent_command=json.dumps([str(agent.resolve())]),
             workspace_root=tmp_path / "external-workspaces",
             max_candidates=1,
             max_agent_seconds=1,
@@ -579,7 +685,7 @@ def test_compile_run_protects_snapshots_reference_artifacts_and_resolves_agent_c
             allow_insufficient_reference=False,
         )
 
-    assert captured_runtime["command"] == [str(relative_agent.resolve())]
+    assert captured_runtime["command"] == [str(agent.resolve())]
     assert captured_runtime["protected_paths"] == [
         str(target_dir.resolve()),
         str((tmp_path / "run" / "snapshots").resolve()),
@@ -674,7 +780,7 @@ def test_compile_run_rejects_budget_exhausted_before_final_test(
             target_path=target_dir,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "reference.json",
-            agent_command='["python3", "-c", "pass"]',
+            agent_command=_agent_command_json(tmp_path / "agent.sh"),
             workspace_root=None,
             max_candidates=2,
             max_agent_seconds=1,
@@ -735,7 +841,7 @@ def test_compile_run_rejects_exhausted_reference_budget_before_agent_launch(
             target_path=target_dir,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "reference.json",
-            agent_command='["python3", "-c", "pass"]',
+            agent_command=_agent_command_json(tmp_path / "agent.sh"),
             workspace_root=None,
             max_candidates=2,
             max_agent_seconds=1,
@@ -790,7 +896,7 @@ def test_compile_run_rejects_cold_start_reference_budget_before_snapshot(
             target_path=target_dir,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "reference.json",
-            agent_command='["python3", "-c", "pass"]',
+            agent_command=_agent_command_json(tmp_path / "agent.sh"),
             workspace_root=None,
             max_candidates=2,
             max_agent_seconds=1,
@@ -869,7 +975,7 @@ def test_compile_run_reports_snapshot_reference_budget_before_agent_launch(
             target_path=target_dir,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "reference.json",
-            agent_command='["python3", "-c", "pass"]',
+            agent_command=_agent_command_json(tmp_path / "agent.sh"),
             workspace_root=None,
             max_candidates=2,
             max_agent_seconds=1,
@@ -903,7 +1009,7 @@ def test_compile_run_rejects_agent_workspace_inside_target_before_reference_setu
             target_path=target_path,
             run_root=run_root,
             reference_config=tmp_path / "missing-reference.json",
-            agent_command='["python3", "-c", "pass"]',
+            agent_command=_agent_command_json(tmp_path / "agent.sh"),
             workspace_root=workspace_root,
             max_candidates=1,
             max_agent_seconds=1,
@@ -942,7 +1048,7 @@ def test_compile_run_rejects_path_component_target_name_before_reference_setup(
             target_path=target_path,
             run_root=tmp_path / "run",
             reference_config=tmp_path / "missing-reference.json",
-            agent_command='["python3", "-c", "pass"]',
+            agent_command=_agent_command_json(tmp_path / "agent.sh"),
             workspace_root=None,
             max_candidates=1,
             max_agent_seconds=1,

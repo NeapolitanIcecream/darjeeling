@@ -111,7 +111,11 @@ def compile_run(
         str,
         typer.Option(
             "--agent-command",
-            help="JSON array command for the target-adaptation agent.",
+            help=(
+                "JSON array command: absolute executable, or common interpreter "
+                "with an absolute script path. Use an absolute wrapper script for "
+                "complex commands."
+            ),
         ),
     ],
     workspace_root: Annotated[
@@ -562,34 +566,133 @@ def _ensure_agent_execution_supported() -> None:
 
 
 def _resolve_agent_command(command: list[str]) -> list[str]:
-    executable = shutil.which(command[0])
-    if executable is None:
-        raise ValueError(
-            f"agent command executable was not found: {command[0]}. "
-            "No reference calls were made."
-        )
-    resolved = [str(Path(executable).expanduser().resolve()), *command[1:]]
+    resolved = list(command)
     command_offset = _env_command_operand_index(resolved) or 0
     if command_offset:
-        resolved = _resolve_env_assignment_path_values(resolved, command_offset)
-        inner_executable = shutil.which(resolved[command_offset])
-        if inner_executable is None:
+        env_executable = shutil.which(resolved[0])
+        if env_executable is None:
             raise ValueError(
-                f"agent command executable was not found: {resolved[command_offset]}. "
+                f"env executable was not found: {resolved[0]}. No reference calls were made."
+            )
+        resolved[0] = str(Path(env_executable).expanduser().resolve())
+        _ensure_env_assignment_path_values_absolute(resolved, command_offset)
+    resolved[command_offset:] = _resolve_simple_agent_command(resolved[command_offset:])
+    return resolved
+
+
+def _resolve_simple_agent_command(command: list[str]) -> list[str]:
+    executable = command[0]
+    if _is_common_interpreter(executable):
+        resolved = _resolve_command_executable(executable)
+        script_index = _interpreter_script_operand_index(command)
+        script_path = Path(command[script_index]).expanduser()
+        if not script_path.is_absolute():
+            raise ValueError(
+                "agent command interpreter script must be an absolute path; "
+                "write a wrapper script and pass its absolute path for complex commands. "
                 "No reference calls were made."
             )
-        resolved[command_offset] = str(Path(inner_executable).expanduser().resolve())
-    script_index = _interpreter_script_operand_index(resolved[command_offset:])
-    if script_index is not None:
-        absolute_script_index = command_offset + script_index
-        script_path = Path(resolved[absolute_script_index]).expanduser().resolve()
+        script_path = script_path.resolve()
         if not script_path.is_file():
             raise ValueError(
                 f"agent command script was not found or is not a file: {script_path}. "
                 "No reference calls were made."
             )
-        resolved[absolute_script_index] = str(script_path)
-    return resolved
+        return [
+            resolved,
+            *command[1:script_index],
+            str(script_path),
+            *command[script_index + 1 :],
+        ]
+
+    executable_path = Path(executable).expanduser()
+    if not executable_path.is_absolute():
+        raise ValueError(
+            "agent command executable must be an absolute path, or a common interpreter "
+            "with an absolute script path. Write a wrapper script and pass its absolute "
+            "path for complex commands. No reference calls were made."
+        )
+    executable_path = executable_path.resolve()
+    if not executable_path.is_file():
+        raise ValueError(
+            f"agent command executable was not found or is not a file: {executable_path}. "
+            "No reference calls were made."
+        )
+    if not os.access(executable_path, os.X_OK):
+        raise ValueError(
+            f"agent command executable is not executable: {executable_path}. "
+            "No reference calls were made."
+        )
+    return [str(executable_path), *command[1:]]
+
+
+def _resolve_command_executable(executable: str) -> str:
+    resolved = shutil.which(executable)
+    if resolved is None:
+        raise ValueError(
+            f"agent command executable was not found: {executable}. "
+            "No reference calls were made."
+        )
+    return str(Path(resolved).expanduser().resolve())
+
+
+def _is_common_interpreter(executable: str) -> bool:
+    name = Path(executable).name.lower()
+    if name in {"python", "python2", "python3", "pypy", "pypy3"}:
+        return True
+    if name.startswith(("python2.", "python3.")):
+        return True
+    return name in {"sh", "bash", "zsh", "node", "ruby", "perl"}
+
+
+def _ensure_env_assignment_path_values_absolute(
+    command: list[str], command_offset: int
+) -> None:
+    for arg in command[1:command_offset]:
+        name, _, value = arg.partition("=")
+        if name not in _PATH_ENV_NAMES:
+            continue
+        if value == "":
+            raise ValueError(
+                f"{name} env assignment must contain absolute path segments. "
+                "No reference calls were made."
+            )
+        for part in value.split(os.pathsep):
+            if not part or not Path(part).expanduser().is_absolute():
+                raise ValueError(
+                    f"{name} env assignment must contain only absolute path segments; "
+                    "write a wrapper script for relative setup. No reference calls were made."
+                )
+
+
+def _interpreter_script_path(command: list[str]) -> Path | None:
+    command_offset = _env_command_operand_index(command) or 0
+    script_index = _interpreter_script_operand_index(command[command_offset:])
+    return (
+        Path(command[command_offset + script_index]).expanduser().resolve()
+        if script_index is not None
+        else None
+    )
+
+
+def _interpreter_script_operand_index(command: list[str]) -> int | None:
+    if not _is_common_interpreter(command[0]):
+        return None
+    if len(command) < 2:
+        raise ValueError(
+            "agent command interpreters must be passed an absolute script path; "
+            "write a wrapper script and pass its absolute path for complex commands. "
+            "No reference calls were made."
+        )
+    script = command[1]
+    if script.startswith("-"):
+        raise ValueError(
+            "agent command interpreters must be passed an absolute script path; "
+            "python -m, -c/-e command strings, and interpreter options are not "
+            "supported by compile preflight. Write a wrapper script and pass its "
+            "absolute path. No reference calls were made."
+        )
+    return 1
 
 
 def _ensure_agent_command_outside_protected_paths(
@@ -612,25 +715,12 @@ def _ensure_agent_command_outside_protected_paths(
                 )
 
 
-def _interpreter_script_path(command: list[str]) -> Path | None:
-    command_offset = _env_command_operand_index(command) or 0
-    script_index = _interpreter_script_operand_index(command[command_offset:])
-    return (
-        Path(command[command_offset + script_index]).expanduser().resolve()
-        if script_index is not None
-        else None
-    )
-
-
 def _env_command_operand_index(command: list[str]) -> int | None:
     if len(command) < 2 or Path(command[0]).name != "env":
         return None
     index = 1
     while index < len(command):
         arg = command[index]
-        if arg == "--":
-            index += 1
-            break
         if _env_assignment(arg):
             index += 1
             continue
@@ -666,70 +756,6 @@ def _env_assignment_paths(command: list[str], command_offset: int) -> list[Path]
             candidate = Path(part).expanduser() if part else Path()
             paths.append(candidate.resolve())
     return paths
-
-
-def _resolve_env_assignment_path_values(command: list[str], command_offset: int) -> list[str]:
-    resolved = list(command)
-    for index in range(1, command_offset):
-        name, _, value = resolved[index].partition("=")
-        if name not in _PATH_ENV_NAMES or value == "":
-            continue
-        parts = [
-            str(Path(part).expanduser().resolve()) if part else str(Path().resolve())
-            for part in value.split(os.pathsep)
-        ]
-        resolved[index] = f"{name}={os.pathsep.join(parts)}"
-    return resolved
-
-
-def _interpreter_script_operand_index(command: list[str]) -> int | None:
-    if len(command) < 2:
-        return None
-    interpreter = Path(command[0]).name.lower()
-    if interpreter.startswith("python") or interpreter in {"pypy", "pypy3"}:
-        operand_index = _python_script_operand_index(command[1:])
-    elif interpreter in {"sh", "bash", "zsh", "node", "ruby", "perl"}:
-        operand_index = _simple_script_operand_index(command[1:])
-    else:
-        return None
-    return operand_index + 1 if operand_index is not None else None
-
-
-def _python_script_operand_index(args: list[str]) -> int | None:
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if arg == "-m":
-            raise ValueError(
-                "python -m agent commands are not supported by compile preflight; "
-                "pass a script path instead. No reference calls were made."
-            )
-        if arg in {"-c", "-"}:
-            return None
-        if arg == "--":
-            index += 1
-            return index if index < len(args) else None
-        if not arg.startswith("-"):
-            return index
-        if arg in {"-W", "-X", "--check-hash-based-pycs"}:
-            index += 2
-        else:
-            index += 1
-    return None
-
-
-def _simple_script_operand_index(args: list[str]) -> int | None:
-    for index, arg in enumerate(args):
-        if arg in {"-c", "-e"}:
-            return None
-        if arg == "--":
-            continue
-        if arg.startswith("-"):
-            continue
-        return index
-    return None
-
-
 def _compile_agent_protected_paths(
     target_path: Path, run_root: Path, workspace_store_root: Path, target_name: str
 ) -> list[Path]:

@@ -5,6 +5,8 @@ import json
 import os
 import re
 import subprocess
+import sys
+import tempfile
 import threading
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -35,7 +37,14 @@ def main() -> None:
     ensure_run_root(run_root)
     target_root = run_root / "target"
     write_mini_target(target_root, run_root / "mini_data")
-    agent_code = build_agent_code()
+    agent_script = (
+        Path(tempfile.mkdtemp(prefix=f"{run_root.name}-agent-")) / "smoke_agent.py"
+    )
+    agent_script.parent.mkdir(parents=True, exist_ok=True)
+    agent_script.write_text(build_agent_code(), encoding="utf-8")
+    agent_python = Path("/usr/bin/python3")
+    if not agent_python.is_file():
+        agent_python = Path(sys.executable)
 
     local_server: ThreadingHTTPServer | None = None
     env = dict(os.environ)
@@ -90,7 +99,7 @@ def main() -> None:
         "--reference-config",
         str(reference_config),
         "--agent-command",
-        json.dumps(["/usr/bin/python3", "-c", agent_code]),
+        json.dumps([str(agent_python.resolve()), str(agent_script)]),
         "--max-candidates",
         "1",
         "--max-agent-seconds",
@@ -113,7 +122,8 @@ def main() -> None:
             "reference_config": reference_config,
             "reference_mode": reference_mode,
             "live_reference_available": live_available,
-            "agent_command_transport": "python-c",
+            "agent_script": agent_script,
+            "agent_command_transport": "python-script",
             "command": command,
             "started_at": now_iso(),
         },

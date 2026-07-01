@@ -40,9 +40,10 @@ Actual paid spend recorded: `$0.019230`
 The first live attempt made nine provider calls and exposed a smoke-runner
 sandbox issue: the agent command pointed at `agent.py` under the run root, which
 the macOS sandbox correctly denied from the isolated attempt workspace. The
-runner was repaired to pass the same tiny smoke agent via `python -c`. The
-successful rerun used the same run root and cache, added nine cache-hit ledger
-entries, and did not increase paid spend.
+runner now writes the same tiny smoke agent to an absolute script path and passes
+that script through the narrowed `--agent-command` contract. The successful rerun
+used the same run root and cache, added nine cache-hit ledger entries, and did
+not increase paid spend.
 
 ## P1 Status
 

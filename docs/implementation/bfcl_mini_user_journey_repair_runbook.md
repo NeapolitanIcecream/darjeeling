@@ -115,7 +115,7 @@ darjeeling compile run <target-path> \
   --run-root <path> \
   --workspace-root <path> \
   --reference-config <path> \
-  --agent-command <json-or-repeatable-arg> \
+  --agent-command <json-array-simple-command> \
   --max-candidates <n> \
   --max-agent-seconds <seconds> \
   --max-cost <usd> \
@@ -130,6 +130,10 @@ Required behavior:
 
 - `darjeeling compile --help` exists.
 - `darjeeling compile run --help` explains the minimal required inputs.
+- `--agent-command` is a statically validated simple command: absolute
+  executable, or common interpreter plus absolute script path. Complex setup
+  belongs in an absolute wrapper script. Path-valued env assignments must use
+  absolute path segments.
 - The command writes a run manifest and a concise report under `run-root`.
 - If a feature is not implemented yet, the CLI should fail with a useful
   message, not a traceback.

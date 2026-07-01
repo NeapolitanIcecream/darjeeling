@@ -126,6 +126,13 @@ uv run darjeeling compile run /path/to/target \
   --l4-deadline-ms 30000
 ```
 
+`--agent-command` is intentionally a narrow JSON string array. Pass either an
+absolute executable path, or a common interpreter such as `python3` with an
+absolute script path. If the agent needs shell setup, relative paths, `python -m`,
+`python -c`, or other command composition, put that setup in a wrapper script and
+pass the wrapper's absolute path. Path-valued env assignments such as
+`PYTHONPATH=/abs/lib:/abs/vendor` must contain only absolute path segments.
+
 The command writes `manifest.json`, `reports/compile_summary.json`,
 `reports/test_report.json`, `reports/final_report.json`, agent logs, candidate
 records, and the interactive handoff record under `--run-root`.
