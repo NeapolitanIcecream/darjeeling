@@ -24,7 +24,10 @@ from darjeeling.agent_workspace import (
 )
 from darjeeling.artifact_worker import build_protocol_docs
 from darjeeling.compile_orchestration import (
+    _load_persisted_selected_evaluation,
+    _selected_successful_ledger_entry,
     _submission_content_digest,
+    _validation_gate_status,
     plan_compile_launch,
     run_interactive_compile_loop,
     start_compile_launch,
@@ -44,6 +47,7 @@ from darjeeling.model import (
     RecompileReason,
     RecompileRequest,
     ReleaseRegistry,
+    RequirementCheckResult,
     RoutingSettings,
     SchedulerPolicy,
     SnapshotOptions,
@@ -381,6 +385,23 @@ def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     assert result["feedback_count"] == 2
     assert result["failed_submission_count"] == 0
     assert result["stop_reason"] == "ready_for_test"
+    assert result["selected_candidate_id"] == result["selected_candidate"].candidate_id
+    assert result["selected_validation_report_id"] == result["validation_report"].report_id
+    assert result["selected_candidate"].submission_id == "c2"
+    handoff_path = Path(result["interactive_result_path"])
+    handoff = json.loads(handoff_path.read_text())
+    assert handoff["schema_version"] == "darjeeling.interactive_compile_result.v1"
+    assert handoff["selected_submission_id"] == "c2"
+    assert handoff["selected_candidate_id"] == result["selected_candidate"].candidate_id
+    assert handoff["selected_validation_report_id"] == result["validation_report"].report_id
+    assert Path(handoff["selected_candidate_path"]).exists()
+    assert Path(handoff["selected_validation_report_path"]).exists()
+    persisted = _load_persisted_selected_evaluation(handoff)
+    assert persisted is not None
+    assert persisted["candidate"].candidate_id == result["selected_candidate"].candidate_id
+    assert persisted["report"].report_id == result["validation_report"].report_id
+    with pytest.raises(ValueError):
+        handoff_path.resolve().relative_to(attempt.workspace_path.resolve())
     assert (attempt.workspace_path / "journal" / "feedback-c1.json").exists()
     assert (attempt.workspace_path / "journal" / "feedback-c2.json").exists()
     assert (attempt.workspace_path / "journal" / "c1-feedback-seen.txt").read_text() == "False"
@@ -398,6 +419,135 @@ def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     ledger = json.loads(ledger_path.read_text())
     assert [entry["submission_id"] for entry in ledger] == ["c1", "c2"]
     assert {entry["validation_status"] for entry in ledger} == {"feedback_written"}
+    assert {entry["validation_gate_status"] for entry in ledger} == {"pass"}
+
+
+def test_interactive_compile_loop_handoff_uses_selected_duplicate_submission(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=2),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('revise', ['a', 'b'])",
+                    "deadline = time.time() + 5",
+                    "while time.time() < deadline:",
+                    "    if Path('journal/feedback-revise.json').exists():",
+                    "        write_artifact('revise', ['z'])",
+                    "        break",
+                    "    time.sleep(0.05)",
+                    "else:",
+                    "    raise SystemExit(44)",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 2
+    assert result["stop_reason"] == "candidate_limit"
+    assert result["selected_candidate_id"] == result["selected_candidate"].candidate_id
+    assert result["selected_validation_report_id"] == result["validation_report"].report_id
+    assert result["validation_report"].metrics["local"]["coverage"] > 0
+    handoff = json.loads(Path(result["interactive_result_path"]).read_text())
+    persisted = _load_persisted_selected_evaluation(handoff)
+    assert persisted is not None
+    assert result["selected_candidate"].digest == persisted["candidate"].digest
+    assert result["validation_report"].report_id == persisted["report"].report_id
+
+
+def test_interactive_handoff_selects_only_validation_passing_candidates() -> None:
+    ledger = [
+        {
+            "submission_id": "passing-low-coverage",
+            "validation_status": "feedback_written",
+            "validation_gate_status": "pass",
+            "candidate_id": "candidate-pass-low",
+            "validation_coverage": 0.5,
+        },
+        {
+            "submission_id": "failing-high-coverage",
+            "validation_status": "feedback_written",
+            "validation_gate_status": "fail",
+            "candidate_id": "candidate-fail-high",
+            "validation_coverage": 1.0,
+        },
+        {
+            "submission_id": "insufficient-higher-coverage",
+            "validation_status": "feedback_written",
+            "validation_gate_status": "insufficient",
+            "candidate_id": "candidate-insufficient",
+            "validation_coverage": 0.9,
+        },
+        {
+            "submission_id": "passing-higher-coverage",
+            "validation_status": "feedback_written",
+            "validation_gate_status": "pass",
+            "candidate_id": "candidate-pass-high",
+            "validation_coverage": 0.7,
+        },
+    ]
+
+    selected = _selected_successful_ledger_entry(ledger)
+
+    assert selected is not None
+    assert selected["submission_id"] == "passing-higher-coverage"
+
+
+def test_validation_handoff_defers_transfer_only_checks() -> None:
+    assert (
+        _validation_gate_status(
+            [
+                RequirementCheckResult("precision_min", "pass", {}),
+                RequirementCheckResult("precision_drop", "insufficient", {}),
+                RequirementCheckResult("coverage_retention", "insufficient", {}),
+                RequirementCheckResult("generalization", "fail", {}),
+            ]
+        )
+        == "pass"
+    )
+    assert (
+        _validation_gate_status(
+            [
+                RequirementCheckResult("precision_min", "fail", {}),
+                RequirementCheckResult("coverage_retention", "insufficient", {}),
+                RequirementCheckResult("generalization", "fail", {}),
+            ]
+        )
+        == "fail"
+    )
+    assert (
+        _validation_gate_status(
+            [
+                RequirementCheckResult("precision_min", "pass", {}),
+                RequirementCheckResult("generalization", "fail", {}),
+            ]
+        )
+        == "fail"
+    )
 
 
 def test_interactive_compile_loop_ignores_agent_written_submission_ledger(
@@ -752,6 +902,11 @@ def test_interactive_compile_loop_stops_agent_when_timeout_expires_during_valida
             agent_timeout_seconds=2,
         )
     )
+    ready_path = attempt.workspace_path / "submissions" / "slowvalid" / "READY"
+    deadline = time.time() + 5
+    while not ready_path.exists() and time.time() < deadline:
+        time.sleep(0.02)
+    assert ready_path.exists()
     started_at = utcnow() - timedelta(seconds=1.5)
     handle = replace(handle, started_at=started_at)
     core_session_path = (
@@ -1075,6 +1230,67 @@ def test_interactive_compile_loop_rejects_validation_ok_after_budget_stop(
     session = json.loads((attempt.workspace_path / "journal" / "agent_session.json").read_text())
     assert session["status"] == "stopped"
     assert session["stop_reason"] == "budget_exhausted"
+
+
+def test_interactive_compile_loop_reports_budget_before_candidate_limit(
+    target_dir: Path, tmp_path: Path, now, monkeypatch
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=10, max_candidates=1, max_cost=2.0),
+            "\n".join(
+                [
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('overbudget', ['a'])",
+                    "time.sleep(30)",
+                ]
+            ),
+        )
+    )
+    original_evaluate = compile_orchestration_module.evaluate_candidate_on_validation
+
+    def validation_reports_over_budget(*args, **kwargs):
+        result = original_evaluate(*args, **kwargs)
+        report = result["report"]
+        result["report"] = replace(
+            report, cost=replace(report.cost, compile_cost=3.0)
+        )
+        return result
+
+    monkeypatch.setattr(
+        "darjeeling.compile_orchestration.evaluate_candidate_on_validation",
+        validation_reports_over_budget,
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 1
+    assert result["feedback_count"] == 1
+    assert result["failed_submission_count"] == 0
+    assert result["stop_reason"] == "budget_exhausted"
+    assert result["total_candidate_cost"] == 3.0
+    assert json.loads((attempt.workspace_path / "journal" / "closed.json").read_text())[
+        "reason"
+    ] == "budget_exhausted"
 
 
 def test_interactive_compile_loop_tolerates_malformed_agent_usage_ledger(
@@ -1539,6 +1755,7 @@ def test_interactive_compile_loop_uses_cumulative_compile_cost_without_double_co
     assert result["evaluated_submission_count"] == 2
     assert result["stop_reason"] == "ready_for_test"
     assert result["total_candidate_cost"] == 10.0
+    assert result["agent_usage_ledger"].cost == 10.0
 
 
 def test_first_compile_after_cold_start_uses_recompile_request_path(

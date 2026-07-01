@@ -1,18 +1,71 @@
 from __future__ import annotations
 
+import json
+import os
+import shutil
+from dataclasses import asdict
 from pathlib import Path
+from typing import Annotated, Any
 
 import typer
 
+from darjeeling.agent_workspace import (
+    create_agent_workspace,
+    create_compile_run,
+    launch_target_adaptation_agent_async,
+    load_target_workspace,
+    mount_readonly_inputs,
+    validate_workspace_target_name,
+    write_agent_brief,
+)
+from darjeeling.artifact_worker import build_protocol_docs
+from darjeeling.candidate_evaluation import (
+    compare_candidates,
+    evaluate_candidate_on_test,
+    finalize_report,
+)
+from darjeeling.compile_orchestration import run_interactive_compile_loop
 from darjeeling.demos.thin_target import format_thin_target_report, run_thin_target_demo
-from darjeeling.model import TargetCheckOptions
-from darjeeling.target_definition import check_target_definition
+from darjeeling.errors import ReferenceBudgetExhausted, WorkspaceError
+from darjeeling.model import (
+    AgentAttemptOptions,
+    AgentSearchGuidance,
+    AgentUsageLedger,
+    AgentViewOptions,
+    AgentWorkspacePermissions,
+    CompileBudget,
+    CompileOptions,
+    L4BaselineSummary,
+    ReferenceBroker,
+    ReferenceBudget,
+    ReferenceContext,
+    ReferenceQualificationOptions,
+    ReferenceResponse,
+    ReferenceUsageLedger,
+    ReleaseBaseline,
+    ReleaseRegistry,
+    RoutingSettings,
+    SnapshotOptions,
+    TargetCheckOptions,
+    WorkspaceStore,
+)
+from darjeeling.reference_config import build_reference_broker_from_config
+from darjeeling.release_runtime import create_release_without_artifacts
+from darjeeling.snapshot_reference import build_snapshot, export_train_view_for_agent
+from darjeeling.target_definition import (
+    check_target_definition,
+    export_agent_readonly_target_view,
+    load_checked_target,
+)
+from darjeeling.util import utcnow, write_json
 
 app = typer.Typer(help="Darjeeling CLI.")
 target_app = typer.Typer(help="Target definition commands.")
 demo_app = typer.Typer(help="Demo commands.")
+compile_app = typer.Typer(help="Compile target-local artifacts.")
 app.add_typer(target_app, name="target")
 app.add_typer(demo_app, name="demo")
+app.add_typer(compile_app, name="compile")
 
 
 @target_app.command("check")
@@ -32,3 +85,748 @@ def target_check(target_path: Path, require_reference: bool = False) -> None:
 def demo_thin_target() -> None:
     """Run the no-network five-minute demo."""
     typer.echo(format_thin_target_report(run_thin_target_demo()))
+
+
+@compile_app.command("run")
+def compile_run(
+    target_path: Annotated[
+        Path,
+        typer.Argument(help="Path to a target directory containing target.yaml."),
+    ],
+    run_root: Annotated[
+        Path,
+        typer.Option(
+            "--run-root",
+            help="Directory where manifests, reports, snapshots, and logs are written.",
+        ),
+    ],
+    reference_config: Annotated[
+        Path,
+        typer.Option(
+            "--reference-config",
+            help="JSON/YAML OpenAI-compatible reference provider/cache config.",
+        ),
+    ],
+    agent_command: Annotated[
+        str,
+        typer.Option(
+            "--agent-command",
+            help=(
+                "JSON array command: absolute executable, or common interpreter "
+                "with an absolute script path. Use an absolute wrapper script for "
+                "complex commands."
+            ),
+        ),
+    ],
+    workspace_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace-root",
+            help="Agent workspace root. Defaults to <run-root>/workspaces.",
+        ),
+    ] = None,
+    max_candidates: Annotated[
+        int,
+        typer.Option("--max-candidates", help="Maximum ready candidates to evaluate."),
+    ] = 1,
+    max_agent_seconds: Annotated[
+        int,
+        typer.Option("--max-agent-seconds", help="Target-adaptation agent wall limit."),
+    ] = 300,
+    max_cost: Annotated[
+        float | None,
+        typer.Option("--max-cost", help="Maximum compile/reference cost in USD."),
+    ] = None,
+    enabled_layers: Annotated[
+        str,
+        typer.Option(
+            "--enabled-layers",
+            help="Comma-separated lower layers enabled for the cold-start compile context.",
+        ),
+    ] = "L1,L2,L3",
+    l4_deadline_ms: Annotated[
+        int,
+        typer.Option(
+            "--l4-deadline-ms",
+            help="Deadline for live L4/reference fallback and cold-start checks.",
+        ),
+    ] = 30_000,
+    agent_network: Annotated[
+        bool,
+        typer.Option("--agent-network/--no-agent-network", help="Allow agent network research."),
+    ] = False,
+    agent_dependency_install: Annotated[
+        bool,
+        typer.Option(
+            "--agent-dependency-install/--no-agent-dependency-install",
+            help="Record authorization for workspace-local dependency installation.",
+        ),
+    ] = False,
+    allow_insufficient_reference: Annotated[
+        bool,
+        typer.Option(
+            "--allow-insufficient-reference",
+            help="Allow compile to proceed when reference evidence is insufficient but not failed.",
+        ),
+    ] = False,
+) -> None:
+    """Run a target-independent compile attempt and final test handoff."""
+    try:
+        summary = _run_compile_command(
+            target_path=target_path,
+            run_root=run_root,
+            reference_config=reference_config,
+            agent_command=agent_command,
+            workspace_root=workspace_root,
+            max_candidates=max_candidates,
+            max_agent_seconds=max_agent_seconds,
+            max_cost=max_cost,
+            enabled_layers=enabled_layers,
+            l4_deadline_ms=l4_deadline_ms,
+            agent_network=agent_network,
+            agent_dependency_install=agent_dependency_install,
+            allow_insufficient_reference=allow_insufficient_reference,
+        )
+    except Exception as exc:
+        typer.echo(f"compile run failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        "compile run completed: "
+        f"run_root={summary['run_root']} "
+        f"selected_candidate={summary.get('selected_candidate_id')} "
+        f"decision={summary.get('decision_status')}"
+    )
+
+
+def _run_compile_command(
+    *,
+    target_path: Path,
+    run_root: Path,
+    reference_config: Path,
+    agent_command: str,
+    workspace_root: Path | None,
+    max_candidates: int,
+    max_agent_seconds: int,
+    max_cost: float | None,
+    enabled_layers: str,
+    l4_deadline_ms: int,
+    agent_network: bool,
+    agent_dependency_install: bool,
+    allow_insufficient_reference: bool,
+) -> dict[str, object]:
+    run_root = run_root.resolve()
+    target_path = target_path.resolve()
+    workspace_store_root = (
+        workspace_root.resolve() if workspace_root else run_root / "workspaces"
+    )
+    _ensure_agent_workspace_outside_target(target_path, workspace_store_root)
+    run_root.mkdir(parents=True, exist_ok=True)
+    (run_root / "reports").mkdir(parents=True, exist_ok=True)
+    layers = _parse_enabled_layers(enabled_layers)
+    command = _parse_agent_command(agent_command)
+    if max_candidates <= 0:
+        raise ValueError("--max-candidates must be positive")
+    if max_agent_seconds <= 0:
+        raise ValueError("--max-agent-seconds must be positive")
+    if l4_deadline_ms <= 0:
+        raise ValueError("--l4-deadline-ms must be positive")
+    if max_cost is not None and max_cost < 0:
+        raise ValueError("--max-cost must be non-negative")
+    if max_cost == 0:
+        raise ValueError("--max-cost 0 leaves no budget for the required reference probe")
+    _ensure_agent_execution_supported()
+    command = _resolve_agent_command(command)
+    definition, contract, target_check = load_checked_target(
+        target_path, require_reference=True
+    )
+    try:
+        validate_workspace_target_name(definition.name)
+    except WorkspaceError as exc:
+        raise ValueError(f"{exc}. No reference calls were made.") from exc
+    _ensure_agent_workspace_outside_target(
+        target_path, workspace_store_root / definition.name / "main"
+    )
+    _ensure_agent_command_outside_protected_paths(
+        command,
+        _compile_agent_protected_paths(
+            target_path, run_root, workspace_store_root, definition.name
+        ),
+    )
+    broker = _BudgetedReferenceBroker(
+        build_reference_broker_from_config(reference_config), max_cost
+    )
+    registry = ReleaseRegistry()
+    routing = RoutingSettings(
+        cache_enabled=False,
+        enabled_layers=layers,
+        total_deadline_ms=l4_deadline_ms,
+    )
+    cold_release = create_release_without_artifacts(
+        definition,
+        contract,
+        target_check,
+        broker,
+        routing,
+        registry,
+    )
+    _ensure_reference_budget_available_for_agent_launch(broker.cost, max_cost)
+    snapshot_options = SnapshotOptions(
+        allow_insufficient_reference=allow_insufficient_reference,
+        qualification_options=ReferenceQualificationOptions(),
+        reference_budget=ReferenceBudget(max_cost=max_cost),
+        storage_root=run_root / "snapshots",
+    )
+    try:
+        snapshot_result = build_snapshot(
+            definition,
+            contract,
+            definition.data_config,
+            None,
+            [],
+            broker,
+            utcnow(),
+            snapshot_options,
+        )
+    except ReferenceBudgetExhausted as exc:
+        raise RuntimeError(
+            "compile reference cost exhausted --max-cost during snapshot; "
+            "agent was not started"
+        ) from exc
+    compile_reference_usage = _compile_reference_usage(broker, snapshot_result)
+    _ensure_reference_budget_available_for_agent_launch(
+        compile_reference_usage.cost, max_cost
+    )
+    workspace_store = WorkspaceStore(workspace_store_root)
+    compile_options = CompileOptions(
+        objective={
+            "optimize": "coverage",
+            "enabled_layers": layers,
+            "l4_deadline_ms": l4_deadline_ms,
+        },
+        agent_guidance=AgentSearchGuidance(
+            preferred_strategies=["simple_baseline_first", "iterate_from_core_feedback"],
+            preferred_tools=["python"],
+            extra_instructions=(
+                "Submit L1/L2/L3 artifacts only when they can safely accept; "
+                "use Core validation feedback only."
+            ),
+        ),
+        allow_insufficient_reference_qualification=allow_insufficient_reference,
+    )
+    agent_options = AgentAttemptOptions(
+        agent_model="cli",
+        agent_command=command,
+        agent_timeout_seconds=max_agent_seconds,
+        permissions=AgentWorkspacePermissions(
+            network_access=agent_network,
+            dependency_install=agent_dependency_install,
+        ),
+    )
+    workspace = load_target_workspace(
+        definition.name,
+        definition.contract_hash,
+        workspace_store,
+    )
+    compile_run = create_compile_run(
+        definition,
+        target_check,
+        snapshot_result.snapshot,
+        cold_release,
+        CompileBudget(
+            max_agent_seconds=max_agent_seconds,
+            max_candidates=max_candidates,
+            max_cost=max_cost,
+        ),
+        workspace,
+        snapshot_result.reference_qualification,
+        compile_options,
+    )
+    attempt = create_agent_workspace(compile_run, workspace, agent_options)
+    target_view = export_agent_readonly_target_view(
+        definition,
+        attempt.workspace_path / "readonly_source" / "target",
+    )
+    train_view = export_train_view_for_agent(
+        snapshot_result.snapshot,
+        contract,
+        AgentViewOptions(),
+        attempt.workspace_path / "readonly_source" / "train",
+    )
+    mount_manifest = mount_readonly_inputs(
+        attempt,
+        target_view,
+        train_view,
+        cold_release,
+        report_views=[],
+        telemetry_summaries=[],
+        protocol_docs=build_protocol_docs("v1"),
+    )
+    brief = write_agent_brief(
+        attempt,
+        compile_run,
+        mount_manifest,
+        compile_options.objective,
+        compile_options.agent_guidance,
+        agent_options.permissions,
+    )
+    protected_paths = [
+        target_path.resolve(),
+        (run_root / "snapshots").resolve(),
+        *_reference_artifact_protected_paths(broker),
+    ]
+    handle = launch_target_adaptation_agent_async(
+        attempt,
+        brief,
+        {
+            "command": command,
+            "timeout_seconds": max_agent_seconds,
+            "permissions": asdict(agent_options.permissions),
+            "protected_paths": [str(path) for path in protected_paths],
+        },
+    )
+    loop_result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot_result.snapshot,
+        cold_release,
+        snapshot_result.reference_qualification,
+        compile_reference_usage,
+        {"serving_l4_cost": _estimated_baseline_serving_cost(snapshot_result)},
+        {"artifact_store": run_root / "artifacts"},
+        poll_interval_seconds=0.05,
+    )
+    if loop_result.get("stop_reason") == "budget_exhausted":
+        raise RuntimeError(
+            "interactive compile exhausted --max-cost before final test; final test was not run"
+        )
+    selected_candidate = loop_result.get("selected_candidate")
+    validation_report = loop_result.get("validation_report")
+    closed_attempt = loop_result.get("closed_attempt")
+    if selected_candidate is None or validation_report is None or closed_attempt is None:
+        raise RuntimeError(
+            "interactive compile completed without a selected candidate for final test"
+        )
+    test_result = evaluate_candidate_on_test(
+        selected_candidate,
+        closed_attempt,
+        definition,
+        snapshot_result.snapshot,
+        cold_release,
+        snapshot_result.reference_qualification,
+        loop_result.get("agent_usage_ledger", AgentUsageLedger()),
+        compile_reference_usage,
+        None,
+        None,
+        {"serving_l4_cost": _estimated_baseline_serving_cost(snapshot_result)},
+        {
+            "contract": contract,
+            "validation_report": validation_report,
+            "test_results_visible": True,
+        },
+    )
+    decision = compare_candidates(
+        [test_result["report"]],
+        ReleaseBaseline(
+            cold_release,
+            l4_baseline=L4BaselineSummary(
+                cold_release.release_id,
+                definition.name,
+                definition.contract_hash,
+                {},
+                [],
+                snapshot_result.reference_qualification,
+                {},
+                {},
+            ),
+        ),
+        {"requirements": definition.requirements},
+    )
+    final_report = finalize_report(test_result["report"], decision, validation_report)
+    manifest = {
+        "target_path": target_path.resolve(),
+        "run_root": run_root,
+        "reference_config": reference_config.resolve(),
+        "workspace_root": workspace_store.root,
+        "effective_l4_deadline_ms": l4_deadline_ms,
+        "enabled_layers": layers,
+        "compile_id": compile_run.compile_id,
+        "attempt_id": attempt.attempt_id,
+        "snapshot_id": snapshot_result.snapshot.snapshot_id,
+        "base_release_id": cold_release.release_id,
+        "interactive_result_path": loop_result["interactive_result_path"],
+        "selected_candidate_id": loop_result["selected_candidate_id"],
+        "selected_validation_report_id": loop_result["selected_validation_report_id"],
+        "reference_timeout_ms": getattr(broker, "config", None).timeout_ms
+        if hasattr(broker, "config")
+        else None,
+        "reference_call_count": broker.call_count,
+        "reference_cost": broker.cost,
+        "created_at": utcnow(),
+    }
+    summary = {
+        "run_root": str(run_root),
+        "compile_id": compile_run.compile_id,
+        "attempt_id": attempt.attempt_id,
+        "selected_candidate_id": loop_result["selected_candidate_id"],
+        "selected_validation_report_id": loop_result["selected_validation_report_id"],
+        "interactive_result_path": str(loop_result["interactive_result_path"]),
+        "final_test_report_id": test_result["report"].report_id,
+        "final_report_id": final_report.report_id,
+        "decision_status": decision.status,
+        "decision_blockers": list(decision.release_blockers),
+        "effective_l4_deadline_ms": l4_deadline_ms,
+        "reference_timeout_ms": manifest["reference_timeout_ms"],
+        "reference_call_count": broker.call_count,
+        "reference_cost": broker.cost,
+        "cost": asdict(final_report.cost),
+    }
+    write_json(run_root / "manifest.json", manifest)
+    write_json(run_root / "reports" / "compile_summary.json", summary)
+    write_json(run_root / "reports" / "test_report.json", asdict(test_result["report"]))
+    write_json(run_root / "reports" / "final_report.json", asdict(final_report))
+    return summary
+
+
+def _parse_agent_command(value: str) -> list[str]:
+    try:
+        command = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("--agent-command must be a JSON string array") from exc
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(not isinstance(part, str) or not part for part in command)
+    ):
+        raise ValueError("--agent-command must be a non-empty JSON string array")
+    return command
+
+
+def _parse_enabled_layers(value: str) -> list[str]:
+    layers = [part.strip() for part in value.split(",") if part.strip()]
+    allowed = {"L1", "L2", "L3"}
+    if not layers or any(layer not in allowed for layer in layers):
+        raise ValueError("--enabled-layers must contain only L1,L2,L3")
+    if len(set(layers)) != len(layers):
+        raise ValueError("--enabled-layers must not contain duplicates")
+    return layers
+
+
+def _estimated_baseline_serving_cost(snapshot_result) -> float:
+    qualification = snapshot_result.reference_qualification
+    usage = snapshot_result.reference_usage
+    total = float(qualification.cost.get("total", 0.0)) + float(usage.cost)
+    calls = max(
+        int(qualification.latency.get("sample_count", 0)) + int(usage.call_count),
+        1,
+    )
+    return total / calls
+
+
+def _compile_reference_usage(broker: Any, snapshot_result: Any) -> ReferenceUsageLedger:
+    usage = snapshot_result.reference_usage
+    return ReferenceUsageLedger(
+        call_count=max(
+            int(getattr(broker, "call_count", 0)),
+            int(getattr(usage, "call_count", 0)),
+        ),
+        cost=max(float(getattr(broker, "cost", 0.0)), float(getattr(usage, "cost", 0.0))),
+        errors=dict(getattr(usage, "errors", {}) or {}),
+    )
+
+
+def _ensure_reference_budget_available_for_agent_launch(
+    cost: float, max_cost: float | None
+) -> None:
+    if max_cost is not None and cost >= max_cost:
+        raise RuntimeError(
+            "compile reference cost exhausted --max-cost before agent launch; "
+            "agent was not started"
+        )
+
+
+def _reference_artifact_protected_paths(broker: Any) -> list[Path]:
+    config = getattr(broker, "config", None)
+    protected: list[Path] = []
+    for attr in ("cache_path", "usage_ledger_path"):
+        path = getattr(config, attr, None)
+        if path is not None:
+            protected.append(Path(path).expanduser().resolve())
+    return protected
+
+
+def _ensure_agent_execution_supported() -> None:
+    if shutil.which("sandbox-exec") is None:
+        raise ValueError(
+            "agent execution requires macOS sandbox-exec; sandbox-exec was not found. "
+            "No reference calls were made."
+        )
+
+
+def _resolve_agent_command(command: list[str]) -> list[str]:
+    resolved = list(command)
+    command_offset = _env_command_operand_index(resolved) or 0
+    if command_offset:
+        env_executable = shutil.which(resolved[0])
+        if env_executable is None:
+            raise ValueError(
+                f"env executable was not found: {resolved[0]}. No reference calls were made."
+            )
+        resolved[0] = str(Path(env_executable).expanduser().resolve())
+        _ensure_env_assignment_path_values_absolute(resolved, command_offset)
+    resolved[command_offset:] = _resolve_simple_agent_command(resolved[command_offset:])
+    return resolved
+
+
+def _resolve_simple_agent_command(command: list[str]) -> list[str]:
+    executable = command[0]
+    if _is_common_interpreter(executable):
+        resolved = _resolve_command_executable(executable)
+        script_index = _interpreter_script_operand_index(command)
+        script_path = Path(command[script_index]).expanduser()
+        if not script_path.is_absolute():
+            raise ValueError(
+                "agent command interpreter script must be an absolute path; "
+                "write a wrapper script and pass its absolute path for complex commands. "
+                "No reference calls were made."
+            )
+        script_path = script_path.resolve()
+        if not script_path.is_file():
+            raise ValueError(
+                f"agent command script was not found or is not a file: {script_path}. "
+                "No reference calls were made."
+            )
+        return [
+            resolved,
+            *command[1:script_index],
+            str(script_path),
+            *command[script_index + 1 :],
+        ]
+
+    executable_path = Path(executable).expanduser()
+    if not executable_path.is_absolute():
+        raise ValueError(
+            "agent command executable must be an absolute path, or a common interpreter "
+            "with an absolute script path. Write a wrapper script and pass its absolute "
+            "path for complex commands. No reference calls were made."
+        )
+    executable_path = executable_path.resolve()
+    if not executable_path.is_file():
+        raise ValueError(
+            f"agent command executable was not found or is not a file: {executable_path}. "
+            "No reference calls were made."
+        )
+    if not os.access(executable_path, os.X_OK):
+        raise ValueError(
+            f"agent command executable is not executable: {executable_path}. "
+            "No reference calls were made."
+        )
+    return [str(executable_path), *command[1:]]
+
+
+def _resolve_command_executable(executable: str) -> str:
+    resolved = shutil.which(executable)
+    if resolved is None:
+        raise ValueError(
+            f"agent command executable was not found: {executable}. "
+            "No reference calls were made."
+        )
+    return str(Path(resolved).expanduser().resolve())
+
+
+def _is_common_interpreter(executable: str) -> bool:
+    name = Path(executable).name.lower()
+    if name in {"python", "python2", "python3", "pypy", "pypy3"}:
+        return True
+    if name.startswith(("python2.", "python3.")):
+        return True
+    return name in {"sh", "bash", "zsh", "node", "ruby", "perl"}
+
+
+def _ensure_env_assignment_path_values_absolute(
+    command: list[str], command_offset: int
+) -> None:
+    for arg in command[1:command_offset]:
+        name, _, value = arg.partition("=")
+        if name not in _PATH_ENV_NAMES:
+            continue
+        if value == "":
+            raise ValueError(
+                f"{name} env assignment must contain absolute path segments. "
+                "No reference calls were made."
+            )
+        for part in value.split(os.pathsep):
+            if not part or not Path(part).expanduser().is_absolute():
+                raise ValueError(
+                    f"{name} env assignment must contain only absolute path segments; "
+                    "write a wrapper script for relative setup. No reference calls were made."
+                )
+
+
+def _interpreter_script_path(command: list[str]) -> Path | None:
+    command_offset = _env_command_operand_index(command) or 0
+    script_index = _interpreter_script_operand_index(command[command_offset:])
+    return (
+        Path(command[command_offset + script_index]).expanduser().resolve()
+        if script_index is not None
+        else None
+    )
+
+
+def _interpreter_script_operand_index(command: list[str]) -> int | None:
+    if not _is_common_interpreter(command[0]):
+        return None
+    if len(command) < 2:
+        raise ValueError(
+            "agent command interpreters must be passed an absolute script path; "
+            "write a wrapper script and pass its absolute path for complex commands. "
+            "No reference calls were made."
+        )
+    script = command[1]
+    if script.startswith("-"):
+        raise ValueError(
+            "agent command interpreters must be passed an absolute script path; "
+            "python -m, -c/-e command strings, and interpreter options are not "
+            "supported by compile preflight. Write a wrapper script and pass its "
+            "absolute path. No reference calls were made."
+        )
+    return 1
+
+
+def _ensure_agent_command_outside_protected_paths(
+    command: list[str], protected_paths: list[Path]
+) -> None:
+    command_paths = [Path(command[0]).expanduser().resolve()]
+    command_offset = _env_command_operand_index(command) or 0
+    if command_offset:
+        command_paths.append(Path(command[command_offset]).expanduser().resolve())
+        command_paths.extend(_env_assignment_paths(command, command_offset))
+    script_path = _interpreter_script_path(command)
+    if script_path is not None:
+        command_paths.append(script_path)
+    for protected_path in protected_paths:
+        for command_path in command_paths:
+            if _path_contains(protected_path, command_path):
+                raise ValueError(
+                    "agent command executable, script, or env path must not be inside "
+                    "protected target/Core paths. No reference calls were made."
+                )
+
+
+def _env_command_operand_index(command: list[str]) -> int | None:
+    if len(command) < 2 or Path(command[0]).name != "env":
+        return None
+    index = 1
+    while index < len(command):
+        arg = command[index]
+        if _env_assignment(arg):
+            index += 1
+            continue
+        if arg.startswith("-"):
+            raise ValueError(
+                "env agent command options are not supported by compile preflight; "
+                "pass the command directly or use env VAR=value COMMAND. "
+                "No reference calls were made."
+            )
+        break
+    if index >= len(command):
+        raise ValueError(
+            "env agent command must include a command operand. No reference calls were made."
+        )
+    return index
+
+
+def _env_assignment(arg: str) -> bool:
+    name, separator, _ = arg.partition("=")
+    return bool(separator and name and not name.startswith("-"))
+
+
+_PATH_ENV_NAMES = {"PATH", "PYTHONHOME", "PYTHONPATH", "NODE_PATH", "RUBYLIB", "PERL5LIB"}
+
+
+def _env_assignment_paths(command: list[str], command_offset: int) -> list[Path]:
+    paths: list[Path] = []
+    for arg in command[1:command_offset]:
+        name, _, value = arg.partition("=")
+        if name not in _PATH_ENV_NAMES or value == "":
+            continue
+        for part in value.split(os.pathsep):
+            candidate = Path(part).expanduser() if part else Path()
+            paths.append(candidate.resolve())
+    return paths
+def _compile_agent_protected_paths(
+    target_path: Path, run_root: Path, workspace_store_root: Path, target_name: str
+) -> list[Path]:
+    repo_root = Path(__file__).resolve().parents[2]
+    predicted_attempt_path = (
+        workspace_store_root / target_name / "attempts" / "_compile" / "_attempt"
+    )
+    protected = [target_path.resolve(), (run_root / "snapshots").resolve()]
+    if _path_contains(repo_root, predicted_attempt_path):
+        protected.extend(_protect_siblings_from(repo_root, predicted_attempt_path))
+    else:
+        protected.append(repo_root)
+    if len(predicted_attempt_path.parents) >= 5:
+        workspace_parent = predicted_attempt_path.parents[4]
+        protected.extend(_protect_siblings_from(workspace_parent, predicted_attempt_path))
+    return protected
+
+
+def _protect_siblings_from(root: Path, child_path: Path) -> list[Path]:
+    protected: list[Path] = []
+    current = root.resolve()
+    child_resolved = child_path.resolve()
+    while current != child_resolved and current.is_dir():
+        try:
+            rel_parts = child_resolved.relative_to(current).parts
+        except ValueError:
+            break
+        if not rel_parts:
+            break
+        allowed_child = current / rel_parts[0]
+        for child in current.iterdir():
+            if child != allowed_child:
+                protected.append(child)
+        current = allowed_child
+    return protected
+
+
+def _path_contains(parent: Path, child: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _ensure_agent_workspace_outside_target(
+    target_path: Path, workspace_root: Path
+) -> None:
+    if _path_contains(target_path, workspace_root):
+        raise ValueError(
+            "agent workspace root must not be inside --target-path; choose "
+            "--workspace-root outside the target or move --run-root outside the target. "
+            "No reference calls were made."
+        )
+
+
+class _BudgetedReferenceBroker:
+    def __init__(self, broker: ReferenceBroker, max_cost: float | None):
+        self._broker = broker
+        self.max_cost = max_cost
+        self.reference_version = broker.reference_version
+        self.config = getattr(broker, "config", None)
+        self.cost = 0.0
+        self.call_count = 0
+
+    def call(self, request: dict[str, Any], context: ReferenceContext) -> ReferenceResponse:
+        if self.max_cost is not None and self.cost >= self.max_cost:
+            raise ReferenceBudgetExhausted(
+                "reference cost budget exhausted before provider call"
+            )
+        response = self._broker.call(request, context)
+        self.call_count += 1
+        self.cost += max(float(response.cost), 0.0)
+        return response

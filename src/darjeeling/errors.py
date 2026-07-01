@@ -30,6 +30,10 @@ class SnapshotBuildError(DarjeelingError):
         self.reference_usage = reference_usage
 
 
+class ReferenceBudgetExhausted(DarjeelingError):
+    pass
+
+
 class ArtifactError(DarjeelingError):
     pass
 
