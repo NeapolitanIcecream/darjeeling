@@ -422,6 +422,63 @@ def test_interactive_compile_loop_writes_feedback_while_agent_is_running(
     assert {entry["validation_gate_status"] for entry in ledger} == {"pass"}
 
 
+def test_interactive_compile_loop_handoff_uses_selected_duplicate_submission(
+    target_dir: Path, tmp_path: Path, now
+) -> None:
+    definition, contract, release, snapshot, compile_run, attempt, handle = (
+        _launch_interactive_agent(
+            target_dir,
+            tmp_path,
+            now,
+            CompileBudget(max_agent_seconds=5, max_candidates=2),
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import time",
+                    _write_agent_artifact_snippet(
+                        load_checked_target(target_dir)[0].contract_hash
+                    ),
+                    "write_artifact('revise', ['a', 'b'])",
+                    "deadline = time.time() + 5",
+                    "while time.time() < deadline:",
+                    "    if Path('journal/feedback-revise.json').exists():",
+                    "        write_artifact('revise', ['z'])",
+                    "        break",
+                    "    time.sleep(0.05)",
+                    "else:",
+                    "    raise SystemExit(44)",
+                ]
+            ),
+        )
+    )
+
+    result = run_interactive_compile_loop(
+        compile_run,
+        attempt,
+        handle,
+        definition,
+        contract,
+        snapshot.snapshot,
+        release,
+        snapshot.reference_qualification,
+        snapshot.reference_usage,
+        {"serving_l4_cost": 1.0},
+        {"artifact_store": tmp_path / "artifacts"},
+        poll_interval_seconds=0.02,
+    )
+
+    assert result["evaluated_submission_count"] == 2
+    assert result["stop_reason"] == "candidate_limit"
+    assert result["selected_candidate_id"] == result["selected_candidate"].candidate_id
+    assert result["selected_validation_report_id"] == result["validation_report"].report_id
+    assert result["validation_report"].metrics["local"]["coverage"] > 0
+    handoff = json.loads(Path(result["interactive_result_path"]).read_text())
+    persisted = _load_persisted_selected_evaluation(handoff)
+    assert persisted is not None
+    assert result["selected_candidate"].digest == persisted["candidate"].digest
+    assert result["validation_report"].report_id == persisted["report"].report_id
+
+
 def test_interactive_handoff_selects_only_validation_passing_candidates() -> None:
     ledger = [
         {

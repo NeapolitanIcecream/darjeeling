@@ -1191,7 +1191,7 @@ def run_interactive_compile_loop(
                     report, definition.requirements
                 )
                 validation_gate_status = _validation_gate_status(requirement_results)
-                successful_evaluations[submission.submission_id] = evaluation
+                successful_evaluations[candidate.candidate_id] = evaluation
                 ledger.append(
                     {
                         "submission_id": submission.submission_id,
@@ -1278,10 +1278,10 @@ def run_interactive_compile_loop(
         elapsed_seconds=elapsed_seconds,
         total_candidate_cost=total_candidate_cost,
     )
-    selected_submission_id = interactive_result.get("selected_submission_id")
+    selected_candidate_id = interactive_result.get("selected_candidate_id")
     selected_evaluation = (
-        successful_evaluations.get(selected_submission_id)
-        if isinstance(selected_submission_id, str)
+        successful_evaluations.get(selected_candidate_id)
+        if isinstance(selected_candidate_id, str)
         else None
     )
     if selected_evaluation is None:
