@@ -9,6 +9,7 @@
 - Experiment artifacts and experiment docs may record dataset-specific evidence and failure examples, but that evidence must not become a core default or reusable core rule.
 - Target-dependent optimization code is allowed in target packages, target adapters, target-local tools, and generated L1/L2/L3 artifacts when it improves a concrete task. Treat that work as target adaptation cost and benchmark upper-bound exploration, not as Darjeeling core contribution. Do not move such logic into core unless it is purely target-independent lifecycle plumbing repeated across layers or targets.
 - Determine the active repository surface from tracked files, `README.md`, and active architecture documents. Ignored local directories such as `runs/`, `data/processed/`, `native/`, cache directories, and leftover untracked `__pycache__` trees are local artifacts unless an active tracked document explicitly names them for the current task.
+- Darjeeling should only claim support for target-adaptation agent execution on platforms where it uses a platform-native or mature external sandbox. Do not build or expand a custom language-level sandbox as a security boundary. For now, the supported agent-execution platform is macOS with the built-in `sandbox-exec`; other platforms should fail clearly or require an explicit external runner/container design before being marked supported.
 
 ## Plans, Prompts, And Experiment Handoffs
 
