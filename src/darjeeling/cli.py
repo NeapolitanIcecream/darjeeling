@@ -262,6 +262,7 @@ def _run_compile_command(
         routing,
         registry,
     )
+    _ensure_reference_budget_available_for_agent_launch(broker.cost, max_cost)
     snapshot_options = SnapshotOptions(
         allow_insufficient_reference=allow_insufficient_reference,
         qualification_options=ReferenceQualificationOptions(),
@@ -279,11 +280,9 @@ def _run_compile_command(
         snapshot_options,
     )
     compile_reference_usage = _compile_reference_usage(broker, snapshot_result)
-    if max_cost is not None and compile_reference_usage.cost >= max_cost:
-        raise RuntimeError(
-            "compile reference cost exhausted --max-cost before agent launch; "
-            "agent was not started"
-        )
+    _ensure_reference_budget_available_for_agent_launch(
+        compile_reference_usage.cost, max_cost
+    )
     workspace_store = WorkspaceStore(workspace_store_root)
     compile_options = CompileOptions(
         objective={
@@ -525,6 +524,16 @@ def _compile_reference_usage(broker: Any, snapshot_result: Any) -> ReferenceUsag
     )
 
 
+def _ensure_reference_budget_available_for_agent_launch(
+    cost: float, max_cost: float | None
+) -> None:
+    if max_cost is not None and cost >= max_cost:
+        raise RuntimeError(
+            "compile reference cost exhausted --max-cost before agent launch; "
+            "agent was not started"
+        )
+
+
 def _reference_artifact_protected_paths(broker: Any) -> list[Path]:
     config = getattr(broker, "config", None)
     protected: list[Path] = []
@@ -556,13 +565,60 @@ def _resolve_agent_command(command: list[str]) -> list[str]:
 def _ensure_agent_command_outside_protected_paths(
     command: list[str], protected_paths: list[Path]
 ) -> None:
-    executable = Path(shutil.which(command[0]) or command[0]).expanduser().resolve()
+    command_paths = [Path(command[0]).expanduser().resolve()]
+    script_path = _interpreter_script_path(command)
+    if script_path is not None:
+        command_paths.append(script_path)
     for protected_path in protected_paths:
-        if _path_contains(protected_path, executable):
-            raise ValueError(
-                "agent command executable must not be inside protected target/Core paths. "
-                "No reference calls were made."
-            )
+        for command_path in command_paths:
+            if _path_contains(protected_path, command_path):
+                raise ValueError(
+                    "agent command executable or script must not be inside protected "
+                    "target/Core paths. No reference calls were made."
+                )
+
+
+def _interpreter_script_path(command: list[str]) -> Path | None:
+    if len(command) < 2:
+        return None
+    interpreter = Path(command[0]).name.lower()
+    if interpreter.startswith("python") or interpreter in {"pypy", "pypy3"}:
+        operand = _python_script_operand(command[1:])
+    elif interpreter in {"sh", "bash", "zsh", "node", "ruby", "perl"}:
+        operand = _simple_script_operand(command[1:])
+    else:
+        return None
+    return Path(operand).expanduser().resolve() if operand else None
+
+
+def _python_script_operand(args: list[str]) -> str | None:
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in {"-c", "-m", "-"}:
+            return None
+        if arg == "--":
+            index += 1
+            return args[index] if index < len(args) else None
+        if not arg.startswith("-"):
+            return arg
+        if arg in {"-W", "-X", "--check-hash-based-pycs"}:
+            index += 2
+        else:
+            index += 1
+    return None
+
+
+def _simple_script_operand(args: list[str]) -> str | None:
+    for arg in args:
+        if arg in {"-c", "-e"}:
+            return None
+        if arg == "--":
+            continue
+        if arg.startswith("-"):
+            continue
+        return arg
+    return None
 
 
 def _compile_agent_protected_paths(

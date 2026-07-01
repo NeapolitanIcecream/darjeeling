@@ -147,6 +147,50 @@ def test_compile_run_rejects_protected_agent_command_before_reference_setup(
         )
 
 
+@pytest.mark.parametrize("protected_source", ["target", "repo"])
+def test_compile_run_rejects_protected_interpreter_script_before_reference_setup(
+    target_dir, tmp_path, monkeypatch, protected_source
+) -> None:
+    target_path = tmp_path / "source-target"
+    shutil.copytree(target_dir, target_path)
+    target_script = target_path / "agent.py"
+    target_script.write_text("print('should not run')\n", encoding="utf-8")
+    repo_script = Path(__file__).resolve().parents[1] / "README.md"
+    script_path = target_script if protected_source == "target" else repo_script
+
+    def fake_which(name: str) -> str | None:
+        if name == "sandbox-exec":
+            return "/usr/bin/sandbox-exec"
+        if name == "python3":
+            return "/usr/bin/python3"
+        return f"/usr/bin/{name}"
+
+    def fail_reference_setup(path):
+        raise AssertionError("reference config should not be loaded")
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", fake_which)
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config", fail_reference_setup
+    )
+
+    with pytest.raises(ValueError, match="protected target/Core paths"):
+        _run_compile_command(
+            target_path=target_path,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "missing-reference.json",
+            agent_command=json.dumps(["python3", str(script_path)]),
+            workspace_root=None,
+            max_candidates=1,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
 def test_compile_run_requires_target_reference_before_provider_setup(
     target_dir, tmp_path, monkeypatch
 ) -> None:
@@ -445,6 +489,61 @@ def test_compile_run_rejects_exhausted_reference_budget_before_agent_launch(
     monkeypatch.setattr("darjeeling.cli.load_target_workspace", fail_agent_setup)
     monkeypatch.setattr("darjeeling.cli.create_agent_workspace", fail_agent_setup)
     monkeypatch.setattr("darjeeling.cli.launch_target_adaptation_agent_async", fail_agent_setup)
+
+    with pytest.raises(RuntimeError, match="before agent launch"):
+        _run_compile_command(
+            target_path=target_dir,
+            run_root=tmp_path / "run",
+            reference_config=tmp_path / "reference.json",
+            agent_command='["python3", "-c", "pass"]',
+            workspace_root=None,
+            max_candidates=2,
+            max_agent_seconds=1,
+            max_cost=1.0,
+            enabled_layers="L1",
+            l4_deadline_ms=1000,
+            agent_network=False,
+            agent_dependency_install=False,
+            allow_insufficient_reference=False,
+        )
+
+
+def test_compile_run_rejects_cold_start_reference_budget_before_snapshot(
+    target_dir, tmp_path, monkeypatch
+) -> None:
+    definition = SimpleNamespace(
+        name="thin",
+        contract_hash="contract-hash",
+        data_config=SimpleNamespace(),
+        requirements={},
+    )
+
+    monkeypatch.setattr("darjeeling.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "darjeeling.cli.load_checked_target",
+        lambda target_path, require_reference=False: (
+            definition,
+            SimpleNamespace(),
+            SimpleNamespace(),
+        ),
+    )
+    monkeypatch.setattr(
+        "darjeeling.cli.build_reference_broker_from_config",
+        lambda path: SimpleNamespace(reference_version="reference"),
+    )
+
+    def spend_cold_start_budget(*args, **kwargs):
+        broker = args[3]
+        broker.cost = 1.0
+        return SimpleNamespace(release_id="cold")
+
+    def fail_snapshot(*args, **kwargs):
+        raise AssertionError("snapshot should not be built after cold-start budget exhaustion")
+
+    monkeypatch.setattr(
+        "darjeeling.cli.create_release_without_artifacts", spend_cold_start_budget
+    )
+    monkeypatch.setattr("darjeeling.cli.build_snapshot", fail_snapshot)
 
     with pytest.raises(RuntimeError, match="before agent launch"):
         _run_compile_command(
