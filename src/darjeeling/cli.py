@@ -357,6 +357,11 @@ def _run_compile_command(
         compile_options.agent_guidance,
         agent_options.permissions,
     )
+    protected_paths = [
+        target_path.resolve(),
+        (run_root / "snapshots").resolve(),
+        *_reference_artifact_protected_paths(broker),
+    ]
     handle = launch_target_adaptation_agent_async(
         attempt,
         brief,
@@ -364,10 +369,7 @@ def _run_compile_command(
             "command": command,
             "timeout_seconds": max_agent_seconds,
             "permissions": asdict(agent_options.permissions),
-            "protected_paths": [
-                str(target_path.resolve()),
-                str((run_root / "snapshots").resolve()),
-            ],
+            "protected_paths": [str(path) for path in protected_paths],
         },
     )
     loop_result = run_interactive_compile_loop(
@@ -521,6 +523,16 @@ def _compile_reference_usage(broker: Any, snapshot_result: Any) -> ReferenceUsag
         cost=max(float(getattr(broker, "cost", 0.0)), float(getattr(usage, "cost", 0.0))),
         errors=dict(getattr(usage, "errors", {}) or {}),
     )
+
+
+def _reference_artifact_protected_paths(broker: Any) -> list[Path]:
+    config = getattr(broker, "config", None)
+    protected: list[Path] = []
+    for attr in ("cache_path", "usage_ledger_path"):
+        path = getattr(config, attr, None)
+        if path is not None:
+            protected.append(Path(path).expanduser().resolve())
+    return protected
 
 
 def _ensure_agent_execution_supported() -> None:

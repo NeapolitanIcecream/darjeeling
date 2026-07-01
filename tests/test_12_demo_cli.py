@@ -182,7 +182,7 @@ def test_compile_run_requires_target_reference_before_provider_setup(
         )
 
 
-def test_compile_run_protects_snapshots_and_resolves_agent_command_before_launch(
+def test_compile_run_protects_snapshots_reference_artifacts_and_resolves_agent_command(
     target_dir, tmp_path, monkeypatch
 ) -> None:
     class StopAfterLaunch(Exception):
@@ -209,6 +209,11 @@ def test_compile_run_protects_snapshots_and_resolves_agent_command_before_launch
     relative_agent = agent_dir / "agent.sh"
     relative_agent.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     relative_agent.chmod(0o755)
+    reference_cache = tmp_path / "reference-artifacts" / "cache.jsonl"
+    reference_ledger = tmp_path / "reference-artifacts" / "usage-ledger.json"
+    reference_cache.parent.mkdir()
+    reference_cache.write_text("", encoding="utf-8")
+    reference_ledger.write_text("{}", encoding="utf-8")
 
     original_which = shutil.which
 
@@ -229,7 +234,13 @@ def test_compile_run_protects_snapshots_and_resolves_agent_command_before_launch
     )
     monkeypatch.setattr(
         "darjeeling.cli.build_reference_broker_from_config",
-        lambda path: SimpleNamespace(reference_version="reference"),
+        lambda path: SimpleNamespace(
+            reference_version="reference",
+            config=SimpleNamespace(
+                cache_path=reference_cache,
+                usage_ledger_path=reference_ledger,
+            ),
+        ),
     )
     monkeypatch.setattr(
         "darjeeling.cli.create_release_without_artifacts",
@@ -288,6 +299,8 @@ def test_compile_run_protects_snapshots_and_resolves_agent_command_before_launch
     assert captured_runtime["protected_paths"] == [
         str(target_dir.resolve()),
         str((tmp_path / "run" / "snapshots").resolve()),
+        str(reference_cache.resolve()),
+        str(reference_ledger.resolve()),
     ]
 
 
